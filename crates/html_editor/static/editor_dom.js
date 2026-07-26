@@ -169,7 +169,6 @@ const visualWidthInput = document.querySelector("#visualWidthInput");
 const visualHeightInput = document.querySelector("#visualHeightInput");
 const visualScaleInput = document.querySelector("#visualScaleInput");
 const visualAnimationDurationInput = document.querySelector("#visualAnimationDurationInput");
-const visualAnimationFrameCountInput = document.querySelector("#visualAnimationFrameCountInput");
 const visualAnimationPreviousFrameButton = document.querySelector("#visualAnimationPreviousFrameButton");
 const visualAnimationFrameInput = document.querySelector("#visualAnimationFrameInput");
 const visualAnimationFrameTotal = document.querySelector("#visualAnimationFrameTotal");
@@ -207,7 +206,6 @@ const visual3dScaleDownButton = document.querySelector("#visual3dScaleDownButton
 const visual3dAxisButtons = document.querySelectorAll("[data-visual3d-axis]");
 const visual3dSliceValue = document.querySelector("#visual3dSliceValue");
 const visual3dAnimationDurationInput = document.querySelector("#visual3dAnimationDurationInput");
-const visual3dAnimationFrameCountInput = document.querySelector("#visual3dAnimationFrameCountInput");
 const visual3dAnimationPreviousFrameButton = visualAnimationPreviousFrameButton;
 const visual3dAnimationNextFrameButton = visualAnimationNextFrameButton;
 const visual3dAnimationFrameInput = visualAnimationFrameInput;
@@ -300,9 +298,18 @@ function installSelectAllOnFocus(input) {
 const editorSeed = window.PuzzleEditorSeed || null;
 const levelThemeRoot = levelBoard?.closest(".level-board-wrap") || levelBoard;
 const solverThemeRoot = solverBoard?.closest(".solver-board-wrap") || solverBoard;
-const levelRenderer = window.PuzzleRenderer
-  ? new window.PuzzleRenderer(levelBoard, { renderMode: "dom", themeRoot: levelThemeRoot })
+const levelRenderer = window.PuzzleAuthoringRenderer
+  ? new window.PuzzleAuthoringRenderer(levelBoard, { themeRoot: levelThemeRoot })
   : null;
-const solverRenderer = window.PuzzleRenderer
-  ? new window.PuzzleRenderer(solverBoard, { renderMode: "canvas", themeRoot: solverThemeRoot })
+const solverRenderer = window.PuzzleRenderer && window.PuzzleStudioRuntime
+  ? new window.PuzzleRenderer(solverBoard, {
+      renderMode: "canvas",
+      themeRoot: solverThemeRoot,
+      prepareRenderScene: (renderScene) => window.PuzzleStudioRuntime.prepareRenderScene(renderScene),
+      resolveRenderMoment: (renderScene, moment) => window.PuzzleStudioRuntime.resolveRenderMoment(renderScene, moment),
+      onError: (error) => {
+        console.error(error);
+        setLevelSolveStatus(`Solver render failed: ${userFacingRuntimeError(error)}`, "is-error");
+      },
+    })
   : null;

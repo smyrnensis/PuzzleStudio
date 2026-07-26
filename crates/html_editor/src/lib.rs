@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
 #[cfg(feature = "embedded-assets")]
 use std::env;
 use std::fs;
@@ -22,7 +22,6 @@ const EDITOR_HTML: &str = include_str!("../static/editor.html");
 #[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_MARKDOWN: &str = include_str!("../docs/editor.md");
 #[cfg(feature = "editor-docs")]
-const EDITOR_DOCS_METADATA_MARKDOWN: &str = include_str!("../docs/metadata.md");
 #[cfg(feature = "editor-docs")]
 const EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN: &str = include_str!("../docs/puzzle-block.md");
 #[cfg(feature = "editor-docs")]
@@ -171,53 +170,45 @@ const EDITOR_STATIC_RENDERER_CSS: &str = include_str!("../static/renderer.css");
 const VISUALS_JS: &str = include_str!("../../html_play/static/visuals.js");
 #[cfg(feature = "embedded-assets")]
 const RENDERER_JS: &str = include_str!("../../html_play/static/renderer.js");
-#[cfg(all(test, feature = "embedded-assets"))]
-const EDITOR_STATIC_RENDERER_JS: &str = include_str!("../static/renderer.js");
+#[cfg(feature = "embedded-assets")]
+const RENDER_ASSET_DECODER_JS: &str =
+    include_str!("../../html_play/static/render_asset_decoder.js");
+#[cfg(feature = "embedded-assets")]
+const EDITOR_AUTHORING_RENDERER_JS: &str = include_str!("../static/editor_authoring_renderer.js");
 #[cfg(feature = "embedded-assets")]
 const PAGES_EXAMPLE_PUZZLE_PATH: &str = "starter/01-basic.puzzle";
 #[cfg(all(test, feature = "embedded-assets"))]
 const PAGES_EXAMPLE_PUZZLE_SOURCE: &str = include_str!("../starter/01-basic.puzzle");
 #[cfg(feature = "embedded-assets")]
-const PAGES_STARTER_DOCUMENTS: &[(&str, &str, bool)] = &[
+const PAGES_STARTER_DOCUMENTS: &[(&str, &str)] = &[
     (
         PAGES_EXAMPLE_PUZZLE_PATH,
         include_str!("../starter/01-basic.puzzle"),
-        true,
     ),
-    (
-        "starter/README.md",
-        include_str!("../starter/README.md"),
-        false,
-    ),
+    ("starter/README.md", include_str!("../starter/README.md")),
     (
         "starter/02-scenes-and-theme.puzzle",
         include_str!("../starter/02-scenes-and-theme.puzzle"),
-        true,
     ),
     (
         "starter/03-sound.puzzle",
         include_str!("../starter/03-sound.puzzle"),
-        true,
     ),
     (
         "starter/04-animation.puzzle",
         include_str!("../starter/04-animation.puzzle"),
-        true,
     ),
     (
         "starter/05-tags-marks-and-routines.puzzle",
         include_str!("../starter/05-tags-marks-and-routines.puzzle"),
-        true,
     ),
     (
-        "starter/06-3d.puzzle3",
-        include_str!("../starter/06-3d.puzzle3"),
-        true,
+        "starter/06-3d.puzzle",
+        include_str!("../starter/06-3d.puzzle"),
     ),
     (
         "starter/07-meta-level.puzzle",
         include_str!("../starter/07-meta-level.puzzle"),
-        true,
     ),
 ];
 const SKIPPED_WORKSPACE_DIRS: &[&str] = &[
@@ -248,7 +239,7 @@ pub fn run_cli_with_args(args: impl IntoIterator<Item = String>) -> Result<(), A
 fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     let config = Config::from_args(args)?;
     let service = if let Some(puzzle_path) = &config.puzzle_path {
-        EditorService::open_game_entry(puzzle_path)?
+        EditorService::open_path(puzzle_path)?
     } else if config.serve {
         let puzzle_path = puzzle_lang::resolve_game_entry(&PathBuf::from("games/spec_2d.puzzle"))
             .map_err(|error| AppError::Config(error.to_string()))?;
@@ -321,7 +312,7 @@ impl Config {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
-                        "usage: html-editor [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [-o docs/index.html] [--serve] [--port 8787]"
+                        "usage: html-editor [path/to/workspace-or-game.puzzle] [-o docs/index.html] [--serve] [--port 8787]"
                             .to_string(),
                     ));
                 }
@@ -354,8 +345,8 @@ impl EditorService {
     fn open_pages_example() -> Self {
         let source = PAGES_STARTER_DOCUMENTS
             .iter()
-            .find(|(path, _, _)| *path == PAGES_EXAMPLE_PUZZLE_PATH)
-            .map(|(_, source, _)| (*source).to_string())
+            .find(|(path, _)| *path == PAGES_EXAMPLE_PUZZLE_PATH)
+            .map(|(_, source)| (*source).to_string())
             .expect("Pages starter must contain its default puzzle");
         Self {
             state: EditorState {
@@ -368,51 +359,33 @@ impl EditorService {
                 folders: vec!["starter".to_string()],
                 documents: PAGES_STARTER_DOCUMENTS
                     .iter()
-                    .map(
-                        |(path, document_source, declares_game_entry)| EditorDocument {
-                            puzzle_path: (*path).to_string(),
-                            encoding: "text".to_string(),
-                            mime_type: mime_type(Path::new(path)).to_string(),
-                            source: (*document_source).to_string(),
-                            data_url: String::new(),
-                            content_loaded: true,
-                            declares_game_entry: *declares_game_entry,
-                            preview_html: String::new(),
-                            preview_error: String::new(),
-                            game_css: String::new(),
-                            imported_by: Vec::new(),
-                            parent_game_path: if *declares_game_entry {
-                                (*path).to_string()
-                            } else {
-                                String::new()
-                            },
-                        },
-                    )
+                    .map(|(path, document_source)| EditorDocument {
+                        puzzle_path: (*path).to_string(),
+                        encoding: "text".to_string(),
+                        mime_type: mime_type(Path::new(path)).to_string(),
+                        source: (*document_source).to_string(),
+                        data_url: String::new(),
+                        content_loaded: true,
+                        preview_html: String::new(),
+                        preview_error: String::new(),
+                        game_css: String::new(),
+                        imported_by: Vec::new(),
+                    })
                     .collect(),
             },
         }
     }
 
-    pub fn open_game_entry(path: &Path) -> Result<Self, AppError> {
-        let puzzle_path = match puzzle_lang::resolve_game_entry(path) {
-            Ok(puzzle_path) => puzzle_path,
-            Err(error) if path.is_dir() => {
-                let message = error.to_string();
-                if message.contains("game folder must contain a .puzzle or .puzzle3 file") {
-                    return Self::open_workspace_root(path);
-                }
-                return Err(AppError::Config(message));
-            }
-            Err(error) => return Err(AppError::Config(error.to_string())),
-        };
-        let workspace_root = if path.is_dir() {
-            path.to_path_buf()
-        } else {
-            puzzle_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .to_path_buf()
-        };
+    pub fn open_path(path: &Path) -> Result<Self, AppError> {
+        if path.is_dir() {
+            return Self::open_workspace_root(path);
+        }
+        let puzzle_path = puzzle_lang::resolve_game_entry(path)
+            .map_err(|error| AppError::Config(error.to_string()))?;
+        let workspace_root = puzzle_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
         Self::open_with_workspace_root(&puzzle_path, &workspace_root)
     }
 
@@ -458,7 +431,7 @@ impl EditorService {
         let source = fs::read_to_string(&puzzle_path)?;
         #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
         let base_game_visuals_js =
-            load_base_game_visuals_js(&puzzle_path, &workspace_root, &source)?;
+            load_base_game_visuals_js(&puzzle_path, &workspace_root, &AssetsDef::default(), &[])?;
         Ok(Self {
             state: EditorState {
                 puzzle_path: puzzle_path.display().to_string(),
@@ -504,12 +477,23 @@ impl EditorService {
     pub fn compile_preview(&self, request: &PreviewRequest) -> Result<String, AppError> {
         let workspace_root = PathBuf::from(&self.state.workspace_root);
         let preview_path = resolve_workspace_request_path(&request.puzzle_path, &workspace_root)?;
-        let expanded_source =
-            expand_preview_source_under_root(&request.source, &preview_path, &workspace_root)?;
-        let game_visuals_js =
-            load_base_game_visuals_js(&preview_path, &workspace_root, &expanded_source)?;
-        html_play::export_editor_preview_html_from_source(
-            &expanded_source,
+        let workspace = puzzle_workspace::FileWorkspace::load_with_entry_source(
+            &preview_path,
+            &workspace_root,
+            Some(&request.source),
+        )
+        .map_err(AppError::Config)?;
+        let document = workspace.compile().map_err(AppError::Diagnostics)?;
+        let manifest = puzzle_lang::workspace_presentation_manifest_from_document(&document);
+        let game_visuals_js = load_base_game_visuals_js(
+            &preview_path,
+            &workspace_root,
+            &document.assets,
+            &manifest.visual_image_paths,
+        )?;
+        html_play::export_editor_preview_html_from_document(
+            &document,
+            workspace.entry_source(),
             &preview_path.display().to_string(),
             &request.game_css,
             &game_visuals_js,
@@ -518,21 +502,11 @@ impl EditorService {
     }
 
     pub fn highlight_json(&self, source: &str) -> Result<String, AppError> {
-        let profile = puzzle_lang::puzzle_source_profile_for_path(&self.state.puzzle_path)
-            .ok_or_else(|| {
-                AppError::Config(
-                    "source highlighting requires an active .puzzle or .puzzle3 document profile"
-                        .to_string(),
-                )
-            })?;
-        Ok(Self::highlight_source_json(source, profile))
+        Ok(Self::highlight_source_json(source))
     }
 
-    pub fn highlight_source_json(
-        source: &str,
-        profile: puzzle_lang::PuzzleSourceProfile,
-    ) -> String {
-        puzzle_lang::analyze_source_for_profile(source, profile).highlight_json(false)
+    pub fn highlight_source_json(source: &str) -> String {
+        puzzle_lang::analyze_source(source).highlight_json(false)
     }
 
     pub fn save_source_file(&self, request: &SaveRequest) -> Result<(), AppError> {
@@ -597,25 +571,21 @@ pub struct EditorDocument {
     source: String,
     data_url: String,
     content_loaded: bool,
-    declares_game_entry: bool,
     preview_html: String,
     preview_error: String,
     game_css: String,
     imported_by: Vec<String>,
-    parent_game_path: String,
 }
 
 struct WorkspacePuzzleDocument {
     path: PathBuf,
+    workspace_path: String,
     source: String,
-    declares_game_entry: bool,
-    imports: Vec<PathBuf>,
 }
 
 #[derive(Default)]
 struct WorkspaceImportGraph {
     imported_by: HashMap<PathBuf, Vec<PathBuf>>,
-    parent_game_by_path: HashMap<PathBuf, PathBuf>,
 }
 
 fn load_game_css(puzzle_path: &Path, workspace_root: &Path) -> Result<String, AppError> {
@@ -639,8 +609,10 @@ fn load_game_css(puzzle_path: &Path, workspace_root: &Path) -> Result<String, Ap
 fn load_base_game_visuals_js(
     puzzle_path: &Path,
     workspace_root: &Path,
-    source: &str,
+    assets: &AssetsDef,
+    image_paths: &[String],
 ) -> Result<String, AppError> {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     let assets = puzzle_lang::parse_document_assets(source).map_err(AppError::Diagnostics)?;
     let expanded_source = expand_preview_source_under_root(source, puzzle_path, workspace_root)?;
     let entry_path = puzzle_path
@@ -665,6 +637,9 @@ fn load_base_game_visuals_js(
         &assets,
         &image_paths,
     )?];
+=======
+    let mut scripts = vec![asset_resolver_js(workspace_root, assets, image_paths)?];
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     #[cfg(feature = "embedded-assets")]
     scripts.push(VISUALS_JS.to_string());
     let visuals_path = puzzle_path
@@ -717,12 +692,10 @@ fn inline_css_urls(css: &str, base_dir: &Path, workspace_root: &Path) -> Result<
 
 #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
 fn asset_resolver_js(
-    puzzle_path: &Path,
     workspace_root: &Path,
     assets: &AssetsDef,
     image_paths: &[String],
 ) -> Result<String, AppError> {
-    let parent = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
     let mut files = String::new();
     files.push('{');
     let mut first = true;
@@ -738,8 +711,14 @@ fn asset_resolver_js(
         }
     }
     for asset_path in paths {
-        let path = resolve_asset_path(parent, &asset_path)?;
-        push_asset_resolver_entry(parent, &path, workspace_root, &mut files, &mut first)?;
+        let path = resolve_asset_path(workspace_root, &asset_path)?;
+        push_asset_resolver_entry(
+            workspace_root,
+            &path,
+            workspace_root,
+            &mut files,
+            &mut first,
+        )?;
     }
     files.push('}');
     Ok(format!(
@@ -756,7 +735,7 @@ fn resolve_asset_path(base_dir: &Path, asset_path: &str) -> Result<PathBuf, AppE
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
         return Err(AppError::Config(format!(
-            "asset path must be game-folder relative: {asset_path}"
+            "asset path must be workspace-relative: {asset_path}"
         )));
     }
     let resolved = base_dir.join(path);
@@ -779,7 +758,7 @@ fn push_asset_resolver_entry(
 ) -> Result<(), AppError> {
     let relative = path.strip_prefix(root).map_err(|_| {
         AppError::Config(format!(
-            "asset file is outside game folder: {}",
+            "asset file is outside workspace: {}",
             path.display()
         ))
     })?;
@@ -825,44 +804,6 @@ fn percent_encode(value: &str) -> String {
     out
 }
 
-#[cfg(feature = "native-preview")]
-fn expand_preview_source_under_root(
-    source: &str,
-    puzzle_path: &Path,
-    workspace_root: &Path,
-) -> Result<String, AppError> {
-    puzzle_lang::validate_source_profile_for_path(source, puzzle_path)
-        .map_err(|error| AppError::Config(error.to_string()))?;
-    match puzzle_lang::puzzle_source_profile_for_path(puzzle_path) {
-        Some(puzzle_lang::PuzzleSourceProfile::Puzzle3d) => {
-            let workspace_root = workspace_root.canonicalize()?;
-            let preview_path = puzzle_path.canonicalize()?;
-            if !preview_path.starts_with(&workspace_root) {
-                return Err(AppError::Config(format!(
-                    "can only import puzzle files under {}",
-                    workspace_root.display()
-                )));
-            }
-            Ok(source.to_string())
-        }
-        Some(puzzle_lang::PuzzleSourceProfile::Puzzle2d) => {
-            let expanded = puzzle_lang::expand_game_imports_for_file_under_root(
-                source,
-                puzzle_path,
-                workspace_root,
-            )
-            .map_err(|error| AppError::Config(error.to_string()))?;
-            puzzle_lang::validate_source_profile_for_path(&expanded, puzzle_path)
-                .map_err(|error| AppError::Config(error.to_string()))?;
-            Ok(expanded)
-        }
-        None => Err(AppError::Config(format!(
-            "preview source must be .puzzle or .puzzle3: {}",
-            puzzle_path.display()
-        ))),
-    }
-}
-
 fn load_editor_documents(
     active_path: &Path,
     workspace_root: &Path,
@@ -877,7 +818,7 @@ fn load_editor_documents(
     });
 
     let puzzle_documents = load_workspace_puzzle_documents(&paths, workspace_root)?;
-    let import_graph = build_workspace_import_graph(&puzzle_documents);
+    let import_graph = build_workspace_import_graph(&puzzle_documents)?;
     let puzzle_sources_by_path = puzzle_documents
         .into_iter()
         .map(|document| (document.path, document.source))
@@ -887,16 +828,12 @@ fn load_editor_documents(
     for path in paths {
         if puzzle_lang::is_puzzle_source_path(&path) {
             let canonical_path = path.canonicalize()?;
-            let source = puzzle_sources_by_path
-                .get(&canonical_path)
-                .cloned()
-                .ok_or_else(|| {
-                    AppError::Config(format!(
-                        "workspace puzzle source was not indexed: {}",
-                        path.display()
-                    ))
-                })?;
-            let parent_game_path = import_graph.parent_game_by_path.get(&canonical_path);
+            if !puzzle_sources_by_path.contains_key(&canonical_path) {
+                return Err(AppError::Config(format!(
+                    "workspace puzzle source was not indexed: {}",
+                    path.display()
+                )));
+            }
             documents.push(EditorDocument {
                 puzzle_path: path.display().to_string(),
                 encoding: "text".to_string(),
@@ -904,7 +841,6 @@ fn load_editor_documents(
                 source: String::new(),
                 data_url: String::new(),
                 content_loaded: false,
-                declares_game_entry: puzzle_lang::source_declares_game_entry(&source),
                 preview_html: String::new(),
                 preview_error: String::new(),
                 game_css: String::new(),
@@ -912,9 +848,6 @@ fn load_editor_documents(
                     .imported_by
                     .get(&canonical_path)
                     .map(|paths| display_paths(paths))
-                    .unwrap_or_default(),
-                parent_game_path: parent_game_path
-                    .map(|path| path.display().to_string())
                     .unwrap_or_default(),
             });
         } else if is_text_file(&path) {
@@ -925,12 +858,10 @@ fn load_editor_documents(
                 source: String::new(),
                 data_url: String::new(),
                 content_loaded: false,
-                declares_game_entry: false,
                 preview_html: String::new(),
                 preview_error: String::new(),
                 game_css: String::new(),
                 imported_by: Vec::new(),
-                parent_game_path: String::new(),
             });
         } else {
             let mime_type = mime_type(&path);
@@ -941,12 +872,10 @@ fn load_editor_documents(
                 source: String::new(),
                 data_url: String::new(),
                 content_loaded: false,
-                declares_game_entry: false,
                 preview_html: String::new(),
                 preview_error: String::new(),
                 game_css: String::new(),
                 imported_by: Vec::new(),
-                parent_game_path: String::new(),
             });
         }
     }
@@ -968,115 +897,60 @@ fn load_workspace_puzzle_documents(
             continue;
         }
         let source = read_workspace_text_file(&canonical_path, &workspace_root)?;
-        let imports = workspace_import_paths(&source, &canonical_path, &workspace_root);
+        let workspace_path = canonical_path
+            .strip_prefix(&workspace_root)
+            .map_err(|_| {
+                AppError::Config(format!(
+                    "workspace puzzle path is outside its root: {}",
+                    canonical_path.display()
+                ))
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
         documents.push(WorkspacePuzzleDocument {
             path: canonical_path,
-            declares_game_entry: puzzle_lang::source_declares_game_entry(&source),
+            workspace_path,
             source,
-            imports,
         });
     }
     documents.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(documents)
 }
 
-fn workspace_import_paths(source: &str, path: &Path, workspace_root: &Path) -> Vec<PathBuf> {
-    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let Ok(imports) = puzzle_lang::game_import_paths(source) else {
-        return Vec::new();
-    };
-    imports
-        .into_iter()
-        .filter_map(|import| canonical_workspace_import_path(base_dir, &import, workspace_root))
-        .collect()
-}
-
-fn canonical_workspace_import_path(
-    base_dir: &Path,
-    import: &Path,
-    workspace_root: &Path,
-) -> Option<PathBuf> {
-    let resolved = if import.is_absolute() {
-        import.to_path_buf()
-    } else {
-        base_dir.join(import)
-    };
-    let canonical = resolved.canonicalize().ok()?;
-    if !canonical.starts_with(workspace_root) || !puzzle_lang::is_puzzle_source_path(&canonical) {
-        return None;
-    }
-    Some(canonical)
-}
-
-fn build_workspace_import_graph(documents: &[WorkspacePuzzleDocument]) -> WorkspaceImportGraph {
+fn build_workspace_import_graph(
+    documents: &[WorkspacePuzzleDocument],
+) -> Result<WorkspaceImportGraph, AppError> {
     let mut graph = WorkspaceImportGraph::default();
     let paths = documents
         .iter()
-        .map(|document| document.path.clone())
-        .collect::<HashSet<_>>();
-    let document_by_path = documents
-        .iter()
-        .map(|document| (document.path.clone(), document))
+        .map(|document| (document.workspace_path.clone(), document.path.clone()))
         .collect::<HashMap<_, _>>();
-
-    for document in documents {
-        for import in &document.imports {
-            if paths.contains(import) {
-                graph
-                    .imported_by
-                    .entry(import.clone())
-                    .or_default()
-                    .push(document.path.clone());
-            }
-        }
-    }
-    for imported_by in graph.imported_by.values_mut() {
-        sort_parent_game_paths(imported_by);
-        imported_by.dedup();
-    }
-
-    let mut game_entries = documents
+    let workspace_documents = documents
         .iter()
-        .filter(|document| document.declares_game_entry)
-        .map(|document| document.path.clone())
+        .map(|document| puzzle_lang::WorkspaceSourceDocument {
+            path: document.workspace_path.clone(),
+            source: document.source.clone(),
+        })
         .collect::<Vec<_>>();
-    sort_parent_game_paths(&mut game_entries);
-    for game_path in game_entries {
-        graph
-            .parent_game_by_path
-            .entry(game_path.clone())
-            .or_insert_with(|| game_path.clone());
-        let mut seen = HashSet::new();
-        let mut queue = VecDeque::new();
-        seen.insert(game_path.clone());
-        if let Some(game_document) = document_by_path.get(&game_path) {
-            queue.extend(game_document.imports.iter().cloned());
-        }
-        while let Some(import_path) = queue.pop_front() {
-            if !paths.contains(&import_path) || !seen.insert(import_path.clone()) {
-                continue;
-            }
-            graph
-                .parent_game_by_path
-                .entry(import_path.clone())
-                .or_insert_with(|| game_path.clone());
-            if let Some(document) = document_by_path.get(&import_path) {
-                queue.extend(document.imports.iter().cloned());
-            }
+    let workspace = puzzle_lang::WorkspaceAnalysis::new(&workspace_documents)
+        .map_err(|error| AppError::Config(error.to_string()))?;
+    for document in &workspace.index().documents {
+        let Some(path) = paths.get(&document.path).cloned() else {
+            return Err(AppError::Config(format!(
+                "workspace analysis returned an unknown document: {}",
+                document.path
+            )));
+        };
+        let importers = document
+            .direct_importers
+            .iter()
+            .filter_map(|importer| paths.get(importer).cloned())
+            .collect::<Vec<_>>();
+        if !importers.is_empty() {
+            graph.imported_by.insert(path.clone(), importers);
         }
     }
-
-    graph
-}
-
-fn sort_parent_game_paths(paths: &mut [PathBuf]) {
-    paths.sort_by(|left, right| {
-        let left_dir = left.parent().unwrap_or_else(|| Path::new(""));
-        let right_dir = right.parent().unwrap_or_else(|| Path::new(""));
-        preview_entry_rank(left, left_dir)
-            .cmp(&preview_entry_rank(right, right_dir))
-            .then_with(|| left.display().to_string().cmp(&right.display().to_string()))
-    });
+    Ok(graph)
 }
 
 fn display_paths(paths: &[PathBuf]) -> Vec<String> {
@@ -1084,32 +958,6 @@ fn display_paths(paths: &[PathBuf]) -> Vec<String> {
         .iter()
         .map(|path| path.display().to_string())
         .collect()
-}
-
-fn preview_entry_rank(path: &Path, dir: &Path) -> usize {
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("");
-    let folder_name = dir
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("");
-    if name == "game.puzzle" {
-        0
-    } else if name == "game.puzzle3" {
-        1
-    } else if !folder_name.is_empty() && name == format!("{folder_name}.puzzle") {
-        2
-    } else if !folder_name.is_empty() && name == format!("{folder_name}.puzzle3") {
-        3
-    } else if name == "main.puzzle" {
-        4
-    } else if name == "main.puzzle3" {
-        5
-    } else {
-        6
-    }
 }
 
 fn editor_document_root(active_path: &Path) -> PathBuf {
@@ -1210,7 +1058,6 @@ fn is_workspace_file(path: &Path) -> bool {
             .and_then(|value| value.to_str())
             .unwrap_or(""),
         "puzzle"
-            | "puzzle3"
             | "css"
             | "js"
             | "mjs"
@@ -1234,7 +1081,7 @@ fn is_text_file(path: &Path) -> bool {
         path.extension()
             .and_then(|value| value.to_str())
             .unwrap_or(""),
-        "puzzle" | "puzzle3" | "css" | "js" | "mjs" | "svg" | "json" | "txt" | "md"
+        "puzzle" | "css" | "js" | "mjs" | "svg" | "json" | "txt" | "md"
     )
 }
 
@@ -1252,7 +1099,7 @@ fn mime_type(path: &Path) -> &'static str {
         "mp3" => "audio/mpeg",
         "ogg" => "audio/ogg",
         "png" => "image/png",
-        "puzzle" | "puzzle3" | "txt" | "md" => "text/plain",
+        "puzzle" | "txt" | "md" => "text/plain",
         "svg" => "image/svg+xml",
         "wav" => "audio/wav",
         "webp" => "image/webp",
@@ -1470,6 +1317,13 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
             http_bytes("application/wasm", PUZZLE_PLAYER_WASM_BG)
         }
         ("GET", "/renderer.js") => http_ok("text/javascript; charset=utf-8", RENDERER_JS),
+        ("GET", "/render_asset_decoder.js") => {
+            http_ok("text/javascript; charset=utf-8", RENDER_ASSET_DECODER_JS)
+        }
+        ("GET", "/editor_authoring_renderer.js") => http_ok(
+            "text/javascript; charset=utf-8",
+            EDITOR_AUTHORING_RENDERER_JS,
+        ),
         ("GET", "/game.visuals.js") => http_ok(
             "text/javascript; charset=utf-8",
             &service.state().base_game_visuals_js,
@@ -1789,21 +1643,10 @@ fn load_workspace_document(
     let imported_by = metadata
         .map(|document| document.imported_by.clone())
         .unwrap_or_default();
-    let parent_game_path = metadata
-        .map(|document| document.parent_game_path.clone())
-        .unwrap_or_default();
-    let game_css_path = if parent_game_path.trim().is_empty() {
-        canonical_requested.clone()
-    } else {
-        resolve_workspace_request_path(&parent_game_path, &workspace_root_path)?
-    };
-
     if is_text_file(&canonical_requested) {
         let source = read_workspace_text_file(&canonical_requested, &workspace_root)?;
-        let declares_game_entry = puzzle_lang::is_puzzle_source_path(&canonical_requested)
-            && puzzle_lang::source_declares_game_entry(&source);
         let game_css = if puzzle_lang::is_puzzle_source_path(&canonical_requested) {
-            load_game_css(&game_css_path, &workspace_root)?
+            load_game_css(&canonical_requested, &workspace_root)?
         } else {
             String::new()
         };
@@ -1814,12 +1657,10 @@ fn load_workspace_document(
             source,
             data_url: String::new(),
             content_loaded: true,
-            declares_game_entry,
             preview_html: String::new(),
             preview_error: String::new(),
             game_css,
             imported_by,
-            parent_game_path,
         });
     }
 
@@ -1831,12 +1672,10 @@ fn load_workspace_document(
         source: String::new(),
         data_url: format!("data:{mime_type};base64,{}", base64_encode(&bytes)),
         content_loaded: true,
-        declares_game_entry: false,
         preview_html: String::new(),
         preview_error: String::new(),
         game_css: String::new(),
         imported_by,
-        parent_game_path,
     })
 }
 
@@ -2142,6 +1981,16 @@ fn write_pages_editor_site(output_path: &Path, html: String) -> Result<(), AppEr
     write_text_asset(output_dir, "editor_commands.js", EDITOR_COMMANDS_JS)?;
     write_text_asset(output_dir, "renderer.css", RENDERER_CSS)?;
     write_text_asset(output_dir, "renderer.js", RENDERER_JS)?;
+    write_text_asset(
+        output_dir,
+        "render_asset_decoder.js",
+        RENDER_ASSET_DECODER_JS,
+    )?;
+    write_text_asset(
+        output_dir,
+        "editor_authoring_renderer.js",
+        EDITOR_AUTHORING_RENDERER_JS,
+    )?;
     write_text_asset(output_dir, "visual_tween_core.js", VISUAL_TWEEN_CORE_JS)?;
     write_text_asset(output_dir, "puzzle3_visual_core.js", PUZZLE3_VISUAL_CORE_JS)?;
 
@@ -2210,11 +2059,6 @@ const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
         id: "start",
         title: "Start",
         markdown: EDITOR_DOCS_MARKDOWN,
-    },
-    EditorDocsPage {
-        id: "metadata",
-        title: "Metadata",
-        markdown: EDITOR_DOCS_METADATA_MARKDOWN,
     },
     EditorDocsPage {
         id: "puzzle-block",
@@ -2407,8 +2251,8 @@ const EDITOR_DOCS_PAGES: &[EditorDocsPage] = &[
 #[cfg(feature = "editor-docs")]
 fn editor_docs_level(page: &EditorDocsPage) -> &'static str {
     match page.id {
-        "start" | "metadata" | "puzzle-block" | "layers" | "legend" | "levels"
-        | "rewrite-rules" | "input-rules" | "movement" | "win-conditions" | "visuals" => "Basic",
+        "start" | "puzzle-block" | "layers" | "legend" | "levels" | "rewrite-rules"
+        | "input-rules" | "movement" | "win-conditions" | "visuals" => "Basic",
         _ => "Advanced",
     }
 }
@@ -2578,7 +2422,7 @@ fn render_docs_code_block(out: &mut String, language: &str, source: &str) {
         out.push('>');
         out.push_str(&render_source_highlight_html(
             source,
-            &puzzle_lang::highlight_source(source, puzzle_lang::PuzzleSourceProfile::Puzzle2d),
+            &puzzle_lang::highlight_source(source),
         ));
     } else {
         out.push('>');
@@ -2871,8 +2715,6 @@ fn push_editor_document_json(
         include_content || document.content_loaded,
     );
     out.push(',');
-    push_json_bool(out, "declaresGameEntry", document.declares_game_entry);
-    out.push(',');
     push_json_pair(out, "previewHtml", &document.preview_html);
     out.push(',');
     push_json_pair(out, "previewError", &document.preview_error);
@@ -2888,8 +2730,6 @@ fn push_editor_document_json(
     );
     out.push(',');
     push_json_string_array(out, "importedBy", &document.imported_by);
-    out.push(',');
-    push_json_pair(out, "parentGamePath", &document.parent_game_path);
     out.push('}');
     Ok(())
 }
@@ -3096,7 +2936,7 @@ impl std::fmt::Display for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeSet, HashSet};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -3268,28 +3108,20 @@ mod tests {
         }
     }
 
-    fn collect_outline_kinds_from_source(
-        source: &str,
-        profile: puzzle_lang::PuzzleSourceProfile,
-        kinds: &mut BTreeSet<String>,
-    ) {
-        for item in puzzle_lang::source_outline(source, profile) {
+    fn collect_outline_kinds_from_source(source: &str, kinds: &mut BTreeSet<String>) {
+        for item in puzzle_lang::source_outline(source) {
             kinds.insert(item.kind);
         }
     }
 
-    fn collect_puzzle_fence_outline_kinds(
-        markdown: &str,
-        profile: puzzle_lang::PuzzleSourceProfile,
-        kinds: &mut BTreeSet<String>,
-    ) {
+    fn collect_puzzle_fence_outline_kinds(markdown: &str, kinds: &mut BTreeSet<String>) {
         let mut in_puzzle_fence = false;
         let mut block = String::new();
         for line in markdown.lines() {
             let trimmed = line.trim_start();
             if in_puzzle_fence {
                 if trimmed.starts_with("```") {
-                    collect_outline_kinds_from_source(&block, profile, kinds);
+                    collect_outline_kinds_from_source(&block, kinds);
                     block.clear();
                     in_puzzle_fence = false;
                 } else {
@@ -3317,7 +3149,7 @@ mod tests {
 
     fn editor_fixture_source(title: &str) -> String {
         format!(
-            r#"title = "{title}"
+            r#"const title = "{title}"
 
 puzzle default {{
 layers {{
@@ -3380,20 +3212,10 @@ step board
         assert_eq!(state.documents.len(), PAGES_STARTER_DOCUMENTS.len());
         assert_eq!(state.documents[0].puzzle_path, PAGES_EXAMPLE_PUZZLE_PATH);
         assert_eq!(state.documents[1].puzzle_path, "starter/README.md");
-        assert!(state.source.contains("01 — Basic"));
-        for (path, _, declares_game_entry) in PAGES_STARTER_DOCUMENTS {
-            let document = state
-                .documents
-                .iter()
-                .find(|document| document.puzzle_path == *path)
-                .expect("starter manifest document should be embedded");
-            assert_eq!(document.declares_game_entry, *declares_game_entry);
-        }
 
         let html = service
             .export_pages_editor_html()
             .expect("export managed Pages editor html");
-        assert!(html.contains("01 — Basic"));
         assert!(html.contains("07-meta-level.puzzle"));
         assert!(html.contains("all Goal on Box"));
         assert!(html.contains("input [ Player | Box | no Wall ]"));
@@ -3424,7 +3246,7 @@ step board
     }
 
     #[test]
-    fn pages_example_compiles_as_playable_sokoban() {
+    fn pages_example_compiles_without_a_title_constant() {
         let workspace = TestWorkspace::new();
         let example_path = workspace.write(PAGES_EXAMPLE_PUZZLE_PATH, PAGES_EXAMPLE_PUZZLE_SOURCE);
         let service = EditorService::open(&example_path).expect("open managed Pages example");
@@ -3436,15 +3258,15 @@ step board
             ))
             .expect("managed Pages example should compile");
 
-        assert!(html.contains("01 — Basic"));
-        assert!(html.contains("Rules, collision, winning, visuals, and levels"));
+        assert!(html.contains("<!doctype html>"));
+        assert!(html.contains("window.PuzzleRuntimeExportJson = "));
     }
 
     #[test]
     fn every_pages_starter_game_entry_compiles() {
         let workspace = TestWorkspace::new();
-        for (path, source, declares_game_entry) in PAGES_STARTER_DOCUMENTS {
-            if !declares_game_entry {
+        for (path, source) in PAGES_STARTER_DOCUMENTS {
+            if !puzzle_lang::is_puzzle_source_path(Path::new(path)) {
                 continue;
             }
             let example_path = workspace.write(path, source);
@@ -3488,8 +3310,7 @@ step board
             "const imported_label = \"Imported\"\n",
         );
 
-        let project_dir = game_path.parent().expect("project dir");
-        let service = EditorService::open_game_entry(project_dir).expect("open editor fixture");
+        let service = EditorService::open_path(&game_path).expect("open editor fixture");
         let state = service.state();
 
         let canonical_game_path = game_path.canonicalize().expect("canonical game path");
@@ -3512,8 +3333,8 @@ step board
             "editor preview CSS should inline local url() assets"
         );
         assert!(
-            state.base_game_visuals_js.contains("tile.svg"),
-            "preview asset resolver should expose declared file assets"
+            !state.base_game_visuals_js.contains("tile.svg"),
+            "opening the editor must not compile preview-owned assets"
         );
         assert!(
             !state.base_game_visuals_js.contains("notes.md"),
@@ -3527,17 +3348,15 @@ step board
     }
 
     #[test]
-    fn open_defers_preview_import_expansion_failure_until_compile() {
+    fn open_defers_preview_import_failure_until_compile() {
         let workspace = TestWorkspace::new();
         let source = format!(
-            "import \"missing.puzzle\"\n\n{}",
+            "import missing = \"missing.puzzle\"\n\n{}",
             editor_fixture_source("Broken Import")
         );
         let game_path = workspace.write("games/broken_import/game.puzzle", source);
-        let project_dir = game_path.parent().expect("project dir");
-
         let service =
-            EditorService::open_game_entry(project_dir).expect("open workspace with broken import");
+            EditorService::open_path(&game_path).expect("open workspace with broken import");
         let error = service
             .compile_preview(&PreviewRequest::new(
                 fs::read_to_string(&game_path).expect("read broken import source"),
@@ -3582,13 +3401,12 @@ step board
     fn open_loads_puzzle3_workspace_documents() {
         let workspace = TestWorkspace::new();
         let game_path = workspace.write(
-            "games/puzzle3_editor_fixture/game.puzzle3",
-            include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3"),
+            "games/puzzle3_editor_fixture/game.puzzle",
+            include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle"),
         );
         workspace.write("games/puzzle3_editor_fixture/notes.md", "# Notes\n");
 
-        let project_dir = game_path.parent().expect("project dir");
-        let service = EditorService::open_game_entry(project_dir).expect("open puzzle3 fixture");
+        let service = EditorService::open_path(&game_path).expect("open puzzle3 fixture");
         let state = service.state();
 
         let canonical_game_path = game_path.canonicalize().expect("canonical game path");
@@ -3597,14 +3415,11 @@ step board
             PathBuf::from(&state.documents[0].puzzle_path),
             canonical_game_path
         );
-        let document = document_with_suffix(
-            &state.documents,
-            "games/puzzle3_editor_fixture/game.puzzle3",
-        );
+        let document =
+            document_with_suffix(&state.documents, "games/puzzle3_editor_fixture/game.puzzle");
         assert_eq!(document.mime_type, "text/plain");
         assert!(!document.content_loaded);
         assert!(document.source.is_empty());
-        assert!(document.declares_game_entry);
         assert!(paths_contain(
             &state.documents,
             "games/puzzle3_editor_fixture/notes.md"
@@ -3631,8 +3446,7 @@ step board
             "window.Generated = true;\n",
         );
 
-        let project_dir = game_path.parent().expect("project dir");
-        let service = EditorService::open_game_entry(project_dir).expect("open editor fixture");
+        let service = EditorService::open_path(&game_path).expect("open editor fixture");
         let state = service.state();
 
         assert!(paths_contain(
@@ -3680,8 +3494,8 @@ step board
         let loaded_source = json_string_field(&loaded_json, "source").expect("loaded source field");
 
         assert!(source.is_empty());
-        assert!(loaded_source.contains("title = \"Changed Title\""));
-        assert!(!loaded_source.contains("title = \"Original Title\""));
+        assert!(loaded_source.contains("const title = \"Changed Title\""));
+        assert!(!loaded_source.contains("const title = \"Original Title\""));
     }
 
     #[test]
@@ -3706,7 +3520,7 @@ step board
     }
 
     #[test]
-    fn workspace_preview_entries_use_prelude_not_game_puzzle_name() {
+    fn workspace_preview_uses_the_explicitly_opened_puzzle_path() {
         let workspace = TestWorkspace::new();
         let entry_path = workspace.write(
             "games/custom_entry/arcade.puzzle",
@@ -3714,9 +3528,7 @@ step board
         );
         let fragment_path =
             workspace.write("games/custom_entry/fragments/levels.puzzle", "levels {}\n");
-        let project_dir = entry_path.parent().expect("project dir");
-
-        let service = EditorService::open_game_entry(project_dir).expect("open custom project");
+        let service = EditorService::open_path(&entry_path).expect("open custom project");
         let state = service.state();
 
         assert_eq!(
@@ -3743,35 +3555,34 @@ step board
     }
 
     #[test]
-    fn workspace_import_graph_tracks_multiple_parent_game_candidates() {
+    fn workspace_import_graph_tracks_direct_importers_without_selecting_an_entry() {
         let workspace = TestWorkspace::new();
         let fragment_path =
             workspace.write("games/multiple_parents/shared/levels.puzzle", "levels {}\n");
         let game_path = workspace.write(
             "games/multiple_parents/game.puzzle",
             format!(
-                "import \"shared/levels.puzzle\"\n\n{}",
+                "import shared = \"shared/levels.puzzle\"\n\n{}",
                 editor_fixture_source("Game Parent")
             ),
         );
         workspace.write(
             "games/multiple_parents/main.puzzle",
             format!(
-                "import \"shared/levels.puzzle\"\n\n{}",
+                "import shared = \"shared/levels.puzzle\"\n\n{}",
                 editor_fixture_source("Main Parent")
             ),
         );
         workspace.write(
             "games/multiple_parents/third_parent.puzzle",
             format!(
-                "import \"shared/levels.puzzle\"\n\n{}",
+                "import shared = \"shared/levels.puzzle\"\n\n{}",
                 editor_fixture_source("Third Parent")
             ),
         );
         let project_dir = game_path.parent().expect("project dir");
 
-        let service =
-            EditorService::open_game_entry(project_dir).expect("open multi-parent project");
+        let service = EditorService::open_path(project_dir).expect("open multi-parent project");
         let state = service.state();
         let fragment_doc = document_with_suffix(
             &state.documents,
@@ -3781,16 +3592,12 @@ step board
         assert_eq!(
             fragment_doc.imported_by.len(),
             3,
-            "all direct parent candidates should be visible to the editor"
+            "all direct importers should be visible to the editor"
         );
         assert_eq!(
             PathBuf::from(&fragment_doc.imported_by[0]),
             game_path.canonicalize().expect("canonical game path"),
-            "multiple parent candidates should be sorted so the normal game entry wins"
-        );
-        assert_eq!(
-            PathBuf::from(&fragment_doc.parent_game_path),
-            game_path.canonicalize().expect("canonical parent game")
+            "direct importers have a stable path order"
         );
         assert_eq!(
             PathBuf::from(&fragment_path)
@@ -3798,27 +3605,6 @@ step board
                 .expect("canonical fragment"),
             PathBuf::from(&fragment_doc.puzzle_path)
         );
-    }
-
-    #[test]
-    fn editor_workspace_preview_selects_first_parent_game_candidate() {
-        assert!(EDITOR_WORKSPACE_JS.contains("function parentGameCandidatesForDocument(document)"));
-        assert!(EDITOR_WORKSPACE_JS.contains(".sort(comparePuzzleEntryDocuments);"));
-        assert!(
-            EDITOR_WORKSPACE_JS
-                .contains("return parentGameCandidatesForDocument(document)[0] || null;")
-        );
-        assert!(EDITOR_WORKSPACE_JS.contains("Preview uses: ${parentGames[0].puzzlePath"));
-    }
-
-    #[test]
-    fn editor_workspace_uses_puzzle_declaration_as_game_entry() {
-        assert!(
-            EDITOR_WORKSPACE_JS.contains(
-                "return isPuzzleDocument(document) && document.declaresGameEntry === true;"
-            )
-        );
-        assert!(!EDITOR_WORKSPACE_JS.contains("function sourceDeclaresGameEntry("));
     }
 
     #[test]
@@ -3846,13 +3632,13 @@ step board
     }
 
     #[test]
-    fn open_game_entry_accepts_empty_project_folders() {
+    fn open_path_accepts_empty_project_folders() {
         let workspace = TestWorkspace::new();
         let project_dir = workspace.root.join("games/empty_project");
         fs::create_dir_all(&project_dir).expect("create empty project folder");
         fs::create_dir_all(project_dir.join("levels/empty")).expect("create nested empty folder");
 
-        let service = EditorService::open_game_entry(&project_dir).expect("open empty project");
+        let service = EditorService::open_path(&project_dir).expect("open empty project");
         let state = service.state();
 
         assert_eq!(
@@ -3870,14 +3656,13 @@ step board
     }
 
     #[test]
-    fn open_game_entry_accepts_project_folders_without_puzzle_model() {
+    fn open_path_accepts_project_folders_without_puzzle_model() {
         let workspace = TestWorkspace::new();
         let fragment_path = workspace.write("games/fragments/levels.puzzle", "levels {}\n");
         workspace.write("games/fragments/notes.md", "# Notes\n");
         let project_dir = fragment_path.parent().expect("project dir");
 
-        let service =
-            EditorService::open_game_entry(project_dir).expect("open non-entry project folder");
+        let service = EditorService::open_path(project_dir).expect("open non-entry project folder");
         let state = service.state();
 
         assert_eq!(state.puzzle_path, "");
@@ -3990,7 +3775,7 @@ step board
     fn compile_preview_accepts_at_prefixed_object_single_color_visual() {
         let workspace = TestWorkspace::new();
         let source = r##"
-title = at_prefixed_object_single_color_preview
+const title = at_prefixed_object_single_color_preview
 
 puzzle default {
 layers {
@@ -4031,7 +3816,7 @@ level "start"
     fn compile_preview_accepts_line_style_tagged_visual_after_pattern() {
         let workspace = TestWorkspace::new();
         let source = r##"
-title = line_style_tagged_preview
+const title = line_style_tagged_preview
 
 puzzle default {
 tags {
@@ -4080,7 +3865,7 @@ B
     fn compile_preview_preserves_language_diagnostics() {
         let workspace = TestWorkspace::new();
         let source = r#"
-title = "Multi Error Probe"
+const title = "Multi Error Probe"
 
 puzzle main {
 layers {
@@ -4147,7 +3932,7 @@ level "first"
     fn compile_preview_reports_independent_lifecycle_diagnostics_together() {
         let workspace = TestWorkspace::new();
         let source = r#"
-title = "Multi Lifecycle Error Probe"
+const title = "Multi Lifecycle Error Probe"
 
 puzzle main {
 layers {
@@ -4234,7 +4019,7 @@ P.
     fn compile_preview_reports_independent_statement_parse_errors_together() {
         let workspace = TestWorkspace::new();
         let source = r#"
-title = "Multi Statement Parse Error Probe"
+const title = "Multi Statement Parse Error Probe"
 
 puzzle main {
 layers {
@@ -4295,7 +4080,7 @@ P
     fn compile_preview_reports_sibling_statement_block_errors_together() {
         let workspace = TestWorkspace::new();
         let source = r#"
-title = "Sibling Statement Block Error Probe"
+const title = "Sibling Statement Block Error Probe"
 
 puzzle main {
 layers {
@@ -4361,8 +4146,8 @@ P
     #[test]
     fn compile_preview_supports_puzzle3_documents() {
         let workspace = TestWorkspace::new();
-        let source = include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3");
-        let game_path = workspace.write("games/puzzle3_fixture/game.puzzle3", source);
+        let source = include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle");
+        let game_path = workspace.write("games/puzzle3_fixture/game.puzzle", source);
         let service = EditorService::open(&game_path).expect("open puzzle3 fixture");
 
         let html = service
@@ -4404,7 +4189,7 @@ P
     fn compile_preview_accepts_3d_input_rule_without_orientation_set() {
         let workspace = TestWorkspace::new();
         let source = r#"
-title = "Bare 3D Input"
+const title = "Bare 3D Input"
 
 puzzle push3 {
   dimension = 3
@@ -4429,7 +4214,7 @@ levels demo of push3 {
   }
 }
 "#;
-        let game_path = workspace.write("games/puzzle3_input_rule/game.puzzle3", source);
+        let game_path = workspace.write("games/puzzle3_input_rule/game.puzzle", source);
         let service = EditorService::open(&game_path).expect("open puzzle3 input fixture");
 
         let html = service
@@ -4446,17 +4231,6 @@ levels demo of push3 {
     }
 
     #[test]
-    fn editor_uses_dom_visual_rendering_only_for_level_editing() {
-        assert!(
-            EDITOR_DOM_JS.contains("new window.PuzzleRenderer(levelBoard, { renderMode: \"dom\"")
-        );
-        assert!(
-            EDITOR_DOM_JS
-                .contains("new window.PuzzleRenderer(solverBoard, { renderMode: \"canvas\"")
-        );
-    }
-
-    #[test]
     fn source_play_button_opens_play_preview() {
         assert!(EDITOR_HTML.contains(r#"id="runButton""#));
         assert!(EDITOR_HTML.contains(r#"aria-label="Play preview""#));
@@ -4465,7 +4239,7 @@ levels demo of push3 {
         assert!(!EDITOR_HTML.contains("source-preview-stop-icon"));
         assert!(EDITOR_JS.contains("async function runPreviewFromSourcePane()"));
         assert!(EDITOR_JS.contains(
-            "async function runPreviewFromSourcePane() {\n  ensurePreviewTargetsActiveDocument();"
+            "async function runPreviewFromSourcePane() {\n  selectPreviewEntryDocument(activeDocument());"
         ));
         assert!(EDITOR_JS.contains("setStatus(\"Saving before preview\", \"\");"));
         assert!(EDITOR_JS.contains("saved = await saveCurrentDocument(true);"));
@@ -4875,9 +4649,8 @@ levels demo of push3 {
             EDITOR_IMPORT_EXPORT_JS.contains("function schedulePuzzleScriptImportConversion()")
         );
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("function puzzleScriptSourceTitle(source)"));
-        assert!(EDITOR_IMPORT_EXPORT_JS.contains("function puzzleStudioMetadataTitle(canonical)"));
-        assert!(EDITOR_IMPORT_EXPORT_JS.contains(r#"/^title\s*=\s*(.+)$/"#));
-        assert!(!EDITOR_IMPORT_EXPORT_JS.contains(r#".replace(/^title\s*/, "")"#));
+        assert!(!EDITOR_IMPORT_EXPORT_JS.contains("puzzleStudioMetadataTitle"));
+        assert!(!EDITOR_IMPORT_EXPORT_JS.contains(r#"/^title\s*=\s*(.+)$/"#));
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("convertPuzzleScriptImport(generation)"));
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("window.PuzzleStudioImportExport = {"));
         assert!(EDITOR_IMPORT_EXPORT_JS.contains("schedulePuzzleScriptImportConversion,"));
@@ -5515,12 +5288,11 @@ levels demo of push3 {
         assert!(!EDITOR_RUNTIME_JS.contains("free_source_analysis_handle"));
         assert!(!EDITOR_RUNTIME_JS.contains("analysis.handle"));
         assert!(EDITOR_RUNTIME_JS.contains("return querySynchronizedAnalysisWorker(\"outline\""));
-        assert!(EDITOR_RUNTIME_JS.contains(
-            "return querySynchronizedAnalysisWorker(\"outline\", source, {\n        sourceProfile: asString(payload.sourceProfile),"
-        ));
         assert!(
-            EDITOR_SOURCE_JS.contains("sourceProfile: puzzleSourceProfile(document),\n    });")
+            EDITOR_RUNTIME_JS
+                .contains("return querySynchronizedAnalysisWorker(\"outline\", source);")
         );
+        assert!(!EDITOR_SOURCE_JS.contains("sourceProfile"));
         assert!(
             EDITOR_RUNTIME_JS.contains("new Worker(wasmModuleUrl(\"./editor_analysis_worker.js\")")
         );
@@ -5556,12 +5328,14 @@ levels demo of push3 {
         assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime?.sourceEntryInfo"));
         assert!(EDITOR_JS.contains("await loadSurfaceEntriesForSource(context.source"));
         assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime.sourceEntryInfo(text)"));
-        assert!(EDITOR_JS.contains(
-            "activeSourceDocument.declaresGameEntry = entryInfo?.declaresGameEntry === true;"
-        ));
-        assert!(EDITOR_JS.contains("documentIdentityKey(previousPreviewDocument)"));
-        assert!(EDITOR_JS.contains("documentIdentityKey(nextPreviewDocument)"));
-        assert!(EDITOR_JS.contains("recordLoadedPreviewTarget(nextPreviewDocument);"));
+        assert!(!EDITOR_JS.contains("declaresGameEntry"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("declaresGameEntry"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("parentGamePath"));
+        assert!(
+            EDITOR_WORKSPACE_JS.contains("const previewEntryDocumentIdByWorkspace = new Map();")
+        );
+        assert!(EDITOR_WORKSPACE_JS.contains("function selectPreviewEntryDocument(document)"));
+        assert!(EDITOR_WORKSPACE_JS.contains("function previewEntryDocumentForWorkspace(root)"));
         assert!(!EDITOR_JS.contains("previewTargetKey()"));
         assert!(!EDITOR_WORKSPACE_JS.contains("function sourceDeclaresGameEntry("));
         assert!(EDITOR_JS.contains(
@@ -5609,7 +5383,7 @@ levels demo of push3 {
 
     #[test]
     fn editor_dimension_follows_canonical_source_products() {
-        assert!(EDITOR_WORKSPACE_JS.contains("function puzzleSourceProfile(document)"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("puzzleSourceProfile"));
         assert!(!EDITOR_JS.contains("function editorDimensionForDocument("));
         assert!(!EDITOR_JS.contains("editorDimensionForPuzzleSourceProfile("));
         assert!(EDITOR_JS.contains("dimension: entry.dimension,"));
@@ -5758,10 +5532,7 @@ levels demo of push3 {
 
     #[test]
     fn codemirror_highlight_consumes_typed_rust_spans_as_decorations() {
-        let payload = EditorService::highlight_source_json(
-            "title = \"Demo\"\n",
-            puzzle_lang::PuzzleSourceProfile::Puzzle2d,
-        );
+        let payload = EditorService::highlight_source_json("const title = \"Demo\"\n");
         assert!(payload.contains("\"version\":3"));
         assert!(payload.contains("\"offsetEncoding\":\"utf8\""));
         assert!(payload.contains("\"range\":{\"start\":0,"));
@@ -5968,6 +5739,14 @@ levels demo of push3 {
         let solver_request_source = &EDITOR_JS[solver_request..solver_request_end];
         assert!(solver_request_source.contains("maxStoredNodes: 5_000_000,"));
         assert!(!solver_request_source.contains("maxStoredNodes: 1000,"));
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+        assert!(
+            EDITOR_SOLVER_WORKER_JS
+                .contains("maxStoredNodes: Number(request.maxStoredNodes),")
+        );
+        assert!(!EDITOR_SOLVER_WORKER_JS.contains("maxNodes:"));
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     #[test]
@@ -6294,7 +6073,6 @@ levels demo of push3 {
 
         for markdown in [
             EDITOR_DOCS_MARKDOWN,
-            EDITOR_DOCS_METADATA_MARKDOWN,
             EDITOR_DOCS_PUZZLE_BLOCK_MARKDOWN,
             EDITOR_DOCS_LAYERS_MARKDOWN,
             EDITOR_DOCS_GROUPS_MARKDOWN,
@@ -6332,22 +6110,13 @@ levels demo of push3 {
             EDITOR_DOCS_SCENE_STATE_EFFECTS_MARKDOWN,
             EDITOR_DOCS_MAPS_EXPANSION_MARKDOWN,
         ] {
-            collect_puzzle_fence_outline_kinds(
-                markdown,
-                puzzle_lang::PuzzleSourceProfile::Puzzle2d,
-                &mut kinds,
-            );
+            collect_puzzle_fence_outline_kinds(markdown, &mut kinds);
         }
-        collect_puzzle_fence_outline_kinds(
-            EDITOR_DOCS_3D_MARKDOWN,
-            puzzle_lang::PuzzleSourceProfile::Puzzle3d,
-            &mut kinds,
-        );
+        collect_puzzle_fence_outline_kinds(EDITOR_DOCS_3D_MARKDOWN, &mut kinds);
 
-        for (source, profile) in [
-            (
-                r#"
-title = "Outline 2D"
+        for source in [
+            r#"
+const title = "Outline 2D"
 
 puzzle outline {
 layers {
@@ -6360,22 +6129,11 @@ move
 }
 }
 "#,
-                puzzle_lang::PuzzleSourceProfile::Puzzle2d,
-            ),
-            (
-                include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3"),
-                puzzle_lang::PuzzleSourceProfile::Puzzle3d,
-            ),
-            (
-                include_str!("../../lang/tests/fixtures/spec_3d_preview_contract.puzzle3"),
-                puzzle_lang::PuzzleSourceProfile::Puzzle3d,
-            ),
-            (
-                include_str!("../../lang/tests/fixtures/puzzlescript/basic_sokoban.puzzle"),
-                puzzle_lang::PuzzleSourceProfile::Puzzle2d,
-            ),
+            include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle"),
+            include_str!("../../lang/tests/fixtures/spec_3d_preview_contract.puzzle"),
+            include_str!("../../lang/tests/fixtures/puzzlescript/basic_sokoban.puzzle"),
         ] {
-            collect_outline_kinds_from_source(source, profile, &mut kinds);
+            collect_outline_kinds_from_source(source, &mut kinds);
         }
 
         let missing_kinds = kinds
@@ -6701,7 +6459,8 @@ move
             EDITOR_LEVEL3D_JS
                 .contains("level3dLayerScreenPointToFootprint({ x, y }, view, width, height)")
         );
-        assert!(EDITOR_LEVEL3D_JS.contains("return height - 1 - slice;"));
+        assert!(EDITOR_LEVEL3D_JS.contains("function currentLevel3dLayerZ()"));
+        assert!(EDITOR_LEVEL3D_JS.contains("return slice;"));
         assert!(EDITOR_LEVEL3D_JS.contains("visual: object?.visual ?? descriptor.visual ?? null,"));
         assert!(!EDITOR_LEVEL3D_JS.contains(
             "visual: object?.visual || descriptor.visual || object?.name || descriptor.name"
@@ -6710,7 +6469,7 @@ move
 
     #[test]
     fn level3d_microban_01_supplies_preview_contract_data() {
-        let source = include_str!("../../lang/tests/fixtures/spec_3d_preview_contract.puzzle3");
+        let source = include_str!("../../lang/tests/fixtures/spec_3d_preview_contract.puzzle");
         let document = puzzle_lang::parse_game(source).expect("parse Microban 3D fixture");
         let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
             .expect("export Microban 3D fixture");
@@ -9006,16 +8765,16 @@ move
             editor_fixture_source("Imported")
         );
 
-        let created_puzzle3 = service
+        let created_3d = service
             .create_source_file(&CreateSourceFileRequest::new(
-                "puzzle3 imported3 {}\n",
-                "imported3.puzzle3",
+                "puzzle imported3 {\ndimension = 3\n}\n",
+                "imported3.puzzle",
             ))
-            .expect("create new puzzle3 file");
-        assert!(created_puzzle3.ends_with("imported3.puzzle3"));
+            .expect("create new 3D puzzle file");
+        assert!(created_3d.ends_with("imported3.puzzle"));
         assert_eq!(
-            fs::read_to_string(&created_puzzle3).expect("read created puzzle3 file"),
-            "puzzle3 imported3 {}\n"
+            fs::read_to_string(&created_3d).expect("read created 3D puzzle file"),
+            "puzzle imported3 {\ndimension = 3\n}\n"
         );
 
         let outside_error = service
@@ -9045,7 +8804,7 @@ move
             editor_fixture_source("Rename Before"),
         );
         let project_dir = game_path.parent().expect("project dir");
-        let service = EditorService::open_game_entry(project_dir).expect("open editor fixture");
+        let service = EditorService::open_path(project_dir).expect("open editor fixture");
 
         let renamed = service
             .rename_workspace_entry(&RenameWorkspaceEntryRequest::new(
@@ -9072,7 +8831,7 @@ move
         );
         let project_dir = game_path.parent().expect("project dir");
         fs::create_dir(project_dir.join("new")).expect("create destination parent");
-        let service = EditorService::open_game_entry(project_dir).expect("open editor fixture");
+        let service = EditorService::open_path(project_dir).expect("open editor fixture");
 
         let moved = service
             .rename_workspace_entry(&RenameWorkspaceEntryRequest::new("old", "new/old"))
@@ -9092,7 +8851,7 @@ move
         );
         let outside_path = workspace.root.join("outside.puzzle");
         let project_dir = game_path.parent().expect("project dir");
-        let service = EditorService::open_game_entry(project_dir).expect("open editor fixture");
+        let service = EditorService::open_path(project_dir).expect("open editor fixture");
 
         let outside_error = service
             .rename_workspace_entry(&RenameWorkspaceEntryRequest::new(
@@ -9120,7 +8879,7 @@ move
         );
         let folder_path = folder_file.parent().expect("folder").to_path_buf();
         let project_dir = game_path.parent().expect("project dir");
-        let service = EditorService::open_game_entry(project_dir).expect("open editor fixture");
+        let service = EditorService::open_path(project_dir).expect("open editor fixture");
 
         service
             .delete_workspace_entry(&DeleteWorkspaceEntryRequest::new("old/fragment.puzzle"))
@@ -9147,7 +8906,7 @@ move
         );
         let outside_path = workspace.write("outside.puzzle", editor_fixture_source("Outside"));
         let project_dir = game_path.parent().expect("project dir");
-        let service = EditorService::open_game_entry(project_dir).expect("open editor fixture");
+        let service = EditorService::open_path(project_dir).expect("open editor fixture");
 
         let outside_error = service
             .delete_workspace_entry(&DeleteWorkspaceEntryRequest::new(
@@ -9169,7 +8928,7 @@ move
     }
 
     #[test]
-    fn open_game_entry_scopes_workspace_to_selected_project_folder() {
+    fn open_path_scopes_workspace_to_selected_project_folder() {
         let workspace = TestWorkspace::new();
         let game_path = workspace.write(
             "games/project_a/game.puzzle",
@@ -9182,7 +8941,7 @@ move
             editor_fixture_source("Project B"),
         );
 
-        let service = EditorService::open_game_entry(project_dir).expect("open project folder");
+        let service = EditorService::open_path(project_dir).expect("open project folder");
         let state = service.state();
 
         assert_eq!(
@@ -9223,7 +8982,7 @@ move
             "games/project_b/game.puzzle",
             editor_fixture_source("Project B"),
         );
-        let service = EditorService::open_game_entry(project_dir).expect("open project folder");
+        let service = EditorService::open_path(project_dir).expect("open project folder");
 
         let error = service
             .compile_preview(&PreviewRequest::new(
@@ -9233,7 +8992,7 @@ move
             ))
             .expect_err("preview paths outside the opened project must be rejected")
             .to_string();
-        assert!(error.contains("can only import puzzle files under"));
+        assert!(error.contains("workspace entry is outside root"), "{error}");
     }
 
     #[cfg(unix)]
@@ -9251,7 +9010,7 @@ move
         let link_path = project_dir.join("outside-link.md");
         symlink(&outside_path, &link_path).expect("create outside symlink");
 
-        let service = EditorService::open_game_entry(project_dir).expect("open project folder");
+        let service = EditorService::open_path(project_dir).expect("open project folder");
 
         assert!(
             !paths_contain(&service.state().documents, "outside-link.md"),
@@ -9312,10 +9071,15 @@ move
     #[test]
     fn browser_preview_compile_uses_browser_runtime_not_host_api() {
         assert!(EDITOR_RUNTIME_JS.contains("window.PuzzleStudioRuntime"));
-        assert!(EDITOR_RUNTIME_JS.contains("compile_workspace_preview"));
-        assert!(EDITOR_RUNTIME_JS.contains("export_workspace_html"));
-        assert!(EDITOR_RUNTIME_JS.contains("workspace_presentation_manifest"));
-        assert!(!EDITOR_RUNTIME_JS.contains("JSON.stringify(payload.workspaceDocuments"));
+        assert!(EDITOR_RUNTIME_JS.contains("WasmWorkspaceSession"));
+        assert!(EDITOR_RUNTIME_JS.contains("session.compile_preview"));
+        assert!(EDITOR_RUNTIME_JS.contains("session.export_html"));
+        assert!(EDITOR_RUNTIME_JS.contains("session.presentation_manifest"));
+        assert!(!EDITOR_RUNTIME_JS.contains("compile_workspace_preview"));
+        assert!(!EDITOR_RUNTIME_JS.contains("export_workspace_html"));
+        assert!(EDITOR_RUNTIME_JS.contains("session.index_json"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("puzzleImportPathsForDocument"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("documentImportClosureContains"));
         assert!(!EDITOR_WORKSPACE_JS.contains("expandedWorkspaceSourceForEditor"));
         assert!(!EDITOR_WORKSPACE_JS.contains("declaredAssetPaths"));
         assert!(!EDITOR_WORKSPACE_JS.contains("themeNameFromPuzzleSource"));
@@ -9512,12 +9276,35 @@ move
 
     #[test]
     fn tauri_static_editor_includes_renderer_assets() {
-        assert_eq!(EDITOR_STATIC_RENDERER_JS, RENDERER_JS);
         assert_eq!(EDITOR_STATIC_RENDERER_CSS, RENDERER_CSS);
         assert!(EDITOR_HTML.contains(r#"<link rel="stylesheet" href="renderer.css">"#));
+        assert!(EDITOR_HTML.contains(r#"<script src="render_asset_decoder.js"></script>"#));
         assert!(
-            EDITOR_HTML.contains(r#"<script src="renderer.js?v=board-canvas-visuals"></script>"#)
+            EDITOR_HTML.contains(r#"<script src="renderer.js?v=typed-render-scene"></script>"#)
         );
+        assert!(EDITOR_HTML.contains(r#"<script src="editor_authoring_renderer.js"></script>"#));
+        assert!(EDITOR_AUTHORING_RENDERER_JS.contains("class PuzzleAuthoringRenderer"));
+        assert!(!EDITOR_AUTHORING_RENDERER_JS.contains("paintCanvas"));
+    }
+
+    #[test]
+    fn editor_routes_only_authoring_grids_to_the_dom_renderer() {
+        assert!(EDITOR_DOM_JS.contains("new window.PuzzleAuthoringRenderer(levelBoard"));
+        assert!(EDITOR_JS.contains("new window.PuzzleAuthoringRenderer(view"));
+        assert!(EDITOR_JS.contains("new window.PuzzleAuthoringRenderer(root"));
+        assert!(!EDITOR_AUTHORING_RENDERER_JS.contains("resolveRenderMoment"));
+        assert!(!EDITOR_AUTHORING_RENDERER_JS.contains("projectRendererState"));
+    }
+
+    #[test]
+    fn editor_solver_projects_every_unresolved_state_through_rust() {
+        assert!(EDITOR_DOM_JS.contains("new window.PuzzleRenderer(solverBoard"));
+        assert!(EDITOR_RUNTIME_JS.contains("async projectRendererState(payload = {})"));
+        assert!(EDITOR_RUNTIME_JS.contains("module.project_renderer_state("));
+        assert!(EDITOR_JS.contains("if (solverRenderer && scene.renderScene)"));
+        assert!(EDITOR_JS.contains("window.PuzzleStudioRuntime.projectRendererState({"));
+        assert!(EDITOR_JS.contains("solverRenderer.render(solverRenderProjectionScene)"));
+        assert!(!EDITOR_JS.contains("new window.PuzzleRenderer(levelBoard"));
     }
 
     #[test]
@@ -9564,7 +9351,7 @@ move
             EDITOR_HTML.contains(r#"<script src="editor_boot.js?v=desktop-export-link"></script>"#)
         );
         assert!(
-            EDITOR_HTML.contains(r#"<script src="renderer.js?v=board-canvas-visuals"></script>"#)
+            EDITOR_HTML.contains(r#"<script src="renderer.js?v=typed-render-scene"></script>"#)
         );
         assert!(
             EDITOR_HTML

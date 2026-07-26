@@ -20,3 +20,4 @@ required-features = ["embedded-assets"]
 html-play = { path = "../html_play", default-features = false, optional = true }
 puzzle-authoring = { path = "../authoring" }
 puzzle-lang = { path = "../lang" }
+puzzle-workspace = { path = "../workspace" }

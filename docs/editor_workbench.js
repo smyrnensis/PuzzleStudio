@@ -272,6 +272,12 @@ function createToolPane(paneId, panel) {
   if (paneId === "sounds" && soundsHeaderTools) {
     title.append(soundsHeaderTools);
   }
+  if (paneId === "visual") {
+    const visualPaneModeControls = document.querySelector("#visualPaneModeControls");
+    if (visualPaneModeControls) {
+      title.append(visualPaneModeControls);
+    }
+  }
   for (const group of toolPaneHeaderActionGroups(paneId)) {
     actions.append(group);
   }

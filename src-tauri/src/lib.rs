@@ -293,7 +293,7 @@ fn open_workspace_path(
     path: &Path,
     record_loaded: bool,
 ) -> Result<serde_json::Value, String> {
-    let service = EditorService::open_game_entry(path).map_err(|error| error.to_string())?;
+    let service = EditorService::open_path(path).map_err(|error| error.to_string())?;
     let workspace_root = service.workspace_root().to_string();
     let puzzle_path = service.puzzle_path().to_string();
     if record_loaded {
@@ -557,7 +557,7 @@ fn create_source_file(
         .map_err(|error| error.to_string())?;
 
     if active_entry_is_empty && is_desktop_puzzle_source_path(&path) {
-        if let Ok(service) = EditorService::open_game_entry(&path) {
+        if let Ok(service) = EditorService::open_path(&path) {
             let workspace_root = service.workspace_root().to_string();
             let puzzle_path = service.puzzle_path().to_string();
             services[service_index] = service;
@@ -658,7 +658,7 @@ fn rename_workspace_entry(
             path.join(tail)
         };
         let service =
-            EditorService::open_game_entry(&next_entry_path).map_err(|error| error.to_string())?;
+            EditorService::open_path(&next_entry_path).map_err(|error| error.to_string())?;
         let workspace_root = service.workspace_root().to_string();
         let puzzle_path = service.puzzle_path().to_string();
         services[service_index] = service;
@@ -739,7 +739,7 @@ fn rename_workspace_entry_between_workspaces(
         let source_service = EditorService::open_workspace_root(&source_workspace_root)
             .map_err(|error| error.to_string())?;
         let target_service =
-            EditorService::open_game_entry(&next_entry_path).map_err(|error| error.to_string())?;
+            EditorService::open_path(&next_entry_path).map_err(|error| error.to_string())?;
         let source_workspace_root = source_service.workspace_root().to_string();
         let source_puzzle_path = source_service.puzzle_path().to_string();
         let target_workspace_root = target_service.workspace_root().to_string();
@@ -928,7 +928,7 @@ fn is_desktop_puzzle_source_path(path: &Path) -> bool {
         path.extension()
             .and_then(|value| value.to_str())
             .unwrap_or(""),
-        "puzzle" | "puzzle3"
+        "puzzle"
     )
 }
 
@@ -938,7 +938,6 @@ fn is_desktop_workspace_file(path: &Path) -> bool {
             .and_then(|value| value.to_str())
             .unwrap_or(""),
         "puzzle"
-            | "puzzle3"
             | "css"
             | "js"
             | "mjs"
@@ -1033,7 +1032,7 @@ fn watch_workspace(
         }
         snapshot = next;
 
-        let service = EditorService::open_game_entry(&puzzle_path);
+        let service = EditorService::open_path(&puzzle_path);
         match service {
             Ok(service) => {
                 let payload = match editor_workspace_changed_value(&service) {
@@ -1151,7 +1150,6 @@ fn is_workspace_file(path: &Path) -> bool {
             .and_then(|value| value.to_str())
             .unwrap_or(""),
         "puzzle"
-            | "puzzle3"
             | "css"
             | "js"
             | "mjs"
@@ -1204,7 +1202,7 @@ async fn pick_workspace_path(
     if kind == Some("file") {
         file_dialog
             .set_title("Open a PuzzleStudio file")
-            .add_filter("PuzzleStudio puzzle", &["puzzle", "puzzle3"])
+            .add_filter("PuzzleStudio puzzle", &["puzzle"])
             .pick_file(move |path| {
                 let _ = sender.blocking_send(path);
             });

@@ -1,5 +1,5 @@
-title = "05 — Tags, Marks, and Routines"
-subtitle = "Describe variants and split a transition into named stages"
+const title = "05 — Tags, Marks, and Routines"
+const subtitle = "Describe variants and split a transition into named stages"
 
 puzzle keys_and_doors {
 

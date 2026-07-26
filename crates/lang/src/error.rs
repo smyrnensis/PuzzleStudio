@@ -141,6 +141,16 @@ impl DiagnosticReport {
     pub fn into_diagnostics(self) -> Vec<Diagnostic> {
         self.diagnostics
     }
+
+    pub fn with_file(self, file: impl Into<String>) -> Self {
+        let file = file.into();
+        Self::from_diagnostics(
+            self.diagnostics
+                .into_iter()
+                .map(|diagnostic| diagnostic.with_file(&file))
+                .collect(),
+        )
+    }
 }
 
 impl From<puzzle_core::StateError> for DiagnosticReport {

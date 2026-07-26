@@ -22,7 +22,7 @@ mod tests {
     #[test]
     fn solves_first_sokoban_level_and_replays_to_goal() {
         let source = r#"
-title = solver_push_goal
+const title = solver_push_goal
 
 puzzle default {
 layers {
@@ -92,7 +92,7 @@ PBG
     #[test]
     fn reports_depth_budget() {
         let source = r#"
-title = solver_depth_budget
+const title = solver_depth_budget
 
 puzzle default {
 layers {
@@ -144,7 +144,7 @@ PBG
             initial,
             SearchBudget {
                 max_depth: Some(0),
-                max_nodes: Some(100_000),
+                max_stored_nodes: Some(100_000),
                 max_frontier: None,
                 max_duration: Some(Duration::from_secs(5)),
             },
@@ -156,7 +156,7 @@ PBG
     #[test]
     fn solver_handles_transition_local_mark_rules() {
         let source = r#"
-title = mark_solver
+const title = mark_solver
 
 puzzle default {
 layers {
@@ -225,7 +225,7 @@ PBG
     #[test]
     fn solver_state_slicer_projects_initial_key_and_transition_input() {
         let source = r#"
-title = solver_state_slicer
+const title = solver_state_slicer
 
 puzzle default {
 layers {
@@ -284,7 +284,7 @@ PF
     #[test]
     fn solver_treats_win_command_as_goal() {
         let source = r#"
-title = win_solver
+const title = win_solver
 
 puzzle board {
 layers {
@@ -339,7 +339,7 @@ PE
     #[test]
     fn semantic_goal_matches_completion_observation_before_next_level() {
         let source = r#"
-title = completion_observation
+const title = completion_observation
 puzzle default {
 layers {
 floor = Goal
@@ -408,7 +408,7 @@ level "second" {
     #[test]
     fn solver_handles_deterministic_random_rules() {
         let source = r#"
-title = random_solver
+const title = random_solver
 
 puzzle default {
 layers {

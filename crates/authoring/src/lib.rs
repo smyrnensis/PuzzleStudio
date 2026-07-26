@@ -1187,10 +1187,10 @@ pub fn selector_alias_conflicts<'a>(
 pub enum PuzzleDirectiveSurface {
     Empty,
     Close,
+    Import,
     Model,
     RemovedModelPrefix,
-    RemovedNameMetadata,
-    Metadata,
+    DocumentSetting,
     DocumentShell,
     InputBuffer,
     RemovedAnimation,
@@ -1262,13 +1262,11 @@ pub fn puzzle_directive_surface(line: &str) -> PuzzleDirectiveSurface {
         return PuzzleDirectiveSurface::Unknown;
     };
     match first {
+        "import" => PuzzleDirectiveSurface::Import,
         "puzzle" => PuzzleDirectiveSurface::Model,
         "model" => PuzzleDirectiveSurface::RemovedModelPrefix,
-        "name" => PuzzleDirectiveSurface::RemovedNameMetadata,
-        "title" | "subtitle" | "author" | "homepage" | "default_wait_time" => {
-            PuzzleDirectiveSurface::Metadata
-        }
-        "theme" if parse_assignment_row(line).is_some() => PuzzleDirectiveSurface::Metadata,
+        "default_wait_time" => PuzzleDirectiveSurface::DocumentSetting,
+        "theme" if parse_assignment_row(line).is_some() => PuzzleDirectiveSurface::DocumentSetting,
         "sounds" | "theme" | "assets" => PuzzleDirectiveSurface::DocumentShell,
         "input_buffer" => PuzzleDirectiveSurface::InputBuffer,
         "animation" => PuzzleDirectiveSurface::RemovedAnimation,
@@ -4983,7 +4981,7 @@ mod tests {
         );
         assert_eq!(
             puzzle_directive_surface("theme = \"puzzlescript\""),
-            PuzzleDirectiveSurface::Metadata
+            PuzzleDirectiveSurface::DocumentSetting
         );
         assert_eq!(
             puzzle_directive_surface("theme dark {"),

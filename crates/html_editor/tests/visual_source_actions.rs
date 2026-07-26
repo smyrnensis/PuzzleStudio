@@ -34,6 +34,40 @@ fn visual_source_actions_live_in_the_visual_pane_top_bar() {
 }
 
 #[test]
+fn visual_mode_controls_live_beside_the_visual_pane_title() {
+    let mode_controls = EDITOR_HTML
+        .split_once("id=\"visualPaneModeControls\"")
+        .and_then(|(_, tail)| tail.split_once("id=\"visualPaneHeaderActions\""))
+        .map(|(controls, _)| controls)
+        .expect("visual mode controls before visual source actions");
+
+    for id in [
+        "visualDimension2dButton",
+        "visualDimension3dButton",
+        "visualAnimateModeButton",
+    ] {
+        assert!(
+            mode_controls.contains(&format!("id=\"{id}\"")),
+            "missing {} from visual mode controls",
+            id
+        );
+    }
+
+    let workbench = include_str!("../static/editor_workbench.js");
+    let mode_lookup = workbench
+        .find("const visualPaneModeControls = document.querySelector(\"#visualPaneModeControls\");")
+        .expect("visual pane mode control lookup");
+    let title_append = workbench
+        .find("title.append(visualPaneModeControls);")
+        .expect("visual pane title controls");
+    let action_append = workbench
+        .find("for (const group of toolPaneHeaderActionGroups(paneId))")
+        .expect("visual pane source action placement");
+    assert!(mode_lookup < title_append);
+    assert!(title_append < action_append);
+}
+
+#[test]
 fn visual_source_action_shortcuts_are_owned_by_the_command_database() {
     let new_visual = command_definition("visual.new", "level.add");
     assert!(new_visual.contains("shortcuts: [{ key: \"n\", modifiers: [\"primary\"] }]"));

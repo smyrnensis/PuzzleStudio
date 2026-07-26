@@ -459,8 +459,8 @@ fn budget_exceeded(
         .map(|started_at| started_at.elapsed())
         .unwrap_or_default();
     if budget
-        .max_nodes
-        .is_some_and(|max_nodes| visited >= max_nodes)
+        .max_stored_nodes
+        .is_some_and(|max_stored_nodes| visited >= max_stored_nodes)
         || budget
             .max_frontier
             .is_some_and(|max_frontier| frontier >= max_frontier)
@@ -888,7 +888,7 @@ mod tests {
             0,
             SearchBudget {
                 max_depth: Some(8),
-                max_nodes: Some(32),
+                max_stored_nodes: Some(32),
                 max_frontier: None,
                 max_duration: None,
             },
@@ -961,7 +961,7 @@ mod tests {
             0,
             SearchBudget {
                 max_depth: Some(8),
-                max_nodes: Some(32),
+                max_stored_nodes: Some(32),
                 max_frontier: None,
                 max_duration: None,
             },
@@ -982,7 +982,7 @@ mod tests {
             0,
             SearchBudget {
                 max_depth: Some(4),
-                max_nodes: Some(32),
+                max_stored_nodes: Some(32),
                 max_frontier: None,
                 max_duration: None,
             },

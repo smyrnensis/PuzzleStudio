@@ -19,6 +19,7 @@ read the more specific crate `AGENTS.md` when present.
   presentation backends.
 - `presentation_json`: the browser JSON transport adapter for that snapshot;
   it owns wire conversion but no game or renderer semantics.
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 - `audio_contract`: typed audio asset, voice, capability, and device-command
   contracts. It owns no synthesis or platform API.
 - `audio`: deterministic seeded SFX/music generation, canonical block
@@ -27,6 +28,8 @@ read the more specific crate `AGENTS.md` when present.
   adjacent JavaScript is generated binding/processor transport only.
 - `web_audio`: WebAudio device submission and capability feedback over resolved
   audio assets and typed commands.
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 - `scene`: shared presentation/flow metadata and layout/component contracts.
 - `html_play`, `html_editor`, `cli`, `wasm`: adapters or facades.
   They should not own parser/compiler semantics.

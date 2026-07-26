@@ -1409,7 +1409,6 @@ async function refreshSourceHighlight() {
     const text = await window.PuzzleStudioHost.highlight(
       {
         source,
-        sourceProfile: puzzleSourceProfile(document),
         rangeStart: range.from,
         rangeEnd: range.to,
         includeOutline,
@@ -1489,7 +1488,6 @@ async function refreshSourceOutline() {
   try {
     const text = await window.PuzzleStudioHost.sourceOutline({
       source,
-      sourceProfile: puzzleSourceProfile(document),
     });
     if (requestId !== sourceOutlineRequestId || source !== sourceEditorDocumentValue()) {
       return;
@@ -3282,10 +3280,14 @@ sourceEditor.addEventListener("beforeinput", handleSourceBeforeInputTextInsert);
 sourceEditor.addEventListener("sourceanalysisreset", () => {
   const source = sourceEditorDocumentValue();
   sourceEntriesRefreshRequestId += 1;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   window.PuzzleStudioRuntime.resetSourceAnalysis(
     source,
     puzzleSourceProfile(activeDocument()),
   ).then(() => {
+=======
+  window.PuzzleStudioRuntime.resetSourceAnalysis(source).then(() => {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     if (source === sourceEditorDocumentValue()) {
       void refreshSourceLineAdd();
     }
@@ -4740,7 +4742,11 @@ function insertSourceLineAroundSelection(direction) {
   replaceSourceValue(rawLines.join("\n"), offset, offset);
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 async function updateSourceImportLinkFromPointer(event) {
+=======
+function updateSourceImportLinkFromPointer(event) {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   if (!sourceImportLinkFrame || !sourceDocumentSupportsEditableTargets()) {
     hideSourceImportLinkFrame();
     return;
@@ -4998,7 +5004,11 @@ function sourceEditableEntryFromTarget(source, target, options = {}) {
   return body && typeof body === "object" ? { ...entry, ...body } : entry;
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 async function openSourceImportLinkFromPointer(event, position = null) {
+=======
+function openSourceImportLinkFromPointer(event, position = null) {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   if (!sourceDocumentSupportsEditableTargets()) {
     return false;
   }

@@ -1,7 +1,7 @@
 use crate::{
     DiagnosticReport, block_header_text, is_block_close_line, is_block_header_line,
     source::SourceToken,
-    surface::{SourceSpan, SurfaceSemanticKind},
+    surface::{SourceSpan, SurfaceOutlinePolicy, SurfaceSemanticKind},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,7 +110,7 @@ pub(crate) struct KindSpec {
     pub(crate) symbol_exports: &'static [AuthoringSymbolExportSpec],
     pub(crate) block_role: Option<AuthoringBlockRole>,
     pub(crate) keyword_role: AuthoringSurfaceRole,
-    pub(crate) outline_policy: AuthoringOutlinePolicy,
+    pub(crate) outline_policy: SurfaceOutlinePolicy,
     pub(crate) missing_close_message: &'static str,
 }
 
@@ -329,14 +329,6 @@ pub(crate) struct AuthoringContentRow {
     pub(crate) captures: Vec<AuthoringRowCapture>,
     pub(crate) source_line: String,
     pub(crate) source_index: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
-pub(crate) enum AuthoringOutlinePolicy {
-    Hidden,
-    Visible,
-    CollapseChildren,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -649,34 +641,6 @@ const AUTHORING_SOURCE_BLOCK_SPECS: &[AuthoringSourceBlockSpec] = &[
 ];
 const ROOT_DEFINITIONS: &[DefinitionSpec] = &[
     DefinitionSpec::keyed_value_role(
-        "title",
-        DefinitionValueSpec::Many,
-        DefinitionValueSyntax::Any,
-        AuthoringSurfaceRole::Keyword,
-        AuthoringSurfaceRole::String,
-    ),
-    DefinitionSpec::keyed_value_role(
-        "subtitle",
-        DefinitionValueSpec::Many,
-        DefinitionValueSyntax::Any,
-        AuthoringSurfaceRole::Keyword,
-        AuthoringSurfaceRole::String,
-    ),
-    DefinitionSpec::keyed_value_role(
-        "author",
-        DefinitionValueSpec::Many,
-        DefinitionValueSyntax::Any,
-        AuthoringSurfaceRole::Keyword,
-        AuthoringSurfaceRole::String,
-    ),
-    DefinitionSpec::keyed_value_role(
-        "homepage",
-        DefinitionValueSpec::Many,
-        DefinitionValueSyntax::Any,
-        AuthoringSurfaceRole::Keyword,
-        AuthoringSurfaceRole::String,
-    ),
-    DefinitionSpec::keyed_value_role(
         "default_wait_time",
         DefinitionValueSpec::One,
         DefinitionValueSyntax::Duration,
@@ -936,13 +900,6 @@ const THEME_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
     ),
 ];
 const VISUAL_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
-    DefinitionSpec::keyed_value_role(
-        "selector",
-        DefinitionValueSpec::One,
-        DefinitionValueSyntax::Any,
-        AuthoringSurfaceRole::Setting,
-        AuthoringSurfaceRole::Object,
-    ),
     DefinitionSpec::value_role(
         "colors",
         DefinitionValueSpec::Many,
@@ -1118,7 +1075,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Hidden,
+        outline_policy: SurfaceOutlinePolicy::Hidden,
         missing_close_message: "block missing closing brace",
     },
     KindSpec {
@@ -1130,7 +1087,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "render block missing closing brace",
     },
     KindSpec {
@@ -1142,7 +1099,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "grid block missing closing brace",
     },
     KindSpec {
@@ -1154,7 +1111,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "camera block missing closing brace",
     },
     KindSpec {
@@ -1178,7 +1135,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "pixelate block missing closing brace",
     },
     KindSpec {
@@ -1190,7 +1147,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "viewport block missing closing brace",
     },
     KindSpec {
@@ -1202,7 +1159,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "sounds missing closing brace",
     },
     KindSpec {
@@ -1214,7 +1171,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: SFX_SOUND_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "sfx sound block missing closing brace",
     },
     KindSpec {
@@ -1226,7 +1183,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: MUSIC_SOUND_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "music sound block missing closing brace",
     },
     KindSpec {
@@ -1238,7 +1195,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "input_buffer missing closing brace",
     },
     KindSpec {
@@ -1250,7 +1207,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "theme missing closing brace",
     },
     KindSpec {
@@ -1262,7 +1219,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "assets missing closing brace",
     },
     KindSpec {
@@ -1274,7 +1231,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: Some(AuthoringBlockRole::Visuals),
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "visuals missing closing brace",
     },
     KindSpec {
@@ -1286,7 +1243,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: Some(AuthoringBlockRole::Visuals),
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "visual missing closing brace",
     },
     KindSpec {
@@ -1298,7 +1255,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: Some(AuthoringBlockRole::LevelList),
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "levels missing closing brace",
     },
     KindSpec {
@@ -1310,7 +1267,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: Some(AuthoringBlockRole::LevelEntry),
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "level missing closing brace",
     },
 ];
@@ -2910,18 +2867,16 @@ mod tests {
         let rows = parse_authoring_definition_body(
             AuthoringKind::VisualConfig,
             &[
-                "selector = Player".to_string(),
                 "colors = #fff #000".to_string(),
                 "shape = BoxShape".to_string(),
             ],
         )
         .unwrap();
-        assert_eq!(rows[0].key, "selector");
-        assert_eq!(rows[1].key, "colors");
-        assert_eq!(rows[1].values, vec!["#fff", "#000"]);
-        assert_eq!(rows[2].key, "shape");
-        assert_eq!(rows[2].values, vec!["BoxShape"]);
-        assert_eq!(rows[2].value_kind, AuthoringDefinitionValueKind::SingleLine);
+        assert_eq!(rows[0].key, "colors");
+        assert_eq!(rows[0].values, vec!["#fff", "#000"]);
+        assert_eq!(rows[1].key, "shape");
+        assert_eq!(rows[1].values, vec!["BoxShape"]);
+        assert_eq!(rows[1].value_kind, AuthoringDefinitionValueKind::SingleLine);
     }
 
     #[test]
@@ -2942,13 +2897,10 @@ mod tests {
 
         let rows = parse_authoring_definition_body(
             AuthoringKind::VisualConfig,
-            &[
-                "selector = Player".to_string(),
-                "shape = BoxShape".to_string(),
-            ],
+            &["shape = BoxShape".to_string()],
         )
         .unwrap();
-        assert_eq!(rows[1].value_kind, AuthoringDefinitionValueKind::SingleLine);
+        assert_eq!(rows[0].value_kind, AuthoringDefinitionValueKind::SingleLine);
     }
 
     #[test]
@@ -3008,27 +2960,7 @@ mod tests {
     }
 
     #[test]
-    fn root_scalar_prelude_entries_are_schema_definitions() {
-        let title = super::parse_authoring_definition_row(
-            AuthoringKind::Root,
-            "title = Tiny Metadata Game",
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(title.key, "title");
-        assert_eq!(title.op, Some(super::AuthoringDefinitionOp::Equals));
-        assert_eq!(title.values, vec!["Tiny", "Metadata", "Game"]);
-
-        let title_spec = super::authoring_definition_spec(AuthoringKind::Root, "title").unwrap();
-        assert_eq!(
-            super::definition_values(title_spec),
-            super::DefinitionValueSpec::Many
-        );
-        assert_eq!(
-            super::definition_value_role(title_spec),
-            Some(super::AuthoringSurfaceRole::String)
-        );
-
+    fn root_scalar_settings_are_schema_definitions() {
         let wait =
             super::authoring_definition_spec(AuthoringKind::Root, "default_wait_time").unwrap();
         assert_eq!(

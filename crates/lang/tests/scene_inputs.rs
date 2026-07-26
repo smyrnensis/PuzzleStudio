@@ -7,7 +7,7 @@ use puzzle_lang::{
 #[test]
 fn scene_and_model_inputs_are_owner_scoped() {
     let source = r##"
-title = "scene inputs"
+const title = "scene inputs"
 
 puzzle main {
 layers {
@@ -55,12 +55,12 @@ scene playing {
     main
   }
   keys {
-    Escape q -> back
+    Escape q -> return_to_title
   }
   rules {
     step main
   }
-  routine back {
+  routine return_to_title {
     goto title
   }
 }
@@ -103,7 +103,7 @@ scene playing {
         .unwrap();
     assert_eq!(
         playing.key_bindings[0].effect,
-        SceneEffect::RoutineCall("back".to_string())
+        SceneEffect::RoutineCall("return_to_title".to_string())
     );
     assert_eq!(loaded.controls.keys.get(&b'q'), None);
 }
@@ -111,7 +111,7 @@ scene playing {
 #[test]
 fn scene_choice_uses_arrow_effect_syntax() {
     let source = r##"
-title = "choices"
+const title = "choices"
 
 puzzle main {
 layers {
@@ -138,6 +138,12 @@ scene title {
     button "Help" -> message "help"
   }
 }
+
+scene playing {
+  layout {
+    main
+  }
+}
 "##;
 
     let loaded = parse_game(source).unwrap();
@@ -162,7 +168,7 @@ scene title {
 #[test]
 fn scene_layout_if_else_controls_components() {
     let source = r##"
-title = "conditional view"
+const title = "conditional view"
 
 puzzle main {
 layers {
@@ -220,7 +226,7 @@ scene title {
 #[test]
 fn scene_if_is_runtime_value_and_fragment_syntax() {
     let source = r##"
-title = "conditional values"
+const title = "conditional values"
 
 puzzle main {
 layers {
@@ -282,7 +288,7 @@ scene title {
 #[test]
 fn scene_if_value_uses_universal_balanced_brace_groups() {
     let source = r##"
-title = "nested conditional values"
+const title = "nested conditional values"
 
 puzzle main {
 layers {
@@ -323,7 +329,7 @@ scene title {
 #[test]
 fn scene_level_entry_uses_goto_scene_call_syntax() {
     let source = r##"
-title = "level calls"
+const title = "level calls"
 
 puzzle sokoban {
 layers {
@@ -390,7 +396,7 @@ scene playing(level) {
 #[test]
 fn old_start_levels_syntax_reports_canonical_goto() {
     let source = r##"
-title = "old level start"
+const title = "old level start"
 
 puzzle main {
 layers {

@@ -199,22 +199,35 @@ fn parse_scene_name_and_params(
 fn resolve_scene_actions(
     scenes: &mut [SceneDef],
     input_labels: &HashMap<InputId, String>,
+    scene_files: Option<&HashMap<String, String>>,
 ) -> Result<(), DiagnosticReport> {
     let input_names = input_labels.values().cloned().collect::<HashSet<_>>();
     for scene in scenes.iter_mut() {
-        ensure_scene_default_signals(scene);
-        validate_scene_puzzle_slots(scene)?;
-        validate_scene_signal_handlers(scene)?;
-        resolve_scene_actions_for_scene(scene, &input_names)?;
-        validate_scene_routines(scene)?;
-        validate_scene_puzzle_rule(scene)?;
+        let file = scene_files.and_then(|files| files.get(&scene.name)).cloned();
+        let result = (|| {
+            ensure_scene_default_signals(scene);
+            validate_scene_puzzle_slots(scene)?;
+            validate_scene_signal_handlers(scene)?;
+            resolve_scene_actions_for_scene(scene, &input_names)?;
+            validate_scene_routines(scene)?;
+            validate_scene_puzzle_rule(scene)
+        })();
+        result.map_err(|report: DiagnosticReport| match file {
+            Some(file) => report.with_file(file),
+            None => report,
+        })?;
     }
     let component_names = scenes
         .iter()
         .map(|scene| scene.name.as_str())
         .collect::<HashSet<_>>();
     for scene in scenes.iter() {
-        validate_component_targets(scene, &component_names)?;
+        validate_component_targets(scene, &component_names).map_err(|report| {
+            match scene_files.and_then(|files| files.get(&scene.name)) {
+                Some(file) => report.with_file(file),
+                None => report,
+            }
+        })?;
     }
     Ok(())
 }
@@ -1655,7 +1668,7 @@ fn parse_scene_leaf_component_units(
             let _ = (source, attrs);
             Err(parse_error(
                 &lines[start],
-                "`puzzle3` was removed; use `puzzle <source>` in both .puzzle and .puzzle3 files",
+                "`puzzle3` was removed; use `puzzle <source>` in .puzzle files",
             ))
         }
         ["heading", ..] => Ok((

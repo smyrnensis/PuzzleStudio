@@ -4,10 +4,10 @@ const EDITOR_COMMANDS_SOURCE: &str = include_str!("../static/editor_commands.js"
 #[test]
 fn visual_navigation_uses_directional_arrow_keys() {
     assert!(EDITOR_COMMANDS_SOURCE.contains(
-        "id: \"visual3d.slice.previous\",\n    group: \"visual\",\n    label: \"Previous slice\",\n    shortcuts: [{ key: \"ArrowUp\" }]"
+        "id: \"visual3d.slice.previous\",\n    group: \"visual\",\n    label: \"Previous slice\",\n    shortcuts: [{ key: \"ArrowUp\" }],\n    repeatable: true,"
     ));
     assert!(EDITOR_COMMANDS_SOURCE.contains(
-        "id: \"visual3d.slice.next\",\n    group: \"visual\",\n    label: \"Next slice\",\n    shortcuts: [{ key: \"ArrowDown\" }]"
+        "id: \"visual3d.slice.next\",\n    group: \"visual\",\n    label: \"Next slice\",\n    shortcuts: [{ key: \"ArrowDown\" }],\n    repeatable: true,"
     ));
     assert!(EDITOR_COMMANDS_SOURCE.contains(
         "id: \"visual.frame.previous\",\n    group: \"visual\",\n    label: \"Previous frame\",\n    shortcuts: [{ key: \"ArrowLeft\" }]"
@@ -21,9 +21,21 @@ fn visual_navigation_uses_directional_arrow_keys() {
 }
 
 #[test]
+fn held_visual3d_slice_keys_repeat_the_command_instead_of_scrolling() {
+    assert!(
+        EDITOR_COMMANDS_SOURCE.contains("if (event.repeat && !command.repeatable) return false;")
+    );
+    assert!(
+        !EDITOR_COMMANDS_SOURCE
+            .contains("if (event.defaultPrevented || event.repeat) return false;")
+    );
+}
+
+#[test]
 fn visual_tools_and_edit_actions_use_the_shared_command_registry() {
     for id in [
         "visual.fill",
+        "visual.grid",
         "visual.move",
         "visual.clip",
         "visual.edit.copy",
@@ -37,6 +49,26 @@ fn visual_tools_and_edit_actions_use_the_shared_command_registry() {
         EDITOR_COMMANDS_SOURCE.contains("shortcuts: [{ key: \"Delete\" }, { key: \"Backspace\" }]")
     );
     assert!(!EDITOR_VISUAL_SOURCE.contains("visualEditCommandForShortcut"));
+}
+
+#[test]
+fn visual_grid_uses_g_for_both_visual_dimensions() {
+    assert!(EDITOR_COMMANDS_SOURCE.contains(
+        "id: \"visual.grid\",\n    group: \"visual\",\n    label: \"Grid\",\n    shortcuts: [{ key: \"g\" }]"
+    ));
+    assert!(
+        EDITOR_COMMANDS_SOURCE.contains("elements: editorCommandElements(\"#visualGridButton\")")
+    );
+    assert!(EDITOR_COMMANDS_SOURCE.contains("run: toggleVisualGridCommand"));
+    assert!(
+        EDITOR_COMMANDS_SOURCE
+            .contains("if (dimension === \"3d\") return (toggleVisual3dGrid(), true);")
+    );
+    assert!(
+        EDITOR_COMMANDS_SOURCE
+            .contains("if (dimension === \"2d\") return (toggleVisualGrid(), true);")
+    );
+    assert!(!EDITOR_VISUAL_SOURCE.contains("visualGridButton?.addEventListener"));
 }
 
 #[test]

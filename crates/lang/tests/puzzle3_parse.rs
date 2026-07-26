@@ -1,5 +1,5 @@
 use puzzle_core::flattened_rules;
-use puzzle_core::{Delta3, GridGuard, GridWriteOp, ObjectId, Size3};
+use puzzle_core::{Coord3, Delta3, GridGuard, GridWriteOp, ObjectId, Size3, transition_state};
 use puzzle_lang::{
     LoadedDocumentModel, LoadedGridGame, SpatialPresentation, VoxelColor,
     export_visual_fixture_json, parse_game_for_path,
@@ -172,6 +172,168 @@ input [ TEN:x_axis ] -> [ > TEN:> ]
 }
 
 #[test]
+fn relative_selector_projects_unconstrained_slots_from_each_source_occurrence() {
+    let (game, _) = parse_spatial(
+        r#"
+puzzle test {
+dimension = 3
+tags {
+time = B F
+}
+layers {
+actor = TEN:time:horizontal
+}
+rules {
+input [ TEN:*:* | TEN:*:* ] -> [ TEN:*:> | TEN:*:> ]
+}
+}
+
+levels demo of test {
+legend {
+B = TEN:B:left
+F = TEN:F:left
+}
+level "pair" { BF }
+}
+"#,
+    );
+
+    let right = game
+        .inputs
+        .iter()
+        .find(|input| input.name == "right")
+        .expect("right input exists")
+        .id;
+    let ten_b_right = game
+        .object_labels
+        .iter()
+        .find_map(|(object, label)| (label == "TEN:B:right").then_some(*object))
+        .expect("TEN:B:right exists");
+    let ten_f_right = game
+        .object_labels
+        .iter()
+        .find_map(|(object, label)| (label == "TEN:F:right").then_some(*object))
+        .expect("TEN:F:right exists");
+
+    let next = transition_state(&game.game, &game.levels[0].initial_state, right)
+        .expect("relative selector transition succeeds");
+
+    assert!(next.has_object_at(&game.game, Coord3::new(0, 0, 0), ten_b_right));
+    assert!(next.has_object_at(&game.game, Coord3::new(1, 0, 0), ten_f_right));
+}
+
+#[test]
+fn relative_selector_rewrite_sets_fixed_tag_and_projects_relative_tag() {
+    let (game, _) = parse_spatial(
+        r#"
+puzzle test {
+dimension = 3
+tags {
+time = B F
+}
+layers {
+actor = TEN:time:horizontal
+}
+rules {
+input [ TEN:*:* ] -> [ TEN:F:> ]
+}
+}
+
+levels demo of test {
+legend {
+B = TEN:B:left
+}
+level "fixed-and-relative" { B }
+}
+"#,
+    );
+
+    let right = game
+        .inputs
+        .iter()
+        .find(|input| input.name == "right")
+        .expect("right input exists")
+        .id;
+    let ten_f_right = game
+        .object_labels
+        .iter()
+        .find_map(|(object, label)| (label == "TEN:F:right").then_some(*object))
+        .expect("TEN:F:right exists");
+
+    let next = transition_state(&game.game, &game.levels[0].initial_state, right)
+        .expect("relative selector transition succeeds");
+
+    assert!(next.has_object_at(&game.game, Coord3::new(0, 0, 0), ten_f_right));
+}
+
+#[test]
+fn relative_selector_distinguishes_fixed_sibling_tags_for_push_and_pull() {
+    let (game, _) = parse_spatial(
+        r#"
+puzzle test {
+dimension = 3
+tags {
+time = B F
+}
+layers {
+solid = TEN:time:horizontal Crate
+}
+rules {
+input [ TEN:*:* ] -> [ > TEN:*:* ]
+[ > TEN:*:* ] -> [ > TEN:*:> ]
+[ > TEN:F:> | Crate ] -> [ > TEN:F:> | > Crate ]
+[ < TEN:B:< | Crate ] -> [ < TEN:B:< | < Crate ]
+[ > solid | no solid ] -> [ | solid ]
+}
+}
+
+levels demo of test {
+legend {
+B = TEN:B:right
+F = TEN:F:right
+C = Crate
+. = empty
+}
+level "fixed-sibling-tag" { .CB..BC..FC. }
+}
+"#,
+    );
+
+    let right = game
+        .inputs
+        .iter()
+        .find(|input| input.name == "right")
+        .expect("right input exists")
+        .id;
+    let ten_b_right = game
+        .object_labels
+        .iter()
+        .find_map(|(object, label)| (label == "TEN:B:right").then_some(*object))
+        .expect("TEN:B:right exists");
+    let ten_f_right = game
+        .object_labels
+        .iter()
+        .find_map(|(object, label)| (label == "TEN:F:right").then_some(*object))
+        .expect("TEN:F:right exists");
+    let crate_object = game
+        .object_labels
+        .iter()
+        .find_map(|(object, label)| (label == "Crate").then_some(*object))
+        .expect("Crate exists");
+
+    let next = transition_state(&game.game, &game.levels[0].initial_state, right)
+        .expect("movement transition succeeds");
+
+    assert!(next.has_object_at(&game.game, Coord3::new(2, 0, 0), crate_object));
+    assert!(next.has_object_at(&game.game, Coord3::new(3, 0, 0), ten_b_right));
+    assert!(next.has_object_at(&game.game, Coord3::new(5, 0, 0), ten_b_right));
+    assert!(next.has_object_at(&game.game, Coord3::new(6, 0, 0), crate_object));
+    assert!(next.has_object_at(&game.game, Coord3::new(10, 0, 0), ten_f_right));
+    assert!(next.has_object_at(&game.game, Coord3::new(11, 0, 0), crate_object));
+    assert!(!next.has_object_at(&game.game, Coord3::new(1, 0, 0), crate_object));
+}
+
+#[test]
 fn cartesian_plane_set_is_shared_by_schema_and_orientation_lowering() {
     let (game, _) = parse_spatial_body(
         r#"
@@ -272,7 +434,7 @@ right [ Token:> ] -> [ Token:> ]
 }
 }
 "#,
-        "test.puzzle3",
+        "test.puzzle",
     )
     .expect_err("relative selectors require a direction-typed tag set")
     .to_string();
@@ -452,8 +614,8 @@ level "two" { PG }
 #[test]
 fn starter_06_3d_compiles_with_its_level_clear_surface_flow() {
     parse_game_for_path(
-        include_str!("../../html_editor/starter/06-3d.puzzle3"),
-        "starter/06-3d.puzzle3",
+        include_str!("../../html_editor/starter/06-3d.puzzle"),
+        "starter/06-3d.puzzle",
     )
     .expect("06-3d starter should compile");
 }

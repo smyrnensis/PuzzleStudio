@@ -2,8 +2,8 @@
 // EXPECT: The title screen opens the game or its level list.
 // TRY: Change accent_color or add another choice to the title scene.
 
-title = "02 — Scenes and Theme"
-subtitle = "Build the screens around a puzzle"
+const title = "02 — Scenes and Theme"
+const subtitle = "Build the screens around a puzzle"
 
 theme {
 preset = "puzzlescript"

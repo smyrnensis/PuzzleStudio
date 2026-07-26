@@ -445,6 +445,7 @@ pub fn component_choice_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
     component_column_footprint(components, &mut condition_is_true).cells
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComponentActionCell<'a, Effect> {
     pub ordinal: u32,
@@ -505,6 +506,8 @@ fn collect_component_action_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr
     }
 }
 
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 struct ComponentChoiceFootprint<'a, Effect> {
     width: usize,
     height: usize,
@@ -2184,6 +2187,7 @@ mod tests {
     }
 
     #[test]
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn action_ordinals_are_stable_when_the_active_conditional_branch_changes() {
         fn choice(name: &str) -> SceneComponent {
             SceneComponent::Choice(SceneButton {
@@ -2235,6 +2239,8 @@ mod tests {
     }
 
     #[test]
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     fn component_layout_helpers_expose_layout_owned_components() {
         let mut component = SceneComponent::<SceneCommand>::Frame(FrameComponent {
             kind: "puzzle3".to_string(),

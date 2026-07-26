@@ -17,7 +17,11 @@ export class WasmStandaloneSession {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_wasmstandalonesession_free(ptr, 0);
     }
+    confirm_progress_save_cleared() {
+        wasm.wasmstandalonesession_confirm_progress_save_cleared(this.__wbg_ptr);
+    }
     /**
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
      * @param {string} input_name
      * @returns {string}
      */
@@ -86,6 +90,17 @@ export class WasmStandaloneSession {
         }
     }
     /**
+=======
+     * @param {number} request_id
+     */
+    confirm_progress_save_written(request_id) {
+        const ret = wasm.wasmstandalonesession_confirm_progress_save_written(this.__wbg_ptr, request_id);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
      * @param {string} action_json
      * @returns {string}
      */
@@ -140,6 +155,7 @@ export class WasmStandaloneSession {
         return this;
     }
     /**
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
      * @param {number} now_seconds
      * @returns {string}
      */
@@ -178,18 +194,44 @@ export class WasmStandaloneSession {
         }
     }
     /**
+=======
+     * @returns {string | undefined}
+     */
+    progress_save_request() {
+        const ret = wasm.wasmstandalonesession_progress_save_request(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * @param {string} scene_name
+     * @param {string} state_json
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
      * @returns {string}
      */
-    progress_save() {
-        let deferred1_0;
-        let deferred1_1;
+    resolve_scene_presentation(scene_name, state_json) {
+        let deferred4_0;
+        let deferred4_1;
         try {
-            const ret = wasm.wasmstandalonesession_progress_save(this.__wbg_ptr);
-            deferred1_0 = ret[0];
-            deferred1_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
+            const ptr0 = passStringToWasm0(scene_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmstandalonesession_resolve_scene_presentation(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
         } finally {
-            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
         }
     }
     /**
@@ -311,6 +353,117 @@ export class WasmStandaloneSession {
     }
 }
 if (Symbol.dispose) WasmStandaloneSession.prototype[Symbol.dispose] = WasmStandaloneSession.prototype.free;
+
+/**
+ * @param {string} render_scene_json
+ * @param {string} image_assets_json
+ * @returns {string}
+ */
+export function hydrate_render_scene_images(render_scene_json, image_assets_json) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(render_scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(image_assets_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.hydrate_render_scene_images(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * @param {string} runtime_export_json
+ * @param {string} state_json
+ * @param {number} level_index
+ * @returns {string}
+ */
+export function project_renderer_state(runtime_export_json, state_json, level_index) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(runtime_export_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.project_renderer_state(ptr0, len0, ptr1, len1, level_index);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * @param {string} render_scene_json
+ * @param {number} elapsed_ms
+ * @returns {string}
+ */
+export function resolve_render_frame(render_scene_json, elapsed_ms) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(render_scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.resolve_render_frame(ptr0, len0, elapsed_ms);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * @param {string} render_scene_json
+ * @param {string} render_moment_json
+ * @returns {string}
+ */
+export function resolve_render_moment(render_scene_json, render_moment_json) {
+    let deferred4_0;
+    let deferred4_1;
+    try {
+        const ptr0 = passStringToWasm0(render_scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(render_moment_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.resolve_render_moment(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
+        if (ret[3]) {
+            ptr3 = 0; len3 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
+    } finally {
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,

@@ -28,7 +28,7 @@ use std::fmt;
 /// independent documents per query.
 pub struct SourceAnalysis {
     source: String,
-    source_profile: Option<crate::PuzzleSourceProfile>,
+    owner_dimension: Option<crate::ModelDimension>,
     snapshot: OnceCell<crate::ParseSnapshot>,
     highlighted_source: OnceCell<HighlightedSource>,
     entries: OnceCell<Vec<SourceTarget>>,
@@ -53,7 +53,7 @@ impl Clone for SourceAnalysis {
     fn clone(&self) -> Self {
         // Cached parser products are implementation detail; cloning preserves the
         // source snapshot while keeping each analysis cache independently lazy.
-        Self::new_for_profile(&self.source, self.source_profile)
+        Self::new_with_owner_dimension(&self.source, self.owner_dimension)
     }
 }
 
@@ -69,17 +69,17 @@ impl fmt::Debug for SourceAnalysis {
 impl SourceAnalysis {
     /// Builds the shared source analysis for one exact source snapshot.
     pub fn new(source: &str) -> Self {
-        Self::new_for_profile(source, None)
+        Self::new_with_owner_dimension(source, None)
     }
 
-    /// Builds the shared source analysis for one exact source snapshot and source profile.
-    pub fn new_for_profile(
+    /// Builds analysis for a fragment in one explicitly identified puzzle owner.
+    pub fn new_with_owner_dimension(
         source: &str,
-        source_profile: Option<crate::PuzzleSourceProfile>,
+        owner_dimension: Option<crate::ModelDimension>,
     ) -> Self {
         Self {
             source: source.to_string(),
-            source_profile,
+            owner_dimension,
             snapshot: OnceCell::new(),
             highlighted_source: OnceCell::new(),
             entries: OnceCell::new(),
@@ -93,14 +93,9 @@ impl SourceAnalysis {
         &self.source
     }
 
-    /// Returns the source profile that owns dimension-specific surface syntax.
-    pub fn source_profile(&self) -> Option<crate::PuzzleSourceProfile> {
-        self.source_profile
-    }
-
     fn snapshot(&self) -> &crate::ParseSnapshot {
         self.snapshot
-            .get_or_init(|| crate::ParseSnapshot::parse(&self.source, self.source_profile))
+            .get_or_init(|| crate::ParseSnapshot::parse(&self.source, self.owner_dimension))
     }
 
     fn document(&self) -> &SurfaceDocument {
@@ -218,7 +213,7 @@ impl SourceAnalysis {
         let (rescanned_lines, parser_catalog_reused) = snapshot.apply_edit(
             &old_source,
             &self.source,
-            self.source_profile,
+            self.owner_dimension,
             edit.start,
             edit.end,
             insert.len(),
@@ -297,28 +292,29 @@ impl SourceAnalysis {
         document_path: &str,
         cursor_offset: usize,
     ) -> Option<crate::SourceImportReference> {
-        crate::source_import::source_import_reference_at(&self.source, document_path, cursor_offset)
+        crate::source_import::source_import_reference_at(
+            &self.document().imports,
+            document_path,
+            cursor_offset,
+        )
+    }
+
+    pub fn imports(&self) -> &[crate::SourceImportDeclaration] {
+        &self.document().imports
+    }
+
+    pub(crate) fn strict_document_parts(
+        &self,
+    ) -> Result<crate::DocumentSourceParts, crate::DiagnosticReport> {
+        self.snapshot().strict_document_parts()
     }
 
     /// Emits source entries JSON from the entries captured by this analysis.
     pub fn entries_json(&self) -> String {
-        let mut out = String::from("{\"version\":1,\"declaresGameEntry\":");
-        out.push_str(if self.declares_game_entry() {
-            "true"
-        } else {
-            "false"
-        });
-        out.push_str(",\"entries\":");
+        let mut out = String::from("{\"version\":1,\"entries\":");
         push_entries_json_value(&mut out, self.entries());
         out.push('}');
         out
-    }
-
-    /// Reports whether this revision contains a parser-owned top-level puzzle model.
-    pub fn declares_game_entry(&self) -> bool {
-        self.document().structural_blocks.iter().any(|block| {
-            block.parent.is_none() && block.scope == crate::source::SourceScope::Puzzle
-        })
     }
 
     /// Emits level-editor metadata without transferring per-cell state or every visual.
@@ -350,12 +346,13 @@ pub fn analyze_source(source: &str) -> SourceAnalysis {
     SourceAnalysis::new(source)
 }
 
-/// Builds a parser-owned source analysis with dimension-specific surface syntax.
-pub fn analyze_source_for_profile(
+/// Builds parser-owned analysis for a model-less fragment in an explicit owner dimension.
+/// Any `puzzle` declaration in the source remains authoritative for its own dimension.
+pub fn analyze_source_for_owner_dimension(
     source: &str,
-    profile: crate::PuzzleSourceProfile,
+    owner_dimension: crate::ModelDimension,
 ) -> SourceAnalysis {
-    SourceAnalysis::new_for_profile(source, Some(profile))
+    SourceAnalysis::new_with_owner_dimension(source, Some(owner_dimension))
 }
 
 /// Builds and emits shared editor analysis JSON for one exact source snapshot.
@@ -567,13 +564,13 @@ fn push_json_string_value(out: &mut String, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{SourceAnalysisEdit, analyze_source, analyze_source_for_profile};
-    use crate::{PuzzleSourceProfile, SourceHighlightKind, SourceTargetKind};
+    use super::{SourceAnalysisEdit, analyze_source};
+    use crate::{SourceHighlightKind, SourceTargetKind};
 
     #[test]
     fn highlight_only_query_does_not_construct_the_lazy_outline_product() {
         let source = "puzzle board {\nrules {\n}\n}\n";
-        let analysis = analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle2d);
+        let analysis = analyze_source(source);
 
         assert!(analysis.outline.get().is_none());
         let _ = analysis.highlight_range_json(0, source.len(), false);
@@ -606,8 +603,7 @@ ___
 }
 "#;
         let separator = source.find("\n-\n").expect("slice separator") + 1;
-        let highlighted =
-            analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle3d).highlight();
+        let highlighted = analyze_source(source).highlight();
 
         assert!(
             highlighted.spans.iter().any(|span| {
@@ -644,8 +640,7 @@ A1-.
 }
 }
 "#;
-        let highlighted =
-            analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle2d).highlight();
+        let highlighted = analyze_source(source).highlight();
 
         for row in ["A = Alpha", "1 = Numeric", "- = Dash", ". = empty"] {
             let start = source.find(row).expect("legend row");
@@ -667,8 +662,7 @@ A1-.
         let source =
             "puzzle default {\nlayers {\nactor = Box\n}\n}\nlevels {\nlevel \"dash\" {\n-\n}\n}\n";
         let separator = source.find('-').expect("dash cell");
-        let highlighted =
-            analyze_source_for_profile(source, PuzzleSourceProfile::Puzzle2d).highlight();
+        let highlighted = analyze_source(source).highlight();
 
         assert!(highlighted.spans.iter().any(|span| {
             span.start == separator
@@ -728,17 +722,8 @@ A1-.
     }
 
     #[test]
-    fn source_entries_json_reports_parser_owned_game_entry_metadata() {
-        let game = analyze_source("puzzle Demo {}\n").entries_json();
-        assert!(game.contains("\"declaresGameEntry\":true"));
-
-        let fragment = analyze_source("levels Demo {\n}\n").entries_json();
-        assert!(fragment.contains("\"declaresGameEntry\":false"));
-    }
-
-    #[test]
     fn highlight_range_json_returns_only_intersecting_normalized_spans() {
-        let source = "title = \"Demo\"\n// visible\nauthor = \"Elsewhere\"\n";
+        let source = "const title = \"Demo\"\n// visible\nconst author = \"Elsewhere\"\n";
         let range_start = source.find("// visible").expect("range start");
         let range_end = range_start + "// visible".len();
         let json = analyze_source(source).highlight_range_json(range_start, range_end, false);
@@ -758,7 +743,7 @@ A1-.
     #[test]
     fn level_editor_contract_uses_parser_products_without_compiling_routines() {
         let source = r#"
-title = move_requires_explicit_routine
+const title = move_requires_explicit_routine
 
 puzzle default {
 layers {
@@ -984,7 +969,7 @@ B
 
     #[test]
     fn source_analysis_preserves_unavailable_catalog_diagnostics() {
-        let source = "title = \"unfinished\npuzzle board {\n}\n";
+        let source = "const title = \"unfinished\npuzzle board {\n}\n";
         let analysis = analyze_source(source);
         let diagnostics = &analysis.snapshot().document().diagnostics;
 

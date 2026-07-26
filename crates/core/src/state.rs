@@ -65,14 +65,6 @@ impl Coord3 {
         Self { x, y, z }
     }
 
-    pub fn from_standard_text_position(size: Size3, column: u16, row: u16, slice: u16) -> Self {
-        Self {
-            x: column,
-            y: size.depth - 1 - row,
-            z: size.height - 1 - slice,
-        }
-    }
-
     pub fn checked_offset(self, offset: Delta3) -> Option<Self> {
         GridCoord::<3>::from(self)
             .checked_offset(offset.into())

@@ -1,5 +1,5 @@
-title = "PuzzleStudio Example"
-subtitle = "Push the box onto the goal"
+const title = "PuzzleStudio Example"
+const subtitle = "Push the box onto the goal"
 
 puzzle sokoban {
 layers {

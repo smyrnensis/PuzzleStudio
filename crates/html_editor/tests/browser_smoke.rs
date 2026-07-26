@@ -9,8 +9,23 @@ fn editor_browser_smoke_flows() {
 }
 
 #[test]
+fn initial_preview_starts_without_waiting_for_source_analysis() {
+    run_editor_browser_smoke(&["--initial-preview-only"]);
+}
+
+#[test]
+fn source_click_discards_stale_selection_anchor() {
+    run_editor_browser_smoke(&["--source-selection-only"]);
+}
+
+#[test]
 fn visual_palette_mouse_click_preserves_pane_scroll() {
     run_editor_browser_smoke(&["--visual-palette-only"]);
+}
+
+#[test]
+fn visual_bucket_fill_respects_active_clip() {
+    run_editor_browser_smoke(&["--visual-clip-fill-only"]);
 }
 
 #[test]

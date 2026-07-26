@@ -3,7 +3,7 @@ use puzzle_lang::{LoadedDocumentModel, VisualOrderPriorityDef, parse_game_for_pa
 fn game_with_layers(layers_body: &str, visuals_extra: &str) -> String {
     format!(
         r#"
-title = visual_order
+const title = visual_order
 
 puzzle default {{
 layers {{

@@ -20,11 +20,19 @@ use puzzle_lang::{
     parse_scene_expression, standard_message_effect,
 };
 use puzzle_runtime_contract::{
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     AudioCommand, RuntimeAnimationEvent, RuntimeChoiceDirection, RuntimeCoord, RuntimeEffect,
     RuntimePresentationEvent, RuntimeSceneActionId, RuntimeSceneActionToken, RuntimeVisualSpace,
     RuntimeVisualState, RuntimeVisualTransform, RuntimeVisualTween,
 };
 use puzzle_scene::{ComponentChoiceCell, component_action_cells, component_choice_cells};
+=======
+    RuntimeAnimationEvent, RuntimeChoiceDirection, RuntimeCoord, RuntimePresentationEvent,
+    RuntimePresentationEventKind, RuntimeVisualSpace, RuntimeVisualState, RuntimeVisualTransform,
+    RuntimeVisualTween,
+};
+use puzzle_scene::{ComponentChoiceCell, component_choice_cells};
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 use serde::{Deserialize, Serialize};
 
 mod session_history;
@@ -2551,6 +2559,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         self.apply_screen_effect(game, effect, &HashMap::new())
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     pub fn apply_scene_action(
         &mut self,
         game: &LoadedGridGame<D, Size>,
@@ -2635,18 +2644,25 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         self.apply_screen_effect(game, &effect, &HashMap::new())
     }
 
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     pub fn choice_cursor_for(&self, component: &str) -> usize {
         self.scene_states
             .get(component)
             .map_or(0, |state| state.choice_cursor)
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     pub fn focused_choice_cursor(
         &self,
         game: &LoadedGridGame<D, Size>,
         condition_context: SceneConditionContext,
     ) -> Option<usize> {
         let cells = self.focused_choice_cells(game, condition_context)?;
+=======
+    pub fn focused_choice_cursor(&self, game: &LoadedGridGame<D, Size>) -> Option<usize> {
+        let cells = self.focused_choice_cells(game)?;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         (!cells.is_empty()).then(|| {
             self.choice_cursor_for(self.surface.focused_component())
                 .min(cells.len() - 1)
@@ -2657,13 +2673,17 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         &mut self,
         game: &LoadedGridGame<D, Size>,
         direction: RuntimeChoiceDirection,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         condition_context: SceneConditionContext,
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     ) -> Result<(), GridTransitionError<D>> {
         if self.is_waiting() {
             return Err(GridTransitionError::<D>::InvalidCommand(
                 "cannot move scene choice while a turn is waiting".to_string(),
             ));
         }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let cells = self
             .focused_choice_cells(game, condition_context)
             .ok_or_else(|| {
@@ -2671,6 +2691,13 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                     "focused component definition is unavailable".to_string(),
                 )
             })?;
+=======
+        let cells = self.focused_choice_cells(game).ok_or_else(|| {
+            GridTransitionError::<D>::InvalidCommand(
+                "focused component definition is unavailable".to_string(),
+            )
+        })?;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         if cells.is_empty() {
             return Err(GridTransitionError::<D>::InvalidCommand(
                 "focused component has no choices".to_string(),
@@ -2690,10 +2717,54 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         Ok(())
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn focused_choice_cells<'a>(
         &self,
         game: &'a LoadedGridGame<D, Size>,
         condition_context: SceneConditionContext,
+=======
+    pub fn apply_choice_activate(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        requested_index: Option<usize>,
+    ) -> Result<(), GridTransitionError<D>> {
+        if self.is_waiting() {
+            return Err(GridTransitionError::<D>::InvalidCommand(
+                "cannot activate scene choice while a turn is waiting".to_string(),
+            ));
+        }
+        let cells = self.focused_choice_cells(game).ok_or_else(|| {
+            GridTransitionError::<D>::InvalidCommand(
+                "focused component definition is unavailable".to_string(),
+            )
+        })?;
+        if cells.is_empty() {
+            return Err(GridTransitionError::<D>::InvalidCommand(
+                "focused component has no choices".to_string(),
+            ));
+        }
+        let index = requested_index.unwrap_or_else(|| {
+            self.choice_cursor_for(self.surface.focused_component())
+                .min(cells.len() - 1)
+        });
+        let Some(cell) = cells.get(index) else {
+            return Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "scene choice index is out of range: {index}"
+            )));
+        };
+        let effect = cell.effect.clone();
+        let focused = self.surface.focused_component().to_string();
+        self.scene_states
+            .get_mut(&focused)
+            .expect("focused component must own scene runtime state")
+            .choice_cursor = index;
+        self.apply_screen_effect(game, &effect, &HashMap::new())
+    }
+
+    fn focused_choice_cells<'a>(
+        &self,
+        game: &'a LoadedGridGame<D, Size>,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     ) -> Option<Vec<ComponentChoiceCell<'a, SceneEffect>>> {
         let focused = self.surface.focused_component();
         let definition = self
@@ -2708,7 +2779,11 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             .iter()
             .find(|component| component.name == definition)?;
         Some(component_choice_cells(&component.components, |condition| {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             self.is_screen_condition_true(game, condition, condition_context)
+=======
+            self.is_screen_condition_true(game, condition)
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         }))
     }
 
@@ -6548,7 +6623,11 @@ mod tests {
     }
 
     #[test]
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn session_owns_choice_cursor_navigation_and_token_activation() {
+=======
+    fn session_owns_choice_cursor_navigation_and_activation() {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let source = r#"
 const title = choice_session
 
@@ -6599,6 +6678,7 @@ scene d {
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto menu").unwrap();
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         assert_eq!(
             session.focused_choice_cursor(&loaded, SceneConditionContext::default()),
             Some(0)
@@ -6635,11 +6715,24 @@ scene d {
                 SceneConditionContext::default(),
             )
             .unwrap();
+=======
+        assert_eq!(session.focused_choice_cursor(&loaded), Some(0));
+        session
+            .apply_choice_move(&loaded, RuntimeChoiceDirection::Right)
+            .unwrap();
+        assert_eq!(session.focused_choice_cursor(&loaded), Some(1));
+        session
+            .apply_choice_move(&loaded, RuntimeChoiceDirection::Down)
+            .unwrap();
+        assert_eq!(session.focused_choice_cursor(&loaded), Some(3));
+        session.apply_choice_activate(&loaded, None).unwrap();
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         assert_eq!(session.surface_state().focused_component(), "d");
 
         let mut pointer_session = GameSession::new(&loaded);
         pointer_session.apply_command(&loaded, "goto menu").unwrap();
         pointer_session
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             .apply_scene_action(
                 &loaded,
                 &RuntimeSceneActionToken {
@@ -6648,11 +6741,15 @@ scene d {
                 },
                 SceneConditionContext::default(),
             )
+=======
+            .apply_choice_activate(&loaded, Some(2))
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             .unwrap();
         assert_eq!(pointer_session.surface_state().focused_component(), "c");
     }
 
     #[test]
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn scene_action_tokens_execute_only_current_visible_actions() {
         let source = r#"
 const title = scene_action_tokens
@@ -6859,6 +6956,8 @@ scene impossible {
     }
 
     #[test]
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     fn session_runs_the_active_levels_effective_rules() {
         let source = r#"
 const title = play_level_rules

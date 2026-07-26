@@ -1,5 +1,5 @@
-title = "Microban"
-author = "Levels by David Skinner"
+const title = "Microban"
+const author = "Levels by David Skinner"
 
 theme = "puzzlescript"
 
@@ -24,8 +24,7 @@ input [ Player ] -> [ > Player ]
 
 visuals {
 
-visual {
-selector = Background
+visual Background {
 colors = #90ee90 #008000
 duration = 1000ms
 11111
@@ -59,8 +58,7 @@ duration = 1000ms
 11111
 }
 
-visual {
-selector = Wall
+visual Wall {
 colors = #a46322 #493c2b
 duration = 1000ms
 00010

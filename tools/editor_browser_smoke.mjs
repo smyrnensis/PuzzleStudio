@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 const isDirectInvocation =
   process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 let args = {};
@@ -45,6 +46,25 @@ if (isDirectInvocation) {
   levelSelectionRevisionOnly = Boolean(args.levelSelectionRevisionOnly);
   indexControlLayoutOnly = Boolean(args.indexControlLayoutOnly);
 }
+=======
+const args = parseArgs(process.argv.slice(2));
+const editorBin = requiredPath(args.editorBin, "--editor-bin");
+const fixture2d = path.resolve(repoRoot, args.fixture || "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
+const fixture3d = path.resolve(repoRoot, args.fixture3d || "games/spec_3d.puzzle");
+const importFileOnly = args.importFileOnly ? path.resolve(repoRoot, args.importFileOnly) : "";
+const chromePath = resolveChrome(args.chrome);
+const headless = !args.headed;
+const sourceInputOnly = Boolean(args.sourceInputOnly);
+const visualPaletteOnly = Boolean(args.visualPaletteOnly);
+const visualClipFillOnly = Boolean(args.visualClipFillOnly);
+const sourceEditingCommandsOnly = Boolean(args.sourceEditingCommandsOnly);
+const sourceSelectionOnly = Boolean(args.sourceSelectionOnly);
+const sourceOptionDragOnly = Boolean(args.sourceOptionDragOnly);
+const sourceOccurrenceSelectionOnly = Boolean(args.sourceOccurrenceSelectionOnly);
+const levelSelectionRevisionOnly = Boolean(args.levelSelectionRevisionOnly);
+const indexControlLayoutOnly = Boolean(args.indexControlLayoutOnly);
+const initialPreviewOnly = Boolean(args.initialPreviewOnly);
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
 const failures = [];
 
@@ -52,10 +72,31 @@ async function main() {
   const browser = new Browser(chromePath, { headless });
   await browser.start();
   const page = await browser.newPage();
+  if (initialPreviewOnly) {
+    await page.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `(() => {
+        let runtime = null;
+        Object.defineProperty(window, "PuzzleStudioRuntime", {
+          configurable: true,
+          get() {
+            return runtime;
+          },
+          set(value) {
+            runtime = value;
+            runtime.sourceEntryInfo = () => new Promise(() => {});
+          },
+        });
+      })();`,
+    });
+  }
   try {
     await withEditorServer(fixture2d, async (server) => {
       await page.navigate(server.url);
       await editorLoads(page);
+      if (initialPreviewOnly) {
+        await initialPreviewStartsRuntime(page);
+        return;
+      }
       if (indexControlLayoutOnly) {
         await visualAnimationIndexControlStaysCentered(page);
         return;
@@ -64,11 +105,20 @@ async function main() {
         await levelSelectionWaitsForCurrentEntries(page);
         return;
       }
+      if (visualClipFillOnly) {
+        await visualBucketFillRespectsActiveClip(page);
+        return;
+      }
+      if (sourceOccurrenceSelectionOnly) {
+        await sourceOccurrenceSelectionShortcutsMatchVsCode(page);
+        return;
+      }
       if (sourceOptionDragOnly) {
         await sourceOptionDragCreatesMultipleCursors(page);
         return;
       }
       if (sourceSelectionOnly) {
+        await sourcePlainClickCollapsesSelection(page);
         await sourceMultiLineSelectionStartsAtTextColumn(page);
         await sourceOptionDragCreatesMultipleCursors(page);
         return;
@@ -89,6 +139,7 @@ async function main() {
         await sourceAddControlOverlaysEmptyLineWithoutChangingEditorWidth(page);
         await sourceMultiLineSelectionStartsAtTextColumn(page);
         await sourceOptionDragCreatesMultipleCursors(page);
+        await sourceOccurrenceSelectionShortcutsMatchVsCode(page);
         await sourceEntryRefreshIgnoresSupersededEdits(page);
         await sourceCompletionPopoverStaysInsideEditor(page);
         return;
@@ -103,8 +154,10 @@ async function main() {
       await sourceCodeMirrorEditingCommandsReachWorkflow(page);
       await sourceOutlineNavigationCentersCursor(page);
       await sourceAddControlOverlaysEmptyLineWithoutChangingEditorWidth(page);
+      await sourcePlainClickCollapsesSelection(page);
       await sourceMultiLineSelectionStartsAtTextColumn(page);
       await sourceOptionDragCreatesMultipleCursors(page);
+      await sourceOccurrenceSelectionShortcutsMatchVsCode(page);
       await sourceEntryRefreshIgnoresSupersededEdits(page);
       await sourceRewritePatternTabCopiesLhsToEmptyRhs(page);
       await fileInputImportAddsPuzzleDocument(page);
@@ -117,13 +170,19 @@ async function main() {
       await sourceLevelAsciiClickOpensLevelEditor(page);
     });
 
-    if (!sourceInputOnly && !sourceEditingCommandsOnly && !sourceSelectionOnly && !sourceOptionDragOnly && !levelSelectionRevisionOnly && !visualPaletteOnly && !importFileOnly) {
+    if (visualClipFillOnly) {
+      await withEditorServer(fixture3d, async (server) => {
+        await page.navigate(server.url);
+        await editorLoads(page);
+        await visual3dBucketFillRespectsActiveClip(page);
+      });
+    } else if (!initialPreviewOnly && !sourceInputOnly && !sourceEditingCommandsOnly && !sourceSelectionOnly && !sourceOptionDragOnly && !sourceOccurrenceSelectionOnly && !levelSelectionRevisionOnly && !visualPaletteOnly && !importFileOnly) {
       await withEditorServer(fixture3d, async (server) => {
         await page.navigate(server.url);
         await editorLoads(page);
         if (indexControlLayoutOnly) {
           await visual3dIndexControlStaysCentered(page);
-          await level3dPreviewUpdateReachesRuntime(page, { layoutOnly: true });
+          await level3dIndexControlStaysCentered(page);
           return;
         }
         await visual3dIndexControlStaysCentered(page);
@@ -222,6 +281,126 @@ async function visualPaletteMouseClickPreservesPaneScroll(page) {
   await page.assertNoErrors("visual palette mouse focus");
 }
 
+async function visualBucketFillRespectsActiveClip(page) {
+  await clickTop(page, "#visualModeButton");
+  await page.waitForTop(
+    `Boolean(document.querySelector("#visualBuilder") && !document.querySelector("#visualBuilder").hidden)`,
+    "2D visual pane"
+  );
+  await page.evaluateTop(`(() => {
+    visual.palette = [{ color: "#111111" }, { color: "#eeeeee" }];
+    resetVisualBuilder(3, 3);
+    visual.cells.fill(0);
+    resetVisualAnimationFramesFromCurrentCells();
+    visual.selectedColorIndex = 1;
+    visualClipSelection = { x: 1, y: 1, width: 1, height: 1 };
+    visualClipActive = true;
+    visualBucketActive = false;
+    renderVisualBuilder();
+    return true;
+  })()`);
+
+  await clickTop(page, "#visualFillButton");
+  const activeTools = await page.evaluateTop(`({
+    clipActive: visualClipActive,
+    clipSelection: visualClipSelection,
+    bucketActive: visualBucketActive,
+  })`);
+  assert.deepEqual(activeTools, {
+    clipActive: true,
+    clipSelection: { x: 1, y: 1, width: 1, height: 1 },
+    bucketActive: true,
+  }, "enabling bucket fill must retain the active clip scope");
+
+  const clickPoint = await page.evaluateTop(`(() => {
+    const index = visual.width + 1;
+    const cell = document.querySelector('#visualBoard .visual-cell[data-index="' + index + '"]');
+    if (!cell) throw new Error("missing clipped bucket-fill target cell");
+    cell.scrollIntoView({ block: "center", inline: "center" });
+    const rect = cell.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`);
+  await clickViewport(page, clickPoint);
+
+  const result = await page.evaluateTop(`(() => {
+    const target = visual.width + 1;
+    return {
+      cells: visual.cells.map((color, index) => ({ index, color })).filter(({ color }) => color !== 0),
+      allCells: visual.cells,
+      target,
+      clipActive: visualClipActive,
+      clipSelection: visualClipSelection,
+      bucketActive: visualBucketActive,
+      selectedColorIndex: visual.selectedColorIndex,
+      status: document.querySelector("#visualActionStatus")?.textContent || "",
+    };
+  })()`);
+  assert.deepEqual(result.cells, [{ index: result.target, color: 1 }], JSON.stringify(result));
+  assert.equal(result.clipActive, true);
+  assert.deepEqual(result.clipSelection, { x: 1, y: 1, width: 1, height: 1 });
+  assert.equal(result.bucketActive, false);
+  await page.assertNoErrors("visual bucket fill clip scope");
+}
+
+async function visual3dBucketFillRespectsActiveClip(page) {
+  await clickTop(page, "#visualDimension3dButton");
+  await clickTop(page, "#visualModeButton");
+  await page.waitForTop(
+    `Boolean(document.querySelector("#visual3dBuilder") && !document.querySelector("#visual3dBuilder").hidden)`,
+    "3D visual pane"
+  );
+  await page.evaluateTop(`(() => {
+    visual3d.palette = [{ color: "#111111" }, { color: "#eeeeee" }];
+    visual3d.axis = "z";
+    visual3d.slice = 1;
+    visual3d.editScope = "slice";
+    resetVisual3dBuilder(3, 3, 3);
+    visual3d.cells.fill(0);
+    visual3d.frames = [visual3d.cells];
+    visual3d.selectedColorIndex = 1;
+    visual3dClipSelection = { minX: 1, maxX: 1, minY: 1, maxY: 1, minZ: 1, maxZ: 1 };
+    visual3dClipActive = true;
+    visual3dBucketActive = false;
+    renderVisual3dBuilder();
+    return true;
+  })()`);
+
+  await clickTop(page, "#visual3dFillButton");
+  const activeTools = await page.evaluateTop(`({
+    clipActive: visual3dClipActive,
+    clipSelection: visual3dClipSelection,
+    bucketActive: visual3dBucketActive,
+  })`);
+  assert.deepEqual(activeTools, {
+    clipActive: true,
+    clipSelection: { minX: 1, maxX: 1, minY: 1, maxY: 1, minZ: 1, maxZ: 1 },
+    bucketActive: true,
+  }, "enabling 3D bucket fill must retain the active clip scope");
+
+  const clickPoint = await page.evaluateTop(`(() => {
+    const cell = document.querySelector('#visual3dSliceBoard .visual-cell[data-index="4"]');
+    if (!cell) throw new Error("missing clipped 3D bucket-fill target cell");
+    cell.scrollIntoView({ block: "center", inline: "center" });
+    const rect = cell.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`);
+  await clickViewport(page, clickPoint);
+
+  const result = await page.evaluateTop(`(() => ({
+    cells: visual3d.cells.map((color, index) => ({ index, color })).filter(({ color }) => color !== 0),
+    target: visual3dCellIndex(1, 1, 1),
+    clipActive: visual3dClipActive,
+    clipSelection: visual3dClipSelection,
+    bucketActive: visual3dBucketActive,
+    status: document.querySelector("#visual3dActionStatus")?.textContent || "",
+  }))()`);
+  assert.deepEqual(result.cells, [{ index: result.target, color: 1 }], JSON.stringify(result));
+  assert.equal(result.clipActive, true);
+  assert.deepEqual(result.clipSelection, { minX: 1, maxX: 1, minY: 1, maxY: 1, minZ: 1, maxZ: 1 });
+  assert.equal(result.bucketActive, false);
+  await page.assertNoErrors("3D visual bucket fill clip scope");
+}
+
 async function visualColorEditorOffersPresetPalette(page) {
   await clickTop(page, "#visualModeButton");
   await page.waitForTop(
@@ -298,6 +477,7 @@ async function visualAnimationIndexControlStaysCentered(page) {
 }
 
 async function visual3dIndexControlStaysCentered(page) {
+  await clickTop(page, "#visualDimension3dButton");
   await clickTop(page, "#visualModeButton");
   await page.waitForTop(
     `Boolean(
@@ -314,6 +494,29 @@ async function visual3dIndexControlStaysCentered(page) {
   );
   await clickTop(page, "#playModeButton");
   await page.assertNoErrors("3D visual index control layout");
+}
+
+async function level3dIndexControlStaysCentered(page) {
+  await page.evaluateTop(`(() => {
+    const source = document.querySelector(".level3d-layer-toolbar");
+    if (!source) {
+      throw new Error("missing 3D level layout fixture");
+    }
+    const fixture = source.cloneNode(true);
+    fixture.dataset.indexControlLayoutFixture = "";
+    fixture.querySelectorAll("[id]").forEach((element) => element.removeAttribute("id"));
+    fixture.style.position = "fixed";
+    fixture.style.top = "20px";
+    fixture.style.left = "20px";
+    document.body.append(fixture);
+    return true;
+  })()`);
+  await page.waitForTop(
+    `document.querySelector("[data-index-control-layout-fixture]")?.getClientRects().length > 0`,
+    "3D level index control"
+  );
+  await assertIndexControlLayout(page, "[data-index-control-layout-fixture]", "3D level slices");
+  await page.assertNoErrors("3D level index control layout");
 }
 
 async function assertIndexControlLayout(page, stripSelector, label) {
@@ -402,6 +605,29 @@ async function runPreviewStartsRuntime(page) {
     { timeoutMs: 20_000 }
   );
   await page.assertNoErrors("run preview");
+}
+
+async function initialPreviewStartsRuntime(page) {
+  try {
+    await page.waitForTop(
+      `Boolean(
+        document.querySelector("#previewFrame")?.srcdoc?.length > 1_000
+        && document.querySelector("#runButton")?.getAttribute("aria-label") === "Refresh preview"
+      )`,
+      "initial compiled preview document",
+      { timeoutMs: 20_000 }
+    );
+  } catch (error) {
+    const state = await page.evaluateTop(`(() => ({
+      editorStatus: document.querySelector("#editorStatusLabel")?.textContent || "",
+      paneStatus: document.querySelector("#previewPaneStatus")?.textContent || "",
+      previewLog: document.querySelector("#previewLog")?.textContent || "",
+      previewFrameLength: document.querySelector("#previewFrame")?.srcdoc?.length || 0,
+      runButtonLabel: document.querySelector("#runButton")?.getAttribute("aria-label") || "",
+      runButtonDisabled: Boolean(document.querySelector("#runButton")?.disabled),
+    }))()`);
+    throw new Error(`${error.message}: ${JSON.stringify(state)}`);
+  }
 }
 
 async function sourceEditKeepsCompiledPreviewRunning(page) {
@@ -1240,6 +1466,89 @@ async function sourceMultiLineSelectionStartsAtTextColumn(page) {
   await page.assertNoErrors("source multiline selection layout");
 }
 
+async function sourcePlainClickCollapsesSelection(page) {
+  const click = await page.evaluateTop(`(async () => {
+    const editor = document.querySelector("#sourceEditor");
+    const view = editor?.sourceEditorPort?.view;
+    if (!editor || !view) {
+      throw new Error("missing CodeMirror source editor");
+    }
+    window.__sourcePlainClickOriginal = {
+      source: editor.value || "",
+      start: editor.selectionStart,
+      end: editor.selectionEnd,
+    };
+    const source = "alpha beta\\ngamma delta\\nepsilon";
+    setSourceEditorValue(source, { resetUndo: true });
+    editor.focus();
+    editor.setSelectionRange(1, 18);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const target = source.indexOf("epsilon") + 3;
+    const rect = view.coordsAtPos(target);
+    if (!rect) {
+      throw new Error("missing plain click coordinates");
+    }
+    return {
+      target,
+      x: rect.left,
+      y: (rect.top + rect.bottom) / 2,
+    };
+  })()`);
+  try {
+    await clickViewport(page, click);
+    const selection = await page.evaluateTop(`(() => {
+      const editor = document.querySelector("#sourceEditor");
+      const main = editor?.sourceEditorPort?.view?.state.selection.main;
+      return main ? { anchor: main.anchor, head: main.head, from: main.from, to: main.to } : null;
+    })()`);
+    assert.deepEqual(
+      selection,
+      { anchor: click.target, head: click.target, from: click.target, to: click.target },
+      "plain source click should leave one cursor at the clicked position"
+    );
+
+    await page.evaluateTop(`document.querySelector("#sourceEditor").setSelectionRange(1, 18)`);
+    await page.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+      x: click.x,
+      y: click.y,
+    });
+    await page.evaluateTop(`setSourceEditorValue("ALPHA BETA\\nGAMMA DELTA\\nEPSILON", { resetUndo: true })`);
+    await page.evaluateTop(`document.querySelector("#sourceEditor").setSelectionRange(1, 18)`);
+    await page.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+      x: click.x,
+      y: click.y,
+    });
+    const loadedSelection = await page.evaluateTop(`(() => {
+      const selection = document.querySelector("#sourceEditor")?.sourceEditorPort?.view?.state.selection;
+      const main = selection?.main;
+      return main ? { rangeCount: selection.ranges.length, from: main.from, to: main.to } : null;
+    })()`);
+    assert.deepEqual(
+      loadedSelection,
+      { rangeCount: 1, from: click.target, to: click.target },
+      "source load finishing during a click should discard its stale selection anchor"
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const editor = document.querySelector("#sourceEditor");
+      const original = window.__sourcePlainClickOriginal;
+      setSourceEditorValue(original?.source || "", { resetUndo: true });
+      editor.setSelectionRange(original?.start || 0, original?.end || 0);
+      delete window.__sourcePlainClickOriginal;
+      return true;
+    })()`);
+  }
+  await page.assertNoErrors("source plain click selection");
+}
+
 async function sourceOptionDragCreatesMultipleCursors(page) {
   const drag = await page.evaluateTop(`(async () => {
     const editor = document.querySelector("#sourceEditor");
@@ -1321,6 +1630,69 @@ async function sourceOptionDragCreatesMultipleCursors(page) {
     })()`);
   }
   await page.assertNoErrors("source Option drag multiple cursors");
+}
+
+async function sourceOccurrenceSelectionShortcutsMatchVsCode(page) {
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    if (!editor?.sourceEditorPort?.view) {
+      throw new Error("missing CodeMirror source editor");
+    }
+    window.__sourceOccurrenceSelectionOriginal = {
+      source: editor.value || "",
+      start: editor.selectionStart,
+      end: editor.selectionEnd,
+    };
+    setSourceEditorValue("foo bar foo foo", { resetUndo: true });
+    editor.focus();
+    editor.setSelectionRange(1, 1);
+    return true;
+  })()`);
+  try {
+    await pressKey(page, { key: "d", code: "KeyD", keyCode: 68, modifiers: 4 });
+    assert.deepEqual(
+      await sourceSelectionTexts(page),
+      ["foo"],
+      "Cmd+D should select the word at an empty cursor"
+    );
+    await pressKey(page, { key: "d", code: "KeyD", keyCode: 68, modifiers: 4 });
+    assert.deepEqual(
+      await sourceSelectionTexts(page),
+      ["foo", "foo"],
+      "repeated Cmd+D should add the next occurrence"
+    );
+
+    await page.evaluateTop(`document.querySelector("#sourceEditor").setSelectionRange(0, 3)`);
+    await pressKey(page, { key: "l", code: "KeyL", keyCode: 76, modifiers: 12 });
+    assert.deepEqual(
+      await sourceSelectionTexts(page),
+      ["foo", "foo", "foo"],
+      "Shift+Cmd+L should select all occurrences"
+    );
+    await page.send("Input.insertText", { text: "X" });
+    assert.equal(
+      await page.evaluateTop(`document.querySelector("#sourceEditor")?.value || ""`),
+      "X bar X X",
+      "typing should replace every selected occurrence"
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const editor = document.querySelector("#sourceEditor");
+      const original = window.__sourceOccurrenceSelectionOriginal;
+      setSourceEditorValue(original?.source || "", { resetUndo: true });
+      editor.setSelectionRange(original?.start || 0, original?.end || 0);
+      delete window.__sourceOccurrenceSelectionOriginal;
+      return true;
+    })()`);
+  }
+  await page.assertNoErrors("source occurrence selection shortcuts");
+}
+
+async function sourceSelectionTexts(page) {
+  return page.evaluateTop(`(() => {
+    const view = document.querySelector("#sourceEditor")?.sourceEditorPort?.view;
+    return view?.state.selection.ranges.map((range) => view.state.sliceDoc(range.from, range.to)) || [];
+  })()`);
 }
 
 async function sourceOutlineNavigationCentersCursor(page) {
@@ -2069,7 +2441,7 @@ levels main of main {
   await page.assertNoErrors("2D level playtest");
 }
 
-async function level3dPreviewUpdateReachesRuntime(page, { layoutOnly = false } = {}) {
+async function level3dPreviewUpdateReachesRuntime(page) {
   await clickTop(page, "#runButton");
   await waitForTopWithDiagnostics(
     page,
@@ -2097,10 +2469,6 @@ async function level3dPreviewUpdateReachesRuntime(page, { layoutOnly = false } =
   );
 
   await assertIndexControlLayout(page, ".level3d-layer-toolbar", "3D level slices");
-  if (layoutOnly) {
-    await page.assertNoErrors("3D level index control layout");
-    return;
-  }
 
   await page.waitForTop(
     `Boolean(
@@ -2162,10 +2530,11 @@ async function clickViewport(page, { x, y }) {
   });
 }
 
-async function pressKey(page, { key, code, keyCode }) {
+async function pressKey(page, { key, code, keyCode, modifiers = 0 }) {
   const event = {
     key,
     code,
+    modifiers,
     windowsVirtualKeyCode: keyCode,
     nativeVirtualKeyCode: keyCode,
     unmodifiedText: "",
@@ -2775,6 +3144,10 @@ function parseArgs(argv) {
       parsed.sourceOptionDragOnly = true;
       continue;
     }
+    if (arg === "--source-occurrence-selection-only") {
+      parsed.sourceOccurrenceSelectionOnly = true;
+      continue;
+    }
     if (arg === "--level-selection-revision-only") {
       parsed.levelSelectionRevisionOnly = true;
       continue;
@@ -2783,8 +3156,16 @@ function parseArgs(argv) {
       parsed.indexControlLayoutOnly = true;
       continue;
     }
+    if (arg === "--initial-preview-only") {
+      parsed.initialPreviewOnly = true;
+      continue;
+    }
     if (arg === "--visual-palette-only") {
       parsed.visualPaletteOnly = true;
+      continue;
+    }
+    if (arg === "--visual-clip-fill-only") {
+      parsed.visualClipFillOnly = true;
       continue;
     }
     if (arg === "--editor-bin") {

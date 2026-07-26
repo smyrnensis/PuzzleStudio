@@ -1,6 +1,6 @@
 ---
 name: solve-puzzles
-description: Solve difficult PuzzleStudio levels by combining causal reasoning, controlled experiments, counterfactual intermediate states, semantic goals, heuristics, and bounded solver searches. Use when Codex is asked to solve or investigate the solvability of a .puzzle or .puzzle3 game, especially when unguided enumeration is impractical.
+description: Solve difficult PuzzleStudio levels by combining causal reasoning, controlled experiments, counterfactual intermediate states, semantic goals, heuristics, and bounded solver searches. Use when Codex is asked to solve or investigate the solvability of a .puzzle game, especially when unguided enumeration is impractical.
 ---
 
 # Solve Puzzles
@@ -63,7 +63,7 @@ Maintain a small portfolio of competing hypotheses. For each hypothesis, record:
 
 Prefer controlled experiments over broad exploration. Change one meaningful factor at a time when practical. Compare resulting states, traces, mobility, goal differences, and recovery options.
 
-Use counterfactual states to test endgames, preconditions, deadends, ordering constraints, and heuristic discrimination. Derive counterfactual artifacts from a live exported semantic state and change only the intended semantic content. Never invent a state schema or PuzzleStudio source syntax from memory.
+Use counterfactual states to test endgames, preconditions, deadends, ordering constraints, and heuristic discrimination. For a custom level-opening arrangement, patch the authored initial state through the live protocol's level-start operation so `on_level_start` runs once through the play owner. For an intermediate-state experiment, use object-named state derivation, which preserves every unmentioned object and variable without re-entering the level. Use a freshly exported complete semantic artifact only when the experiment genuinely needs a complete-state replacement or exact round trip. Never invent a state schema or PuzzleStudio source syntax from memory.
 
 Use successful experiments to define minimally constrained semantic goals. Avoid exact full-board goals when only a few properties matter. Ground useful counterfactuals by searching for their necessary conditions from reachable states.
 

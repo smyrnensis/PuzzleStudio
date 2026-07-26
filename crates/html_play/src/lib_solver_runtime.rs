@@ -3,7 +3,7 @@ struct SolverConfig {
     #[cfg(feature = "solver")]
     max_depth: u32,
     #[cfg(feature = "solver")]
-    max_nodes: usize,
+    max_stored_nodes: usize,
     #[cfg(feature = "solver")]
     max_duration: Duration,
 }
@@ -14,7 +14,7 @@ impl Default for SolverConfig {
             #[cfg(feature = "solver")]
             max_depth: 128,
             #[cfg(feature = "solver")]
-            max_nodes: 1_000_000,
+            max_stored_nodes: 1_000_000,
             #[cfg(feature = "solver")]
             max_duration: Duration::from_secs(5),
         }
@@ -54,21 +54,21 @@ fn parse_solver_depth_arg(
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "solver"))]
-fn parse_solver_nodes_arg(
+fn parse_solver_stored_nodes_arg(
     solver: &mut SolverConfig,
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), AppError> {
-    solver.max_nodes = parse_arg(args, "--solver-nodes")?;
+    solver.max_stored_nodes = parse_arg(args, "--solver-stored-nodes")?;
     Ok(())
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "solver")))]
-fn parse_solver_nodes_arg(
+fn parse_solver_stored_nodes_arg(
     _solver: &mut SolverConfig,
     _args: &mut impl Iterator<Item = String>,
 ) -> Result<(), AppError> {
     Err(AppError::Config(
-        "--solver-nodes requires the html-play solver feature".to_string(),
+        "--solver-stored-nodes requires the html-play solver feature".to_string(),
     ))
 }
 
@@ -95,7 +95,11 @@ fn parse_solver_ms_arg(
 struct ServerState {
     standalone_export: StandaloneRuntimeExport<puzzle_lang::LoadedDocument>,
     loaded: Arc<LoadedGame>,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     runtime: puzzle_game_runtime::RuntimeSession,
+=======
+    runtime: RuntimeSession,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     source: String,
     puzzle_path: String,
     game_css: String,
@@ -118,12 +122,18 @@ impl ServerState {
         game_visuals_js: String,
         solver: SolverConfig,
     ) -> Self {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let mut runtime = puzzle_game_runtime::RuntimeSession::from_document(document.clone())
             .expect("parsed HTML host document must construct its runtime session");
         runtime.set_progress_persistence_enabled(false);
         let progress_storage = standalone_progress_storage(&document, &puzzle_path);
         let standalone_export =
             StandaloneRuntimeExport::new(document, visual_images, progress_storage);
+=======
+        let mut runtime = RuntimeSession::from_document(document.clone())
+            .expect("server document was validated before runtime construction");
+        runtime.set_progress_persistence_enabled(false);
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let loaded = Arc::new(loaded);
         #[cfg(feature = "solver")]
         let (solver_service, solver_artifact_id) = {
@@ -147,16 +157,31 @@ impl ServerState {
         }
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     #[cfg(not(target_arch = "wasm32"))]
     fn snapshot_json(&self) -> Result<(String, usize), String> {
         live_server_snapshot_json(self.runtime.development_snapshot())
+=======
+    fn scene_json(&self) -> String {
+        let snapshot: serde_json::Value = serde_json::from_str(&self.runtime.snapshot_json())
+            .expect("runtime snapshot JSON should parse");
+        serde_json::json!({ "scene": snapshot.get("scene").cloned().unwrap_or_default() })
+            .to_string()
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     #[cfg(all(feature = "solver", not(target_arch = "wasm32")))]
     fn solve_json(&mut self) -> Result<String, AppError> {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let (_, session) = self.runtime.solver_session_2d().ok_or_else(|| {
             AppError::Config("solver requires a two-dimensional runtime session".to_string())
         })?;
+=======
+        let (_, session) = self
+            .runtime
+            .solver_session_2d()
+            .ok_or_else(|| AppError::Config("solver requires a 2d runtime session".to_string()))?;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let level_index = session
             .active_level_index()
             .ok_or_else(|| AppError::Config("solver requires an active level".to_string()))?;
@@ -167,7 +192,7 @@ impl ServerState {
                 level_index,
                 session,
                 self.solver.max_depth,
-                self.solver.max_nodes,
+                self.solver.max_stored_nodes,
                 self.solver.max_duration,
                 0,
             )

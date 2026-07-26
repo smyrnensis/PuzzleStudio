@@ -20,7 +20,7 @@ Scene navigation words are state-oriented. Prefer canonical navigation/effect
 forms over legacy aliases when adding examples or tests.
 
 Text presentation is one component contract with `heading`, `subheading`,
-`body`, and `caption` roles. Metadata names such as `title` and `subtitle` are
-content values, not component kinds. Space allocation (`fit` / weighted `fill`),
+`body`, and `caption` roles. Constant names used as content do not define
+component kinds. Space allocation (`fit` / weighted `fill`),
 aspect ratio, cross-axis alignment, and main-axis distribution are scene
 semantics; adapters only project these typed values into their host layout.

@@ -21,11 +21,272 @@ if (initialPuzzle3PreviewSurface) {
 document.documentElement.classList.toggle("is-component-embed", componentEmbedMode || Boolean(initialPuzzle3PreviewSurface));
 document.body.classList.toggle("is-component-embed", componentEmbedMode || Boolean(initialPuzzle3PreviewSurface));
 let clientPendingWaits = 0;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+let activeThemeClass = "";
+const activeThemeVariables = new Set();
+const activationConfirmDelayMs = 160;
+
+class PuzzleSoundRuntime {
+  constructor() {
+    this.sounds = { sfx: [], music: [] };
+    this.context = null;
+    this.activeMusic = new Map();
+    this.pausedMusic = new Map();
+    this.visibilityPausedMusic = new Map();
+    this.activeSfx = new Map();
+    this.sfxEffectCache = new Map();
+    this.sfxEffectApi = null;
+    this.soundWarnings = new Set();
+  }
+
+  configure(sounds) {
+    this.sounds = sounds || { sfx: [], music: [] };
+  }
+
+  applyEvents(events) {
+    for (const event of events || []) {
+      if (event.kind === "play_sfx") {
+        this.playSfx(event.name);
+      } else if (event.kind === "play_music") {
+        this.playMusic(event.name);
+      } else if (event.kind === "pause_music") {
+        this.pauseMusic(event.name || null);
+      } else if (event.kind === "resume_music") {
+        this.resumeMusic(event.name || null);
+      } else if (event.kind === "stop_music") {
+        this.stopMusic(event.name || null);
+      }
+    }
+  }
+
+  ensureContext() {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) {
+      return null;
+    }
+    if (!this.context) {
+      this.context = new AudioContext();
+    }
+    if (this.context.state === "suspended") {
+      this.context.resume();
+    }
+    return this.context;
+  }
+
+  primePlayback() {
+    this.ensureContext();
+  }
+
+  playSfx(name) {
+    if (this.shouldSuppressPlayback()) {
+      return;
+    }
+    const def = this.sfxDef(name);
+    const context = this.ensureContext();
+    if (!def || !context) {
+      return;
+    }
+    const api = window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
+    const volume = Number(def.volume ?? 1);
+    if (api?.generateSoundEffect && api?.createSfxPlayer) {
+      try {
+        const effect = this.sfxEffect(api, def);
+        const player = api.createSfxPlayer(context, effect, { volume });
+        this.replaceActiveSfx(name, player);
+        player.start(context.currentTime);
+      } catch (error) {
+        this.warnSoundIssue(`sfx:${name}:${def.type || "random"}`, `Sound effect "${name}" was skipped: ${error?.message || error}`);
+      }
+      return;
+    }
+    this.warnSoundIssue(`sfx:${name}`, `Sound effect "${name}" was skipped because the sound generator is unavailable.`);
+  }
+
+  replaceActiveSfx(name, player) {
+    this.activeSfx.get(name)?.stop();
+    this.activeSfx.set(name, player);
+  }
+
+  sfxDef(name) {
+    return (this.sounds.sfx || []).find((entry) => entry.name === name);
+  }
+
+  sfxEffect(api, def) {
+    if (this.sfxEffectApi !== api) {
+      this.sfxEffectApi = api;
+      this.sfxEffectCache.clear();
+    }
+    const type = def.type || "random";
+    const key = `${String(def.seed)}\u0000${type}`;
+    let effect = this.sfxEffectCache.get(key);
+    if (!effect) {
+      effect = api.generateSoundEffect(def.seed, { type });
+      this.sfxEffectCache.set(key, effect);
+    }
+    return effect;
+  }
+
+  playMusic(name, resume = {}) {
+    if (this.shouldSuppressPlayback()) {
+      return;
+    }
+    const def = (this.sounds.music || []).find((entry) => entry.name === name);
+    const context = this.ensureContext();
+    if (!def || !context) {
+      return;
+    }
+    if (this.activeMusic.has(name)) {
+      return;
+    }
+    this.stopMusic();
+    this.pausedMusic.delete(name);
+    const api = window.PuzzleSoundGenerator || window.PuzzleSoundTools || null;
+    if (api?.generateSong && api?.createPlayer) {
+      const progress = typeof resume === "number" ? 0 : Number(resume.progress || 0);
+      const song = api.generateSong(def.seed, {
+        height: Number(def.height ?? def.tone ?? 0.5),
+        bars: Number(def.bars || 8),
+        bpm: Number(def.bpm || 110),
+        volume: Number(def.volume ?? 0.5),
+      });
+      const player = api.createPlayer(context, song.playbackScore);
+      const handle = { player, progress };
+      this.activeMusic.set(name, handle);
+      player.start(progress);
+      return;
+    }
+    this.warnSoundIssue(`music:${name}`, `Music "${name}" was skipped because the sound generator is unavailable.`);
+  }
+
+  stopMusic(name = null) {
+    for (const [key, handle] of [...this.activeMusic.entries()]) {
+      if (name && key !== name) {
+        continue;
+      }
+      this.stopMusicHandle(handle);
+      this.activeMusic.delete(key);
+    }
+    for (const key of [...this.pausedMusic.keys()]) {
+      if (!name || key === name) {
+        this.pausedMusic.delete(key);
+      }
+    }
+  }
+
+  pauseMusic(name = null) {
+    for (const [key, handle] of [...this.activeMusic.entries()]) {
+      if (name && key !== name) {
+        continue;
+      }
+      this.stopMusicHandle(handle);
+      this.activeMusic.delete(key);
+      this.pausedMusic.set(key, {
+        index: handle.index || 0,
+        progress: handle.player?.loopProgress?.() ?? handle.progress ?? 0,
+      });
+    }
+  }
+
+  resumeMusic(name = null) {
+    const entries = [...this.pausedMusic.entries()].filter(([key]) => !name || key === name);
+    for (const [key, paused] of entries) {
+      this.playMusic(key, paused);
+      this.pausedMusic.delete(key);
+    }
+  }
+
+  pauseForHiddenDocument() {
+    for (const [key, handle] of [...this.activeMusic.entries()]) {
+      const progress = handle.player?.loopProgress?.() ?? handle.progress ?? 0;
+      this.stopMusicHandle(handle);
+      this.activeMusic.delete(key);
+      this.visibilityPausedMusic.set(key, {
+        progress,
+      });
+    }
+  }
+
+  resumeAfterVisibleDocument() {
+    if (this.shouldSuppressPlayback()) {
+      return;
+    }
+    const entries = [...this.visibilityPausedMusic.entries()];
+    this.visibilityPausedMusic.clear();
+    for (const [key, paused] of entries) {
+      if (!this.pausedMusic.has(key)) {
+        this.playMusic(key, paused);
+      }
+    }
+  }
+
+  shouldSuppressPlayback() {
+    return typeof document !== "undefined" && document.visibilityState === "hidden";
+  }
+
+  stopMusicHandle(handle) {
+    if (handle.player) {
+      try {
+        handle.progress = handle.player.loopProgress?.() ?? handle.progress ?? 0;
+        handle.player.stop();
+      } catch (_) {
+      }
+    }
+  }
+
+  warnSoundIssue(key, message) {
+    if (this.soundWarnings.has(key)) {
+      return;
+    }
+    this.soundWarnings.add(key);
+    console.warn(message);
+  }
+
+}
+
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 const puzzleBoot = window.PuzzleBoot || {};
 const standaloneRuntime = window.PuzzleStandaloneRuntime
   ? new window.PuzzleStandaloneRuntime(puzzleBoot, window.PuzzleRuntimeExportJson)
   : null;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 const reportedAudioConsumerErrors = new Set();
+=======
+const soundRuntime = new PuzzleSoundRuntime();
+let renderWasmModulePromise = null;
+
+async function renderWasmModule() {
+  if (standaloneRuntime) {
+    await standaloneRuntime.ensureInitialized();
+    return standaloneRuntime.wasmModule;
+  }
+  renderWasmModulePromise ||= import("./wasm_player/puzzle_wasm_player.js")
+    .then(async (module) => {
+      await module.default();
+      return module;
+    });
+  return renderWasmModulePromise;
+}
+
+async function prepareResolvedRenderScene(renderScene) {
+  const module = await renderWasmModule();
+  if (!window.PuzzleRenderAssetDecoder?.hydrateRenderSceneImages) {
+    throw new Error("Render asset decoder is unavailable.");
+  }
+  return window.PuzzleRenderAssetDecoder.hydrateRenderSceneImages(module, renderScene);
+}
+
+async function resolveRenderMoment(renderScene, moment) {
+  const module = await renderWasmModule();
+  if (typeof module.resolve_render_moment !== "function") {
+    throw new Error("Rust render-moment resolver is unavailable.");
+  }
+  return JSON.parse(module.resolve_render_moment(
+    JSON.stringify(renderScene),
+    JSON.stringify(moment),
+  ));
+}
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
 function reportAudioConsumerError(error) {
   const message = String(error?.message || error || "Unknown audio consumer error");
@@ -84,7 +345,6 @@ let wasmSolverServicePromise = null;
 /* puzzle-host:optional:solver:end */
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
-let pendingModelInput = null;
 const activeWaitTimers = new Set();
 const pendingPresentationEvents = [];
 let presentationAnimationBatchId = 0;
@@ -92,12 +352,15 @@ let dispatchingPresentationEvents = false;
 let pendingSessionResume = false;
 let resumingSession = false;
 let sessionWaiting = false;
-let drainingQueuedModelInput = false;
 let sceneEditorPreview = null;
 
 function sendHostModelInput(_input) {
   return false;
 }
+
+window.addEventListener("PuzzleProgressSaveError", (event) => {
+  showError(new Error(event.detail?.message || "Progress save failed."));
+});
 
 async function requestJson(url, options = {}) {
   if (standaloneRuntime) {
@@ -164,7 +427,7 @@ async function solveStandaloneCurrentState(options = {}, control = null) {
     state: state.solverState,
     materializeLevelStart: options.materializeLevelStart !== false,
     maxDepth: Number(options.maxDepth ?? 512),
-    maxNodes: Number(options.maxNodes ?? 5_000_000),
+    maxStoredNodes: Number(options.maxStoredNodes ?? 5_000_000),
   }, Date.now());
   if (control) {
     control.searchId = searchId;
@@ -185,11 +448,15 @@ async function solveStandaloneCurrentState(options = {}, control = null) {
 /* puzzle-host:optional:solver:end */
 
 async function loadState() {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   try {
     render(await requestJson("/api/state"));
   } catch (error) {
     showError(error);
   }
+=======
+  render(await requestSessionAction({ kind: "initialize" }));
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 async function post(url, options = {}) {
@@ -202,10 +469,19 @@ async function post(url, options = {}) {
 }
 
 function postSessionAction(action) {
-  return post("/api/action", {
+  return post("/api/action", sessionActionRequestOptions(action));
+}
+
+function requestSessionAction(action) {
+  return requestJson("/api/action", sessionActionRequestOptions(action));
+}
+
+function sessionActionRequestOptions(action) {
+  return {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(action),
-  });
+  };
 }
 
 function render(state) {
@@ -312,7 +588,7 @@ function installScreenScaleResizeHooks() {
 }
 
 function syncScreenScale() {
-  if (componentEmbedMode || !screenFrame || !screenView || !playSurface) {
+  if (componentEmbedMode || !currentState || !screenFrame || !screenView || !playSurface) {
     return;
   }
   if (screenView.getClientRects().length === 0 || playSurface.getClientRects().length === 0) {
@@ -338,9 +614,16 @@ function currentSceneAspectRatio() {
   if (sceneEditorPreview?.layout?.aspectRatio) {
     return normalizedAspectRatio(sceneEditorPreview.layout.aspectRatio);
   }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   const layers = sceneLayers(currentState);
   const layer = layers.find((candidate) => candidate.id === currentState?.surface?.focus) || layers[0];
   return normalizedAspectRatio(layer?.presentation?.layout?.aspectRatio);
+=======
+  const layers = surfaceComponents(currentState);
+  const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
+  const sceneDef = componentDefinitionByName(layer?.name) || focusedComponentDefinition();
+  return normalizedAspectRatio(sceneDef?.layout?.aspectRatio);
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 function normalizedAspectRatio(ratio) {
@@ -535,7 +818,7 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
     return;
   }
   const sceneName = sceneEditorPreview.sceneName || focusedComponentName(currentState);
-  const sceneDef = sceneDefByName(sceneName);
+  const sceneDef = sceneEditorPreview.definition || null;
   const layout = mergedScenePreviewLayout(sceneDef, sceneEditorPreview.layout);
   window.parent.postMessage({
     type: "PuzzleStudioScenePreview",
@@ -551,9 +834,12 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
   }, "*");
 }
 
-function renderSceneEditorPreview(config = {}) {
+async function renderSceneEditorPreview(config = {}) {
   const sceneName = String(config.scene?.name || config.sceneName || focusedComponentName(currentState)).trim();
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   const sceneDef = config.presentation || sceneDefByName(sceneName);
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   sceneEditorPreview = {
     requestId: String(config.requestId || ""),
     sceneName,
@@ -562,6 +848,7 @@ function renderSceneEditorPreview(config = {}) {
     state: normalizeScenePreviewState(config.state),
     inspect: config.inspect || {},
   };
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   if (sceneEditorPreview.state && !config.presentation) {
     showError(new Error(
       `Scene preview ${sceneName} requires a Rust-resolved presentation for the requested state.`
@@ -576,6 +863,20 @@ function renderSceneEditorPreview(config = {}) {
     throw new Error("Scene preview requires an initialized runtime snapshot");
   }
   const baseState = currentState;
+=======
+  if (!standaloneRuntime) {
+    throw new Error("Scene editor preview requires the WASM scene presentation resolver.");
+  }
+  const sceneDef = await standaloneRuntime.resolveScenePresentation(
+    sceneName,
+    sceneEditorPreview.state || {},
+  );
+  sceneEditorPreview.definition = sceneDef;
+  const baseState = currentState || puzzleBoot || {};
+  const existingLayer = surfaceComponents(baseState).find((layer) => (
+    layer.id === sceneName || layer.name === sceneName || layer.definition === sceneName
+  ));
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   const previewState = {
     ...baseState,
     theme: sceneEditorPreview.theme,
@@ -587,6 +888,14 @@ function renderSceneEditorPreview(config = {}) {
         placement: "root",
         visibility: "visible",
         modal: false,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+        name: sceneName,
+        focused: true,
+        scene: existingLayer?.scene || baseState.scene || null,
+        sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || {},
+        scenePuzzles: existingLayer?.scenePuzzles || baseState.scenePuzzles || [],
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         presentation: sceneDef,
       }],
     },
@@ -601,7 +910,7 @@ function renderSceneEditorPreview(config = {}) {
 
 function renderSceneEditorLayer(sceneDef, state) {
   screenView.replaceChildren();
-  const layer = sceneLayers(state)[0];
+  const layer = surfaceComponents(state)[0];
   const components = sceneDef?.components || [];
   const scope = {
     __sceneLayer: layer,
@@ -697,9 +1006,16 @@ function sceneEditorComponentMeta(component, path, scope = {}) {
     layout: component.layout || null,
   };
   if (component.kind === "button" || component.kind === "choice") {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     meta.label = component.label || "";
   } else if (component.kind === "text") {
     meta.label = component.value || "";
+=======
+    meta.label = String(component.label || "") || sceneTitle(effectLabel(component.effect));
+    meta.effect = component.effect || null;
+  } else if (component.kind === "text") {
+    meta.label = String(component.value || "");
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   } else if (component.source) {
     meta.source = component.source;
   }
@@ -710,7 +1026,12 @@ function sceneEditorComponentMeta(component, path, scope = {}) {
 function renderSurface(state) {
   screenView.replaceChildren();
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   const layers = sceneLayers(state);
+=======
+  const layers = surfaceComponents(state);
+  syncVisualThemeForSceneStack(layers);
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   if (componentEmbedMode && renderEmbeddedPuzzleComponent(layers)) {
     return;
   }
@@ -724,9 +1045,15 @@ function renderSurface(state) {
     if (layer.visibility === "hidden") {
       continue;
     }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     const presentation = layer.presentation;
     if (!presentation || typeof presentation !== "object") {
       throw new Error(`Presented component ${String(layer.id || "")} is missing its resolved presentation.`);
+=======
+    const sceneDef = presentationDefinitionForLayer(layer);
+    if (!sceneDef) {
+      throw new Error(`Unsupported presented component definition: ${String(layer.definition || layer.name || "")}`);
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
     if (presentation.error) {
       throw new Error(`Presented component ${String(layer.id || "")} failed to resolve: ${presentation.error}`);
@@ -829,8 +1156,13 @@ function renderEmbeddedPuzzleComponent(layers) {
     return true;
   }
   /* puzzle-host:optional:puzzle3:end */
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   const layer = layers.find((candidate) => candidate.id === currentState?.surface?.focus) || layers[0];
   const sceneDef = layer?.presentation;
+=======
+  const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
+  const sceneDef = componentDefinitionByName(layer?.name);
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   const component = findComponentByKind(sceneDef?.components || [], "puzzle");
   if (!layer || !sceneDef || !component) {
     return false;
@@ -844,13 +1176,32 @@ function renderEmbeddedPuzzleComponent(layers) {
   return true;
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 function sceneLayers(state) {
+=======
+function syncVisualThemeForSceneStack(layers) {
+  const visualThemeClass = window.GameVisuals?.themeClass || "";
+  if (!visualThemeClass || visualThemeClass === activeThemeClass) {
+    return;
+  }
+  const hasPuzzleLayer = layers.some((layer) => {
+    const scene = componentDefinitionByName(layer.name);
+    return sceneHasComponent(scene, "puzzle") || sceneHasComponent(scene, "frame");
+  });
+  if (!hasPuzzleLayer) {
+    document.body.classList.remove(visualThemeClass);
+  }
+}
+
+function surfaceComponents(state) {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   if (!state?.surface || !Array.isArray(state.surface.components)) {
     throw new Error("Runtime snapshot is missing the required surface component contract");
   }
   return state.surface.components;
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 function runtimeViewportSourceId(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
     || typeof value.component !== "string" || value.component.length === 0
@@ -872,6 +1223,17 @@ function runtimeViewportSourceState(sourceId, state = currentState) {
     throw new Error(`Viewport source is missing from the runtime registry: ${id.component}/${id.source}`);
   }
   return entry.state;
+=======
+function presentationDefinitionForLayer(layer) {
+  const presentation = layer?.presentation;
+  if (!presentation || typeof presentation !== "object") {
+    throw new Error(`Surface component ${String(layer?.id || layer?.definition || "unknown")} is missing its resolved presentation contract`);
+  }
+  if (presentation.error) {
+    throw new Error(String(presentation.error));
+  }
+  return presentation;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 function focusedComponentName(state = currentState) {
@@ -972,15 +1334,22 @@ function isControlPointerTarget(target) {
   return Boolean(target?.closest?.("button, a, input, select, textarea, [role='button'], [role='option']"));
 }
 
-function sceneInteractionProfile(scene = currentSceneDef(), options = {}) {
+function sceneInteractionProfile(scene = focusedComponentDefinition(), options = {}) {
   const state = options.state || currentState || {};
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   const standardChoices = resolvedChoiceNodes(scene?.components || []);
+=======
+  const layer = scene
+    ? surfaceComponents(state).find((candidate) => candidate?.focused === true) || null
+    : null;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   return {
     acceptsModelInput: stateAcceptsModelInput(state),
-    standardChoices,
+    hasStandardChoice: Number.isInteger(layer?.choiceCursor),
   };
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 function resolvedChoiceNodes(components, choices = []) {
   for (const component of components || []) {
     if (component.kind === "choice") {
@@ -989,6 +1358,14 @@ function resolvedChoiceNodes(components, choices = []) {
     resolvedChoiceNodes(component.children || [], choices);
   }
   return choices;
+=======
+function currentSceneLayer(state = currentState, scene = focusedComponentDefinition()) {
+  const layers = surfaceComponents(state || {});
+  return layers.find((layer) => scene?.name && layer.name === scene.name)
+    || layers.find((layer) => layer.focused === true)
+    || layers[0]
+    || null;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 function stateAcceptsModelInput(state = currentState) {
@@ -1046,6 +1423,9 @@ function renderPuzzle(component, scope = {}) {
   const key = `${sourceId.component}:${sourceId.source}`;
   const renderer = new window.PuzzleRenderer(root, {
     renderMode: "canvas",
+    prepareRenderScene: prepareResolvedRenderScene,
+    resolveRenderMoment,
+    onError: showError,
   });
   renderer.viewport = puzzleViewports.get(key);
   renderer.render(scene);
@@ -1055,7 +1435,7 @@ function renderPuzzle(component, scope = {}) {
 
 /* puzzle-host:optional:puzzle3:start */
 function renderPuzzle3Frame(component, scope = {}) {
-  if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets || !window.Puzzle3Component) {
+  if (!window.Puzzle3Component) {
     throw new Error("Puzzle3 component assets are unavailable.");
   }
   const sourceId = runtimeViewportSourceId(component.source);
@@ -1075,12 +1455,14 @@ function renderPuzzle3Frame(component, scope = {}) {
     canvas.height = 640;
     canvas.setAttribute("aria-label", `${sceneTitle(sceneName)} ${source}`);
     root.append(canvas);
-    const fixture = puzzle3FrameFixture(sceneName, source);
+    const snapshot = puzzle3FrameSnapshot(sceneName, source);
     const controller = window.Puzzle3Component.attach(canvas, {
       screenView: root,
-      snapshot: fixture,
+      snapshot,
       scene: sceneName,
       component,
+      prepareRenderScene: prepareResolvedRenderScene,
+      resolveRenderMoment,
       onError(failure) {
         reportPuzzle3ComponentError(failure);
       },
@@ -1134,10 +1516,18 @@ function reportPuzzle3ComponentError(failure = {}) {
   }
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 function puzzle3FrameFixture(sceneName, source = "board") {
   const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture));
+=======
+function puzzle3FrameSnapshot(sceneName, source = "board") {
+  const sessionSnapshot = currentState?.scenePuzzleState?.[source];
+  if (sessionSnapshot && typeof sessionSnapshot === "object") {
+    return sessionSnapshot;
+  }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   if (puzzle3PreviewSurface) {
-    return puzzle3PreviewSurfaceFixture(fixture, sceneName);
+    return puzzle3PreviewSurfaceFixture(puzzle3PreviewTemplate(), sceneName);
   }
   const sessionSnapshot = runtimeViewportSourceState({
     component: sceneName,
@@ -1146,31 +1536,12 @@ function puzzle3FrameFixture(sceneName, source = "board") {
   return mergePuzzle3SessionSnapshot(window.Puzzle3DFrameFixture, sessionSnapshot);
 }
 
-function mergePuzzle3SessionSnapshot(fixture, sessionSnapshot) {
+function puzzle3PreviewTemplate() {
+  const fixture = window.Puzzle3DFrameFixture;
   if (!fixture || typeof fixture !== "object") {
-    throw new Error("Puzzle3 frame fixture is unavailable.");
+    throw new Error("Puzzle3 visual preview template is unavailable.");
   }
-  const objectById = new Map(
-    Object.values(fixture.objects || {}).map((object) => [Number(object.id), object]),
-  );
-  const cells = (sessionSnapshot.cells || []).map((cell) => ({
-    ...cell,
-    objects: (cell.objects || []).map((reference) => {
-      const object = objectById.get(Number(reference.id));
-      if (!object) {
-        throw new Error(`Puzzle3 session references unknown object id: ${reference.id}`);
-      }
-      return {
-        ...object,
-        layer: Number.isInteger(Number(reference.layer)) ? Number(reference.layer) : object.layer,
-      };
-    }),
-  }));
-  return {
-    ...fixture,
-    ...sessionSnapshot,
-    cells,
-  };
+  return JSON.parse(JSON.stringify(fixture));
 }
 
 function normalizePuzzle3PreviewSurface(update = null) {
@@ -1233,7 +1604,7 @@ function applyPuzzleStudioPreviewSurfaceUpdate(update = null) {
   }
   setPuzzle3PreviewSurface(update);
   const snapshot = puzzle3PreviewSurfaceFixture(
-    JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture)),
+    puzzle3PreviewTemplate(),
     surface.sceneName,
   );
   for (const entry of puzzle3Controllers.values()) {
@@ -1353,11 +1724,16 @@ function syncPuzzle3ComponentLevel(entry) {
     return;
   }
   const sceneName = entry.root.dataset.scene;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   const source = entry.root.dataset.source;
   if (!sceneName || !source) {
     throw new Error("Puzzle3 viewport controller is missing its typed source identity");
   }
   const snapshot = puzzle3FrameFixture(sceneName, source);
+=======
+  const source = entry.root.dataset.source || "board";
+  const snapshot = puzzle3FrameSnapshot(sceneName, source);
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   entry.controller.replaceSnapshot(snapshot);
 }
 
@@ -1386,7 +1762,11 @@ function renderText(component, scope = {}) {
   const text = document.createElement("p");
   text.className = "view-text";
   text.dataset.textRole = component.role || "body";
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   text.textContent = component.value || "";
+=======
+  text.textContent = String(component.value || "");
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   if (component.textAlign) {
     text.style.textAlign = sceneTextAlignCss(component.textAlign);
   }
@@ -1400,7 +1780,11 @@ function renderButton(component, scope = {}) {
   button.type = "button";
   setControlLabel(
     button,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     component.label,
+=======
+    String(component.label || "") || sceneTitle(effectLabel(component.effect)),
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   );
   annotateSceneEditorComponent(button, component, scope);
   button.addEventListener("click", () => {
@@ -1420,16 +1804,36 @@ function renderChoice(component, scope = {}) {
   choice.type = "button";
   setControlLabel(
     choice,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     component.label,
   );
   choice.classList.add("standard-choice");
   annotateSceneEditorComponent(choice, component, scope);
   choice.classList.toggle("is-selected", component.selected === true);
+=======
+    String(component.label || ""),
+  );
+  choice.classList.add("standard-choice");
+  annotateSceneEditorComponent(choice, component, scope);
+  const counter = scope.__standardChoiceCounter || { value: 0 };
+  scope.__standardChoiceCounter = counter;
+  const index = counter.value;
+  counter.value += 1;
+  choice.dataset.standardChoiceIndex = String(index);
+  choice.classList.toggle(
+    "is-selected",
+    scope.__sceneLayer?.focused === true && index === Number(scope.__sceneLayer?.choiceCursor),
+  );
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   choice.addEventListener("click", () => {
     if (selectSceneEditorComponent(component, scope)) {
       return;
     }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     sendSceneActionToken(component.actionToken);
+=======
+    runActivationConfirm(choice, () => sendChoiceActivate(index));
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   });
   choice.disabled = !component.actionToken;
   applySizingKind(choice, component);
@@ -1491,7 +1895,7 @@ function selectSceneEditorComponent(component, scope = {}) {
       __componentPath: path,
     }),
   }, "*");
-  renderSceneEditorPreview(sceneEditorPreview);
+  void renderSceneEditorPreview(sceneEditorPreview).catch((error) => showError(error));
   return true;
 }
 
@@ -1516,6 +1920,25 @@ function renderContainer(component, scope = {}) {
   return container;
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+function renderConditional(component, scope = {}) {
+  const fragment = document.createDocumentFragment();
+  if (typeof component.condition !== "boolean") {
+    throw new Error("Resolved scene conditional is missing its boolean condition");
+  }
+  const conditionTrue = component.condition;
+  const children = conditionTrue
+    ? component.children || []
+    : component.elseChildren || [];
+  renderSurfaceComponents(children, fragment, {
+    ...scope,
+    __componentPath: [...(scope.__componentPath || []), conditionTrue ? "children" : "elseChildren"],
+  });
+  return fragment;
+}
+
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 function applySceneLayout(element, layout, options = {}) {
   if (!element || !layout) {
     return;
@@ -1598,7 +2021,100 @@ function runtimeKeyTriggerFromEvent(event) {
   if (named[key]) {
     return { kind: named[key] };
   }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   return [...key].length === 1 ? { kind: "character", value: key } : null;
+=======
+  if (Array.isArray(binding?.keys)) {
+    const key = normalizedKeyName(String(event.key || ""));
+    return binding.keys.includes(key);
+  }
+  return false;
+}
+
+function standardSessionActionForKey(key) {
+  if (key === "z") {
+    return { kind: "undo" };
+  }
+  if (key === "y") {
+    return { kind: "redo" };
+  }
+  return null;
+}
+
+function effectsForKey(event) {
+  if (!currentState) {
+    return [];
+  }
+  if (event.altKey || event.ctrlKey || event.metaKey) {
+    return [];
+  }
+  const rawKey = String(event.key || "");
+  const key = normalizedKeyName(rawKey);
+  const sessionAction = standardSessionActionForKey(key);
+  if (sessionAction) {
+    return [{ kind: "session_action", action: sessionAction }];
+  }
+  const keyTokens = logicalKeyTokens(rawKey);
+  const scene = focusedComponentDefinition();
+  const profile = sceneInteractionProfile(scene);
+  const binding = scene?.keys?.find((binding) => binding.keys.some((candidate) => keyTokens.includes(candidate)));
+  if (binding) {
+    return [{ kind: "scene_effect", effect: binding.effect }];
+  }
+
+  const input = (currentState.inputs || []).find((input) =>
+    keyTokens.includes(input.key)
+    || keyTokens.includes(input.arrow)
+    || (input.keys || []).some((candidate) => keyTokens.includes(candidate))
+  );
+  const standardInput = standardChoiceInputForKey(key);
+  if (standardInput && profile.hasStandardChoice) {
+    return [{ kind: "standard_choice", input: standardInput }];
+  }
+  if (input && profile.acceptsModelInput) {
+    return [{ kind: "model_input", name: input.name }];
+  }
+
+  return [];
+}
+
+function normalizedKeyName(key) {
+  if (key === " ") {
+    return "Space";
+  }
+  if (key.length === 1) {
+    return key.toLowerCase();
+  }
+  return key;
+}
+
+function logicalKeyTokens(key) {
+  const normalized = normalizedKeyName(key);
+  return normalized ? [normalized] : [];
+}
+
+function standardChoiceInputForKey(key) {
+  if (key === "w" || key === "ArrowUp") {
+    return "up";
+  }
+  if (key === "s" || key === "ArrowDown") {
+    return "down";
+  }
+  if (key === "a" || key === "ArrowLeft") {
+    return "left";
+  }
+  if (key === "d" || key === "ArrowRight") {
+    return "right";
+  }
+  if (isStandardChoiceConfirmKey(key)) {
+    return "enter";
+  }
+  return null;
+}
+
+function isStandardChoiceConfirmKey(key) {
+  return key === "Enter" || key === "Space" || key === "x";
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 function inputByName(name) {
@@ -1608,12 +2124,18 @@ function inputByName(name) {
   return currentState.inputs.find((input) => input.name === name);
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 function currentSceneDef() {
   const source = currentState;
+=======
+function focusedComponentDefinition() {
+  const source = currentState || puzzleBoot || {};
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   const name = focusedComponentName(source);
   return componentDefinitionByName(name, source);
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 function componentDefinitionByName(name, source = currentState) {
   const layer = sceneLayers(source).find((candidate) => candidate.id === name);
   return layer?.presentation || null;
@@ -1629,6 +2151,32 @@ function nonEmptyArray(value) {
 }
 
 async function sendResolvedInput(input) {
+=======
+function componentDefinitionByName(name, source = currentState || puzzleBoot || {}) {
+  const layer = Array.isArray(source?.surface?.components)
+    ? source.surface.components.find((candidate) => (
+      candidate.id === name
+      || candidate.name === name
+      || candidate.definition === name
+    ))
+    : null;
+  if (layer) {
+    return presentationDefinitionForLayer(layer);
+  }
+  return null;
+}
+
+async function sendResolvedInput(input) {
+  if (input?.kind === "standard_choice") {
+    if (input.input === "enter") {
+      const selectedChoice = document.querySelector(".scene-layer.is-focused .standard-choice.is-selected");
+      runActivationConfirm(selectedChoice, () => sendChoiceActivate());
+    } else {
+      await postSessionAction({ kind: "choice_move", direction: input.input });
+    }
+    return;
+  }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   if (input?.kind === "model_input") {
     await sendModelInput(input.name);
     return;
@@ -1645,6 +2193,14 @@ async function sendSceneActionToken(token) {
     throw new Error("Resolved scene action token is unavailable.");
   }
   await postSessionAction({ kind: "scene_action", token });
+}
+
+async function sendChoiceActivate(index = null) {
+  const action = { kind: "choice_activate" };
+  if (Number.isInteger(index)) {
+    action.index = index;
+  }
+  await postSessionAction(action);
 }
 
 function applyPresentationEvents(events) {
@@ -1687,7 +2243,6 @@ function dispatchNextPresentationEvent() {
     resumePendingSessionTurn();
     return;
   }
-  drainQueuedModelInput();
 }
 
 async function resumePendingSessionTurn() {
@@ -1700,7 +2255,11 @@ async function resumePendingSessionTurn() {
     currentState.busy = true;
   }
   try {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     await postSessionAction({ kind: "resume" });
+=======
+    render(await requestSessionAction({ kind: "resume" }));
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   } catch (error) {
     if (currentState) {
       currentState.busy = false;
@@ -1708,7 +2267,6 @@ async function resumePendingSessionTurn() {
     showError(error);
   } finally {
     resumingSession = false;
-    drainQueuedModelInput();
   }
 }
 
@@ -1720,6 +2278,21 @@ function applyPresentationAnimations(event, animations) {
   const batchId = ++presentationAnimationBatchId;
   puzzleSnapshot.animationEvents = animations;
   puzzleSnapshot.animationBatchId = batchId;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+  if (currentState.scene) {
+    currentState.scene.animationEvents = animations;
+    currentState.scene.animationBatchId = batchId;
+  }
+  const layer = surfaceComponents(currentState).find((candidate) =>
+    (candidate?.name === event.scene || candidate?.scene?.name === event.scene)
+      && (candidate?.scenePuzzles || []).includes(event.puzzle)
+  );
+  if (layer?.scene) {
+    layer.scene.animationEvents = animations;
+    layer.scene.animationBatchId = batchId;
+  }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   renderSurface(currentState);
 }
 
@@ -1731,9 +2304,7 @@ function startPresentationWait(event) {
     timeoutId: 0,
     done: false,
     resumesSession: sessionWaiting,
-    fastForwardRequested: Boolean(
-      pendingModelInput && config.queueDuringWait && config.fastForwardWait
-    ),
+    fastForwardRequested: false,
     config,
   };
   waitTimer.complete = () => {
@@ -1811,12 +2382,11 @@ function fastForwardWaitTimer(waitTimer) {
 function sendModelInput(input) {
   if (currentState?.busy || clientPendingWaits > 0) {
     const config = inputBufferConfig();
-    if (!config.queueDuringWait) {
-      return undefined;
+    const queued = sendModelInputNow(input);
+    if (config.queueDuringWait) {
+      fastForwardActiveWaitsForQueuedInput(config);
     }
-    pendingModelInput = input;
-    fastForwardActiveWaitsForQueuedInput(config);
-    return undefined;
+    return queued;
   }
   return sendModelInputNow(input);
 }
@@ -1831,6 +2401,7 @@ function sendModelInputNow(input) {
   return postSessionAction({ kind: "input", name: input });
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 async function drainQueuedModelInput() {
   if (drainingQueuedModelInput || clientPendingWaits > 0 || currentState?.busy || !pendingModelInput) {
     return;
@@ -1843,6 +2414,88 @@ async function drainQueuedModelInput() {
   } finally {
     drainingQueuedModelInput = false;
   }
+=======
+function effectLabel(effect) {
+  if (!effect) {
+    return "";
+  }
+  if (typeof effect === "string") {
+    return effect;
+  }
+  if (effect.kind === "command" || effect.kind === "input" || effect.kind === "component_effect" || effect.kind === "routine_call") {
+    return effect.name;
+  }
+  if (effect.kind === "message") {
+    return "message";
+  }
+  if (effect.kind === "wait") {
+    return "wait";
+  }
+  if (effect.kind === "conditional") {
+    return effectLabel(effect.effect?.effect || effect.effect);
+  }
+  if (effect.kind === "play_sfx" || effect.kind === "play_music" || effect.kind === "pause_music" || effect.kind === "resume_music") {
+    return effect.name;
+  }
+  if (effect.kind === "stop_music") {
+    return "stop music";
+  }
+  if (["goto", "enter", "create", "reset", "delete", "show", "hide", "toggle", "focus"].includes(effect.kind)) {
+    return effectCommandName(effect);
+  }
+  if (effect.kind === "start_level") {
+    return `goto ${effect.scene}`;
+  }
+  if (effect.kind === "continue_level") {
+    return `goto ${effect.scene}`;
+  }
+  if (effect.kind === "puzzle_next_level") {
+    return effect.target ? `${effect.target}.next_level` : "next_level";
+  }
+  if (effect.kind === "puzzle_previous_level") {
+    return effect.target ? `${effect.target}.previous_level` : "previous_level";
+  }
+  if (effect.kind === "puzzle_reset") {
+    return effect.target ? `${effect.target}.restart` : "restart";
+  }
+  if (effect.kind === "puzzle_goto_level") {
+    return effect.target ? `${effect.target}.goto` : "goto";
+  }
+  if (effect.kind === "back") {
+    return "back";
+  }
+  return "";
+}
+
+function effectCommandName(effect) {
+  return effect?.scene || effect?.screen || "";
+}
+
+function displayExprText(expr, scope = {}) {
+  if (!expr) {
+    return "";
+  }
+  if (expr.kind === "text") {
+    return JSON.stringify(expr.value || "");
+  }
+  if (expr.kind === "int" || expr.kind === "bool") {
+    return String(expr.value);
+  }
+  if (expr.kind === "path") {
+    return Array.isArray(expr.path) ? expr.path.join(".") : String(expr.path || "");
+  }
+  if (expr.kind === "call") {
+    return `${expr.name}(${(expr.args || []).map((arg) => displayExprText(arg, scope)).join(", ")})`;
+  }
+  if (expr.kind === "binary") {
+    const op = expr.op === "and" ? "and" : expr.op === "eq" ? "==" : "!=";
+    return `${displayExprText(expr.left, scope)} ${op} ${displayExprText(expr.right, scope)}`;
+  }
+  if (expr.kind === "if") {
+    return `if ${displayExprText(expr.condition, scope)} { ${displayExprText(expr.then, scope)} } else { ${displayExprText(expr.else, scope)} }`;
+  }
+  return "";
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 function dispatchKeyboardInput(event) {
@@ -1865,14 +2518,6 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
   }
 });
-
-if (standaloneRuntime) {
-  window.addEventListener("PuzzleStandaloneStateChanged", () => {
-    loadState().catch((error) => {
-      showError(error);
-    });
-  });
-}
 
 /* puzzle-host:optional:studio-bridge:start */
 let studioPreviewDebugMode = false;
@@ -1922,7 +2567,7 @@ window.addEventListener("message", async (event) => {
   }
 
   if (event.data?.type === "PuzzleStudioSetScenePreview") {
-    renderSceneEditorPreview(event.data || {});
+    await renderSceneEditorPreview(event.data || {});
     return;
   }
 

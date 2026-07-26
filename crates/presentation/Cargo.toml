@@ -5,9 +5,15 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 puzzle-assets = { path = "../assets" }
 puzzle-runtime-contract = { path = "../runtime_contract" }
 
 [dev-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+=======
+puzzle-runtime-contract = { path = "../runtime_contract" }
+
+[dev-dependencies]
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 serde_json = "1"

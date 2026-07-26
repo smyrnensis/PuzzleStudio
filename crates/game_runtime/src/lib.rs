@@ -1,6 +1,13 @@
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
+=======
+use std::collections::{BTreeMap, HashMap};
+
+use puzzle_core::{
+    GridCompiledGame, GridSize, GridState, InputId, ObjectId, Size2, Size3, State as PuzzleState,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 };
 
 use puzzle_audio::{AudioAssetCatalog, AudioCommand, MusicRecipe, MusicTarget, SfxRecipe};
@@ -12,16 +19,26 @@ use puzzle_core::{
 use puzzle_core::{GridSize, GridState, InputId, ObjectId, Size2, Size3, State as PuzzleState};
 use puzzle_lang::{
     ArrowKey, KeyTrigger, Level, LevelId, LoadedDocument, LoadedDocumentModel, LoadedGame,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     LoadedGridGame, PuzzleGridMode, ResourceSelection, STANDARD_MESSAGE_COMPONENT,
     STANDARD_MESSAGE_DISMISS_EVENT, STANDARD_MESSAGE_TEXT_PROPERTY, SceneComponent, SceneDef,
     SceneEffect, SceneExpr, SceneLayoutDef, SceneTextContent, SceneTextRoleDef, SceneValue,
     ThemeDef, ViewportModeDef, ViewportProjectionDef, ViewportSizeDef,
     VisualFitMode as LoadedVisualFitMode, VisualKind, VisualSampling as LoadedVisualSampling,
     VisualSpace as LoadedVisualSpace, VisualTransform as LoadedVisualTransform,
+=======
+    LoadedGridGame, ResourceSelection, STANDARD_MESSAGE_COMPONENT, STANDARD_MESSAGE_DISMISS_EVENT,
+    STANDARD_MESSAGE_TEXT_PROPERTY, SceneComponent, SceneDef, SceneEffect, SceneExpr,
+    SceneLayoutDef, SceneTextContent, SceneTextRoleDef, SceneValue, ThemeDef, ViewportModeDef,
+    ViewportProjectionDef, ViewportSizeDef, VisualFitMode as LoadedVisualFitMode, VisualKind,
+    VisualSampling as LoadedVisualSampling, VisualSpace as LoadedVisualSpace,
+    VisualTransform as LoadedVisualTransform,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 };
 #[cfg(feature = "editor-debug")]
 use puzzle_play::GridTransitionTrace;
 use puzzle_play::{
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     GameSession, GridGameSession, ProgressSaveData, SceneConditionContext, SoundEvent,
     presentation_events_contract, scene_value_to_string,
 };
@@ -40,6 +57,35 @@ use puzzle_runtime_contract::{
     RuntimeResolvedVisualFrame, RuntimeResolvedVisualLayout, RuntimeSceneActionId,
     RuntimeSceneActionToken, RuntimeViewportSourceId, RuntimeVisualComposition, RuntimeVisualSpace,
     RuntimeVisualTransform, SessionAction, SolverStateSnapshot,
+=======
+    GameSession, GridGameSession, ProgressSaveData, presentation_events_contract,
+    runtime_sounds_def, scene_value_to_string,
+};
+use puzzle_presentation::{
+    VisualOrderRef, VisualPriorityRef, cell_render_order_2d, resolve_object_priority,
+    resolve_pixel_frame, resolve_visual_affine, resolve_voxel_frame,
+};
+use puzzle_runtime_contract::{
+    RuntimeChoiceDirection, RuntimePresentationEvent, RuntimeProgressSaveRequest,
+    RuntimePuzzle3Resources, RuntimePuzzle3Snapshot, RuntimeResolvedCompositionGroup,
+    RuntimeResolvedFitMode, RuntimeResolvedPlayback, RuntimeResolvedRenderCell,
+    RuntimeResolvedRenderInstance, RuntimeResolvedRenderScene, RuntimeResolvedSampling,
+    RuntimeResolvedVisualClip, RuntimeResolvedVisualFrame, RuntimeResolvedVisualLayout,
+    RuntimeStateSnapshot2d, RuntimeStateSnapshot3d, RuntimeVisualComposition, RuntimeVisualSpace,
+    RuntimeVisualTransform, STANDALONE_RUNTIME_EXPORT_VERSION, SessionAction, SolverStateSnapshot,
+    StandaloneRuntimeExport,
+};
+use puzzle_session_contract::{
+    RuntimeAnimationSettings, RuntimeAuthoredComponentProjection, RuntimeComponentPresentation,
+    RuntimeGridRender2d, RuntimeInputBinding, RuntimeInputBufferSettings, RuntimeKeyBinding,
+    RuntimeLevelRecord, RuntimeMusicSound, RuntimePuzzle2Cell, RuntimePuzzle2Layer,
+    RuntimePuzzle2Resources, RuntimePuzzle2Screen, RuntimePuzzle2Settings, RuntimePuzzle2Snapshot,
+    RuntimeRegion2d, RuntimeRender2d, RuntimeRendererState, RuntimeResolvedEventBinding,
+    RuntimeResolvedScene, RuntimeResolvedSceneComponent, RuntimeResourceSelection,
+    RuntimeResourceSelectionMode, RuntimeSessionSnapshot, RuntimeSfxSound, RuntimeSounds,
+    RuntimeSurface, RuntimeSurfaceComponent, RuntimeTheme, RuntimeTweenSettings,
+    RuntimeViewportDimension, RuntimeViewportMode2d, RuntimeViewportSize2d, ordered_scene_values,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 };
 #[cfg(feature = "editor-debug")]
 use puzzle_runtime_contract::{RuntimeStateSnapshot2d, RuntimeStateSnapshot3d};
@@ -68,29 +114,40 @@ pub struct RuntimeSession {
     pending_progress_save: Option<RuntimeProgressSaveRequest>,
     next_progress_request_id: u32,
     last_progress_save: ProgressSaveData,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 }
 
 #[cfg(feature = "editor-debug")]
 pub struct RuntimeDebugDispatch {
     pub snapshot: RuntimeSessionSnapshot,
     pub debug: Value,
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 trait StandaloneSessionModel {
     fn snapshot(
         &self,
         revision: u64,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         condition_context: SceneConditionContext,
         presentation_events: &[RuntimePresentationEvent],
     ) -> RuntimeDevelopmentSessionSnapshot;
     fn take_presentation_events(&mut self) -> Vec<RuntimePresentationEvent>;
     fn audio_catalog(&self) -> Arc<AudioAssetCatalog>;
+=======
+        has_progress_save: bool,
+        presentation_events: &[RuntimePresentationEvent],
+    ) -> RuntimeSessionSnapshot;
+    fn take_presentation_events(&mut self) -> Vec<RuntimePresentationEvent>;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     fn is_waiting(&self) -> bool;
     fn accepts_model_input(&self) -> bool;
     fn queues_input_while_waiting(&self) -> bool;
     fn has_input_name(&self, input_name: &str) -> bool;
     fn resume_wait(&mut self) -> Result<(), String>;
     fn apply_input_name(&mut self, input_name: &str) -> Result<(), String>;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn apply_choice_move(
         &mut self,
         direction: RuntimeChoiceDirection,
@@ -101,6 +158,10 @@ trait StandaloneSessionModel {
         token: &RuntimeSceneActionToken,
         condition_context: SceneConditionContext,
     ) -> Result<(), String>;
+=======
+    fn apply_choice_move(&mut self, direction: RuntimeChoiceDirection) -> Result<(), String>;
+    fn apply_choice_activate(&mut self, index: Option<usize>) -> Result<(), String>;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     #[cfg(feature = "editor-debug")]
     fn apply_debug_input_name(
         &mut self,
@@ -122,8 +183,19 @@ trait StandaloneSessionModel {
     ) -> Result<(), String>;
     fn progress_save_data(&self) -> ProgressSaveData;
     fn restore_progress_save_json(&mut self, save_json: &str) -> Result<(), String>;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn take_progress_clear_request(&mut self) -> bool;
     fn solver_session_2d(&self) -> Option<(LoadedGame, GameSession)>;
+=======
+    fn resolve_scene_presentation(
+        &self,
+        scene_name: &str,
+        state_override: &HashMap<String, SceneValue>,
+        has_progress_save: bool,
+    ) -> Result<RuntimeResolvedScene, String>;
+    fn solver_session_2d(&self) -> Option<(LoadedGame, GameSession)>;
+    fn renderer_state(&self) -> Option<RuntimeRendererState>;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 struct GridSessionRuntime<const D: usize, Size: GridSize<D>, Projection> {
@@ -162,6 +234,7 @@ trait GridSessionProjection<const D: usize, Size: GridSize<D>> {
     ) -> Option<(LoadedGame, GameSession)> {
         None
     }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 }
 
 struct ProjectedGridSnapshot {
@@ -169,6 +242,35 @@ struct ProjectedGridSnapshot {
     development_viewport_sources:
         BTreeMap<RuntimeViewportSourceId, RuntimeDevelopmentRendererState>,
     viewport_errors: BTreeMap<RuntimeViewportSourceId, String>,
+=======
+
+    fn renderer_state(
+        &self,
+        _loaded: &LoadedGridGame<D, Size>,
+        _session: &GridGameSession<D, Size>,
+    ) -> Option<RuntimeRendererState> {
+        None
+    }
+
+    fn puzzle3_authoring_resources(
+        &self,
+        _loaded: &LoadedGridGame<D, Size>,
+    ) -> Option<RuntimePuzzle3Resources> {
+        None
+    }
+}
+
+struct ProjectedGridSnapshot {
+    scene: Option<RuntimeRendererState>,
+    scene_puzzle_state: BTreeMap<String, RuntimeRendererState>,
+    scene_layers: Vec<ProjectedSceneLayer>,
+}
+
+#[derive(Clone)]
+struct ProjectedSceneLayer {
+    id: String,
+    projection: RuntimeAuthoredComponentProjection,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 #[derive(Default)]
@@ -183,6 +285,7 @@ impl RuntimeSession {
         let document = puzzle_lang::parse_game_for_path(source, puzzle_path)
             .map_err(|error| error.to_string())?;
         Self::from_document(document)
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     }
 
     pub fn from_document(document: LoadedDocument) -> Result<Self, String> {
@@ -204,10 +307,47 @@ impl RuntimeSession {
         self.snapshot_json_with_events(&[])
     }
 
+=======
+    }
+
+    pub fn from_export_json(export_json: &str) -> Result<Self, String> {
+        let export: StandaloneRuntimeExport<LoadedDocument> = serde_json::from_str(export_json)
+            .map_err(|error| format!("invalid standalone runtime export: {error}"))?;
+        let runtime_bundle = export.runtime_loaded_document;
+        if runtime_bundle.version != STANDALONE_RUNTIME_EXPORT_VERSION {
+            return Err(format!(
+                "unsupported runtimeLoadedDocument version: {}",
+                runtime_bundle.version
+            ));
+        }
+        Self::from_document(runtime_bundle.document)
+    }
+
+    pub fn from_document(document: LoadedDocument) -> Result<Self, String> {
+        let model = standalone_session_model(document)?;
+        let last_progress_save = model.progress_save_data();
+        Ok(Self {
+            model,
+            revision: 0,
+            queued_input: None,
+            progress_persistence_enabled: true,
+            has_persisted_progress: false,
+            pending_progress_save: None,
+            next_progress_request_id: 1,
+            last_progress_save,
+        })
+    }
+
+    pub fn snapshot_json(&self) -> String {
+        self.snapshot_json_with_events(&[])
+    }
+
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     pub fn snapshot(&self) -> RuntimeSessionSnapshot {
         self.snapshot_with_events(&[])
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     #[cfg(feature = "editor-debug")]
     pub fn development_snapshot(&self) -> RuntimeDevelopmentSessionSnapshot {
         self.development_snapshot_with_events(&[])
@@ -215,6 +355,28 @@ impl RuntimeSession {
 
     pub fn audio_catalog(&self) -> Arc<AudioAssetCatalog> {
         self.model.audio_catalog()
+=======
+    pub fn resolve_scene_presentation_json(
+        &self,
+        scene_name: &str,
+        state_json: &str,
+    ) -> Result<String, String> {
+        let state_override = if state_json.trim().is_empty() {
+            json!({})
+        } else {
+            serde_json::from_str(state_json)
+                .map_err(|error| format!("invalid scene preview state: {error}"))?
+        };
+        let state_override = scene_values_from_json(&state_override)?;
+        let presentation = self.model.resolve_scene_presentation(
+            scene_name,
+            &state_override,
+            self.has_persisted_progress,
+        )?;
+        puzzle_presentation_json::resolved_scene_to_value(&presentation)
+            .and_then(|presentation| serde_json::to_string(&presentation))
+            .map_err(|error| format!("scene presentation could not be serialized: {error}"))
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     fn response_snapshot(&mut self) -> RuntimeSessionSnapshot {
@@ -223,11 +385,16 @@ impl RuntimeSession {
     }
 
     fn snapshot_json_with_events(&self, events: &[RuntimePresentationEvent]) -> String {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         puzzle_presentation_json::to_string(&self.development_snapshot_with_events(events))
+=======
+        puzzle_presentation_json::to_string(&self.snapshot_with_events(events))
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             .expect("snapshot JSON should serialize")
     }
 
     fn snapshot_with_events(&self, events: &[RuntimePresentationEvent]) -> RuntimeSessionSnapshot {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         self.development_snapshot_with_events(events).player
     }
 
@@ -298,6 +465,49 @@ impl RuntimeSession {
                 return Err("session action is unavailable while a turn is waiting".to_string());
             }
         }
+=======
+        self.model
+            .snapshot(self.revision, self.has_persisted_progress, events)
+    }
+
+    pub fn dispatch(&mut self, action: SessionAction) -> Result<String, String> {
+        #[cfg(feature = "editor-debug")]
+        if let SessionAction::DebugInput { name } = &action {
+            let response = self.model.apply_debug_input_name_json(name)?;
+            self.revision = self.next_revision()?;
+            return Ok(response);
+        }
+        let snapshot = self.dispatch_typed(action)?;
+        puzzle_presentation_json::to_string(&snapshot)
+            .map_err(|error| format!("snapshot JSON could not be serialized: {error}"))
+    }
+
+    pub fn dispatch_typed(
+        &mut self,
+        action: SessionAction,
+    ) -> Result<RuntimeSessionSnapshot, String> {
+        if self.model.is_waiting() {
+            if let SessionAction::Input { name } = &action {
+                if !self.model.has_input_name(name) {
+                    return Err(format!("unknown input: {name}"));
+                }
+                if self.model.queues_input_while_waiting() {
+                    self.queued_input = Some(name.clone());
+                    self.revision = self.next_revision()?;
+                }
+                return Ok(self.snapshot());
+            }
+            if !matches!(
+                &action,
+                SessionAction::Initialize
+                    | SessionAction::Snapshot
+                    | SessionAction::Resume
+                    | SessionAction::ComponentEvent { .. }
+            ) {
+                return Err("session action is unavailable while a turn is waiting".to_string());
+            }
+        }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
         if matches!(action, SessionAction::Initialize) {
             return Ok(self.response_snapshot());
@@ -306,9 +516,18 @@ impl RuntimeSession {
             return Ok(self.snapshot());
         }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let should_persist = !matches!(action, SessionAction::ChoiceMove { .. });
         match action {
             SessionAction::Initialize | SessionAction::Snapshot | SessionAction::Key { .. } => {
+=======
+        let should_persist = !matches!(
+            action,
+            SessionAction::DebugInput { .. } | SessionAction::ChoiceMove { .. }
+        );
+        match action {
+            SessionAction::Initialize | SessionAction::Snapshot => {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                 unreachable!("snapshot request returned above")
             }
             SessionAction::Resume => {
@@ -318,6 +537,12 @@ impl RuntimeSession {
                 {
                     self.model.apply_input_name(&input)?;
                 }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+            }
+            SessionAction::ComponentEvent { instance, event } => {
+                self.model.apply_component_event(&instance, &event)?;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             }
             SessionAction::Undo => {
                 self.model.undo();
@@ -339,6 +564,7 @@ impl RuntimeSession {
             }
             SessionAction::Input { name } => {
                 self.model.apply_input_name(&name)?;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             }
             SessionAction::ChoiceMove { direction } => {
                 let condition_context = self.scene_condition_context();
@@ -347,10 +573,33 @@ impl RuntimeSession {
             SessionAction::SceneAction { token } => {
                 let condition_context = self.scene_condition_context();
                 self.model.apply_scene_action(&token, condition_context)?;
+=======
+            }
+            SessionAction::ChoiceMove { direction } => {
+                self.model.apply_choice_move(direction)?;
+            }
+            SessionAction::ChoiceActivate { index } => {
+                self.model.apply_choice_activate(index)?;
+            }
+            #[cfg(feature = "editor-debug")]
+            SessionAction::DebugInput { .. } => {
+                return Err("debug input has an editor-specific JSON result".to_string());
+            }
+            #[cfg(not(feature = "editor-debug"))]
+            SessionAction::DebugInput { .. } => {
+                return Err("debug input is unavailable in the player runtime".to_string());
+            }
+            SessionAction::Command { name } => {
+                self.model.apply_command_name(&name)?;
+            }
+            SessionAction::SceneEffect { effect } => {
+                self.model.apply_scene_effect(&effect)?;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             }
         }
 
         self.revision = self.next_revision()?;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         if self.model.take_progress_clear_request() {
             self.request_progress_persistence(RuntimeProgressPersistenceOperation::Delete)?;
         } else if should_persist {
@@ -368,6 +617,12 @@ impl RuntimeSession {
         let mut development = self.development_snapshot_with_events(&player.presentation_events);
         development.player = player;
         Ok(development)
+=======
+        if should_persist {
+            self.refresh_progress_save_request()?;
+        }
+        Ok(self.response_snapshot())
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     pub fn dispatch_json(&mut self, action_json: &str) -> Result<String, String> {
@@ -376,6 +631,7 @@ impl RuntimeSession {
         self.dispatch(action)
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     #[cfg(feature = "editor-debug")]
     pub fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String> {
         let dispatch = self.apply_debug_input_name(input_name)?;
@@ -401,6 +657,13 @@ impl RuntimeSession {
     }
 
     #[cfg(feature = "editor-debug")]
+=======
+    #[cfg(feature = "editor-debug")]
+    pub fn apply_debug_input_name_json(&mut self, input_name: &str) -> Result<String, String> {
+        self.model.apply_debug_input_name_json(input_name)
+    }
+
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     pub fn set_current_state_json(
         &mut self,
         state_json: &str,
@@ -409,6 +672,15 @@ impl RuntimeSession {
     ) -> Result<(), String> {
         self.model
             .set_current_state_json(state_json, level_index, materialize_level_start)
+    }
+
+    pub fn renderer_state_json(&self) -> Result<String, String> {
+        let state = self
+            .model
+            .renderer_state()
+            .ok_or_else(|| "runtime model does not expose a 2D renderer state".to_string())?;
+        puzzle_presentation_json::renderer_to_string(&state)
+            .map_err(|error| format!("renderer state could not be serialized: {error}"))
     }
 
     pub fn progress_save_json(&self) -> String {
@@ -435,7 +707,11 @@ impl RuntimeSession {
         self.pending_progress_save.clone()
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     pub fn confirm_progress_persistence_applied(&mut self, request_id: u32) -> Result<(), String> {
+=======
+    pub fn confirm_progress_save_written(&mut self, request_id: u32) -> Result<(), String> {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let Some(request) = &self.pending_progress_save else {
             return Err("progress save acknowledgement has no pending request".to_string());
         };
@@ -445,6 +721,7 @@ impl RuntimeSession {
                 request.request_id
             ));
         }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         self.has_persisted_progress = matches!(
             request.operation,
             RuntimeProgressPersistenceOperation::Write { .. }
@@ -453,6 +730,18 @@ impl RuntimeSession {
         Ok(())
     }
 
+=======
+        self.pending_progress_save = None;
+        self.has_persisted_progress = true;
+        Ok(())
+    }
+
+    pub fn confirm_progress_save_cleared(&mut self) {
+        self.pending_progress_save = None;
+        self.has_persisted_progress = false;
+    }
+
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     pub fn solver_session_2d(&self) -> Option<(LoadedGame, GameSession)> {
         self.model.solver_session_2d()
     }
@@ -476,6 +765,7 @@ impl RuntimeSession {
             return Ok(());
         }
         self.last_progress_save = save.clone();
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         self.request_progress_persistence(RuntimeProgressPersistenceOperation::Write {
             save_json: serde_json::to_string(&save)
                 .expect("progress save request JSON should serialize"),
@@ -486,13 +776,20 @@ impl RuntimeSession {
         &mut self,
         operation: RuntimeProgressPersistenceOperation,
     ) -> Result<(), String> {
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let request_id = self.next_progress_request_id.max(1);
         self.next_progress_request_id = request_id
             .checked_add(1)
             .ok_or_else(|| "progress save request counter exhausted".to_string())?;
         self.pending_progress_save = Some(RuntimeProgressSaveRequest {
             request_id,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             operation,
+=======
+            save_json: serde_json::to_string(&save)
+                .expect("progress save request JSON should serialize"),
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         });
         Ok(())
     }
@@ -526,6 +823,7 @@ fn standalone_session_model(
     for model in document.models.drain(..) {
         models.push(grid_session_model(model, document_root.as_deref())?);
     }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     if models.len() == 1 {
         return Ok(models.pop().expect("single document model was checked"));
     }
@@ -546,12 +844,17 @@ fn grid_session_model(
             prioritize_document_root(&mut loaded, document_root);
             let theme = runtime_theme(&loaded.theme)?;
             let audio_catalog = Arc::new(compile_audio_catalog(&loaded.sounds)?);
+=======
+    match document.models.pop().expect("single model was checked") {
+        LoadedDocumentModel::Puzzle2d { game: loaded, .. } => {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             let session = GridGameSession::try_new(&loaded)
                 .map_err(|error| format!("failed to start initial level: {error:?}"))?;
             Ok(Box::new(GridSessionRuntime {
                 session,
                 loaded,
                 projection: CanvasProjection,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
                 theme,
                 audio_catalog,
             }))
@@ -566,6 +869,15 @@ fn grid_session_model(
             prioritize_document_root(&mut loaded, document_root);
             let theme = runtime_theme(&loaded.theme)?;
             let audio_catalog = Arc::new(compile_audio_catalog(&loaded.sounds)?);
+=======
+            }))
+        }
+        LoadedDocumentModel::Puzzle3d {
+            game: loaded,
+            presentation,
+            ..
+        } => {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             let resources = puzzle_lang::runtime_puzzle3_resources(&loaded, &presentation)
                 .map_err(|error| {
                     format!("failed to materialize Puzzle3 runtime view: {error:?}")
@@ -576,6 +888,7 @@ fn grid_session_model(
                 session,
                 loaded,
                 projection: SpatialProjection { resources },
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
                 theme,
                 audio_catalog,
             }))
@@ -900,6 +1213,10 @@ impl StandaloneSessionModel for DocumentSessionRuntime {
             .filter_map(|model| model.solver_session_2d());
         let session = sessions.next()?;
         sessions.next().is_none().then_some(session)
+=======
+            }))
+        }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 }
 
@@ -912,6 +1229,7 @@ where
     fn snapshot(
         &self,
         revision: u64,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         condition_context: SceneConditionContext,
         presentation_events: &[RuntimePresentationEvent],
     ) -> RuntimeDevelopmentSessionSnapshot {
@@ -965,11 +1283,55 @@ where
             selected_level_index: self.session.selected_level_index(),
             inputs: inputs(&self.loaded),
             viewport_sources: projected.development_viewport_sources,
+=======
+        has_progress_save: bool,
+        presentation_events: &[RuntimePresentationEvent],
+    ) -> RuntimeSessionSnapshot {
+        let busy = self.session.is_waiting();
+        let projected = self.projection.snapshot_grid(&self.loaded, &self.session);
+        let surface = surface_snapshot(
+            &self.loaded,
+            &self.session,
+            projected.scene_layers.clone(),
+            has_progress_save,
+        );
+        let solver_state = self.projection.solver_state(self.session.state());
+        RuntimeSessionSnapshot {
+            revision,
+            has_progress_save,
+            sounds: sounds_snapshot(&self.loaded),
+            theme: theme_snapshot(&self.loaded.theme),
+            default_wait_ms: self.loaded.default_wait_ms,
+            input_buffer: input_buffer_settings(&self.loaded),
+            animation: animation_settings(&self.loaded),
+            presentation_events: presentation_events.to_vec(),
+            level_index: self.session.active_level_index(),
+            level_count: self.loaded.levels.len(),
+            levels: level_records(&self.loaded, &self.session),
+            scene: projected.scene,
+            accepts_model_input: self.session.accepts_model_input(&self.loaded),
+            game_state: ordered_scene_values(self.session.session_values()),
+            scene_state: scene_state(self.session.scene_state()),
+            scene_puzzles: scene_puzzles(self.session.scene_state()),
+            scene_puzzle_state: projected.scene_puzzle_state,
+            puzzle3_authoring_resources: self
+                .projection
+                .puzzle3_authoring_resources(&self.loaded),
+            surface,
+            solver_state,
+            selected_level_index: self.session.selected_level_index(),
+            busy,
+            can_undo: self.session.can_undo(),
+            can_redo: self.session.can_redo(),
+            inputs: inputs(&self.loaded),
+            scenes: self.loaded.scenes.clone(),
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         }
     }
 
     fn take_presentation_events(&mut self) -> Vec<RuntimePresentationEvent> {
         puzzle_presentation::resolve_presentation_events(
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             presentation_events_contract::<D>(&self.session.take_presentation_events(), |event| {
                 resolve_audio_command(&self.audio_catalog, event)
             })
@@ -981,6 +1343,12 @@ where
 
     fn audio_catalog(&self) -> Arc<AudioAssetCatalog> {
         Arc::clone(&self.audio_catalog)
+=======
+            presentation_events_contract::<D>(&self.session.take_presentation_events()),
+            &runtime_visual_order(&self.loaded.visuals.order),
+        )
+        .expect("validated presentation animation channels must resolve")
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     fn is_waiting(&self) -> bool {
@@ -1013,6 +1381,7 @@ where
             .map_err(|error| format!("{error:?}"))
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn apply_choice_move(
         &mut self,
         direction: RuntimeChoiceDirection,
@@ -1030,6 +1399,17 @@ where
     ) -> Result<(), String> {
         self.session
             .apply_scene_action(&self.loaded, token, condition_context)
+=======
+    fn apply_choice_move(&mut self, direction: RuntimeChoiceDirection) -> Result<(), String> {
+        self.session
+            .apply_choice_move(&self.loaded, direction)
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    fn apply_choice_activate(&mut self, index: Option<usize>) -> Result<(), String> {
+        self.session
+            .apply_choice_activate(&self.loaded, index)
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             .map_err(|error| format!("{error:?}"))
     }
 
@@ -1046,11 +1426,19 @@ where
             .map_err(|error| format!("{error:?}"))?;
         let debug = self.session.last_transition_trace().cloned();
         let presentation_events = self.take_presentation_events();
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         Ok(RuntimeDebugDispatch {
             snapshot: self
                 .snapshot(0, condition_context, &presentation_events)
                 .player,
             debug: debug_transition_value_grid(&self.loaded, debug.as_ref()),
+=======
+        Ok(json!({
+            "snapshot": puzzle_presentation_json::to_value(
+                &self.snapshot(0, false, &presentation_events)
+            ).expect("debug snapshot JSON should serialize"),
+            "debug": debug_transition_value_grid(&self.loaded, debug.as_ref()),
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         })
     }
 
@@ -1119,14 +1507,56 @@ where
             .map_err(|error| format!("{error:?}"))
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn take_progress_clear_request(&mut self) -> bool {
         self.session.take_progress_clear_request()
+=======
+    fn resolve_scene_presentation(
+        &self,
+        scene_name: &str,
+        state_override: &HashMap<String, SceneValue>,
+        has_progress_save: bool,
+    ) -> Result<RuntimeResolvedScene, String> {
+        let definition = self
+            .loaded
+            .scenes
+            .iter()
+            .find(|definition| definition.name == scene_name)
+            .ok_or_else(|| format!("unknown scene presentation: {scene_name}"))?;
+        let instance = self
+            .session
+            .surface_state()
+            .components()
+            .iter()
+            .find(|component| component.definition == scene_name);
+        let instance_id = instance.map_or(scene_name, |component| component.id.as_str());
+        let properties = instance
+            .map(|component| &component.properties)
+            .cloned()
+            .unwrap_or_default();
+        resolved_scene_definition(
+            &self.loaded,
+            &self.session,
+            instance_id,
+            definition,
+            &properties,
+            has_progress_save,
+            state_override,
+        )
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     fn solver_session_2d(&self) -> Option<(LoadedGame, GameSession)> {
         self.projection
             .solver_session_2d(&self.loaded, &self.session)
     }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+
+    fn renderer_state(&self) -> Option<RuntimeRendererState> {
+        self.projection.renderer_state(&self.loaded, &self.session)
+    }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 impl GridSessionProjection<2, Size2> for CanvasProjection {
@@ -1147,7 +1577,15 @@ impl GridSessionProjection<2, Size2> for CanvasProjection {
         session: &GridGameSession<2, Size2>,
         theme: &RuntimeTheme,
     ) -> ProjectedGridSnapshot {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         viewport_sources_2d(loaded, session, theme)
+=======
+        ProjectedGridSnapshot {
+            scene: focused_scene(loaded, session),
+            scene_puzzle_state: scene_puzzle_states(loaded, session),
+            scene_layers: scene_layers(loaded, session),
+        }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     fn solver_state(&self, state: &GridState<2, Size2>) -> SolverStateSnapshot {
@@ -1161,6 +1599,22 @@ impl GridSessionProjection<2, Size2> for CanvasProjection {
     ) -> Option<(LoadedGame, GameSession)> {
         Some((loaded.clone(), session.clone()))
     }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+
+    fn renderer_state(
+        &self,
+        loaded: &LoadedGame,
+        session: &GameSession,
+    ) -> Option<RuntimeRendererState> {
+        Some(RuntimeRendererState::TwoD(scene_snapshot_for_state(
+            loaded,
+            session.state(),
+            Some(session.current_level(loaded)),
+            scene_resources(loaded, session.surface_state().focused_component()),
+        )))
+    }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 impl GridSessionProjection<3, Size3> for SpatialProjection {
@@ -1181,14 +1635,82 @@ impl GridSessionProjection<3, Size3> for SpatialProjection {
         session: &GridGameSession<3, Size3>,
         theme: &RuntimeTheme,
     ) -> ProjectedGridSnapshot {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         viewport_sources_3d(loaded, session, &self.resources, theme)
+=======
+        let scene_puzzle_state = spatial_scene_puzzle_states(loaded, session, &self.resources);
+        let focused_scene = session.surface_state().focused_component();
+        let scene = session
+            .scene_state()
+            .and_then(|state| state.puzzles.values().next())
+            .map(|world| {
+                RuntimeRendererState::ThreeD(spatial_world_snapshot(
+                    loaded,
+                    focused_scene,
+                    world,
+                    &self.resources,
+                ))
+            });
+        let scene_layers = session
+            .surface_state()
+            .components()
+            .iter()
+            .filter(|component| {
+                loaded
+                    .scenes
+                    .iter()
+                    .any(|definition| definition.name == component.definition)
+            })
+            .map(|component| {
+                let name = &component.definition;
+                let state = session.scene_state_for(&component.id);
+                let projected =
+                    state
+                        .and_then(|state| state.puzzles.values().next())
+                        .map(|world| {
+                            RuntimeRendererState::ThreeD(spatial_world_snapshot(
+                                loaded,
+                                name,
+                                world,
+                                &self.resources,
+                            ))
+                        });
+                ProjectedSceneLayer {
+                    id: component.id.clone(),
+                    projection: RuntimeAuthoredComponentProjection {
+                        name: name.clone(),
+                        focused: component.id == focused_scene,
+                        choice_cursor: (component.id == focused_scene)
+                            .then(|| session.focused_choice_cursor(loaded))
+                            .flatten(),
+                        scene: projected,
+                        scene_state: scene_state(state),
+                        scene_puzzles: scene_puzzles(state),
+                    },
+                }
+            })
+            .collect();
+        ProjectedGridSnapshot {
+            scene,
+            scene_puzzle_state,
+            scene_layers,
+        }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     fn solver_state(&self, state: &GridState<3, Size3>) -> SolverStateSnapshot {
         SolverStateSnapshot::from_state3(state)
     }
+
+    fn puzzle3_authoring_resources(
+        &self,
+        _loaded: &LoadedGridGame<3, Size3>,
+    ) -> Option<RuntimePuzzle3Resources> {
+        Some(self.resources.clone())
+    }
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 fn viewport_sources_3d(
     loaded: &LoadedGridGame<3, Size3>,
     session: &GridGameSession<3, Size3>,
@@ -1237,6 +1759,61 @@ fn viewport_sources_3d(
         development_viewport_sources,
         viewport_errors: errors,
     }
+=======
+fn spatial_scene_puzzle_states(
+    loaded: &LoadedGridGame<3, Size3>,
+    session: &GridGameSession<3, Size3>,
+    resources: &RuntimePuzzle3Resources,
+) -> BTreeMap<String, RuntimeRendererState> {
+    let Some(state) = session.scene_state() else {
+        return BTreeMap::new();
+    };
+    let entries = state
+        .puzzles
+        .iter()
+        .map(|(name, world)| {
+            (
+                name.clone(),
+                RuntimeRendererState::ThreeD(spatial_world_snapshot(
+                    loaded,
+                    session.surface_state().focused_component(),
+                    world,
+                    resources,
+                )),
+            )
+        })
+        .collect();
+    entries
+}
+
+fn spatial_world_snapshot(
+    loaded: &LoadedGridGame<3, Size3>,
+    scene_name: &str,
+    world: &puzzle_play::GridWorldInstanceState<3, Size3>,
+    resources: &RuntimePuzzle3Resources,
+) -> RuntimePuzzle3Snapshot {
+    let level_index = world.active_level_index.unwrap_or(0);
+    let level = loaded.levels.get(level_index);
+    let cells = puzzle_lang::runtime_puzzle3_cells(&world.state, resources)
+        .expect("validated Puzzle3 visual order must resolve runtime cells");
+    let render_scene = resolved_render_scene_3d(resources, &cells)
+        .expect("validated Puzzle3 visuals must resolve a typed render scene");
+    RuntimePuzzle3Snapshot {
+        component: scene_name.to_string(),
+        level_index,
+        level_count: loaded.levels.len(),
+        level_name: level.map(|level| level.name.clone()),
+        size: puzzle_lang::runtime_puzzle3_size(world.state.size),
+        cells,
+        completed: loaded.is_goal_complete(&world.state),
+        has_next_level: level_index + 1 < loaded.levels.len(),
+        has_previous_level: level_index > 0,
+        render: resources.render.clone(),
+        render_scene,
+        animation_events: Vec::new(),
+        animation_batch_id: None,
+    }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 fn spatial_world_snapshot(
@@ -1282,6 +1859,7 @@ fn compiled_state_value(state: &PuzzleState) -> Value {
         .expect("runtime state snapshot serializes")
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 fn viewport_sources_2d(
     loaded: &LoadedGame,
     session: &GameSession,
@@ -1328,6 +1906,31 @@ fn viewport_sources_2d(
         development_viewport_sources: development_sources,
         viewport_errors: BTreeMap::new(),
     }
+=======
+fn focused_scene(loaded: &LoadedGame, session: &GameSession) -> Option<RuntimeRendererState> {
+    if let Some((state, level)) = scene_puzzle_state(
+        loaded,
+        session,
+        session.surface_state().focused_component(),
+        session.surface_state().focused_component(),
+    ) {
+        return Some(RuntimeRendererState::TwoD(scene_snapshot_for_state(
+            loaded,
+            state,
+            level,
+            scene_resources(loaded, session.surface_state().focused_component()),
+        )));
+    }
+    if !loaded.scenes.is_empty() {
+        return None;
+    }
+    Some(RuntimeRendererState::TwoD(scene_snapshot_for_state(
+        loaded,
+        session.state(),
+        Some(session.current_level(loaded)),
+        scene_resources(loaded, session.surface_state().focused_component()),
+    )))
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 fn scene_snapshot_for_state(
@@ -1335,9 +1938,14 @@ fn scene_snapshot_for_state(
     state: &PuzzleState,
     level: Option<&Level>,
     resources: Option<&puzzle_lang::SceneResources>,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     theme: &RuntimeTheme,
 ) -> (RuntimePuzzle2Snapshot, RuntimePuzzle2DevelopmentSnapshot) {
     scene_snapshot_for_materialized_state(loaded, state, level, resources, None, theme)
+=======
+) -> RuntimePuzzle2Snapshot {
+    scene_snapshot_for_materialized_state(loaded, state, level, resources, None)
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 fn scene_snapshot_for_materialized_state(
@@ -1346,8 +1954,12 @@ fn scene_snapshot_for_materialized_state(
     level: Option<&Level>,
     resources: Option<&puzzle_lang::SceneResources>,
     display_error: Option<String>,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     theme: &RuntimeTheme,
 ) -> (RuntimePuzzle2Snapshot, RuntimePuzzle2DevelopmentSnapshot) {
+=======
+) -> RuntimePuzzle2Snapshot {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     let mut cells = Vec::new();
     if display_error.is_none() {
         let visual_order = runtime_visual_order(&loaded.visuals.order);
@@ -1415,6 +2027,7 @@ fn scene_snapshot_for_materialized_state(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     let view = resolved_view_2d(loaded, state.width, state.height, &cells)
         .expect("validated 2D viewport settings must resolve");
     let player = RuntimePuzzle2Snapshot {
@@ -1424,23 +2037,40 @@ fn scene_snapshot_for_materialized_state(
         display_error,
     };
     let development = RuntimePuzzle2DevelopmentSnapshot {
+=======
+    RuntimePuzzle2Snapshot {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         width: state.width,
         height: state.height,
         layer_count: state.layer_count,
         settings: puzzle_settings(loaded),
         animation: animation_settings(loaded),
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         regions,
         resources: scene_resources_snapshot(resources),
         cells,
     };
     (player, development)
+=======
+        screen: screen_snapshot(loaded),
+        regions,
+        resources: scene_resources_snapshot(resources),
+        render_scene: resolved_render_scene_2d(loaded, &cells)
+            .expect("validated 2D visuals must resolve a typed render scene"),
+        cells,
+        display_error,
+    }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 fn resolved_render_scene_2d(
     loaded: &LoadedGame,
     cells: &[RuntimePuzzle2Cell],
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     view: puzzle_runtime_contract::RuntimeResolvedView2d,
     theme: &RuntimeTheme,
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 ) -> Result<RuntimeResolvedRenderScene, puzzle_presentation::PresentationError> {
     let mut transforms = HashMap::new();
     let mut clips = Vec::new();
@@ -1450,6 +2080,7 @@ fn resolved_render_scene_2d(
                 &["0".to_string()],
                 &BTreeMap::from([("0".to_string(), color.clone())]),
             )?],
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             VisualKind::Image { asset } => vec![RuntimeResolvedVisualFrame::RasterImage {
                 asset: asset.id.clone(),
                 sampling: match visual.sampling {
@@ -1458,6 +2089,10 @@ fn resolved_render_scene_2d(
                         RuntimeResolvedSampling::Pixelated
                     }
                 },
+=======
+            VisualKind::Image { source } => vec![RuntimeResolvedVisualFrame::ExternalImage {
+                source: source.clone(),
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             }],
             VisualKind::Ascii { colors } => {
                 let palette = colors
@@ -1523,6 +2158,16 @@ fn resolved_render_scene_2d(
                 height: u16::try_from(visual.fit.height).map_err(|_| {
                     puzzle_presentation::PresentationError::IncompatibleCompositionFrames
                 })?,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+                sampling: match visual.sampling {
+                    Some(LoadedVisualSampling::Smooth) => RuntimeResolvedSampling::Smooth,
+                    Some(LoadedVisualSampling::Pixelated) => RuntimeResolvedSampling::Pixelated,
+                    None if matches!(&visual.kind, VisualKind::Image { source } if !source.to_ascii_lowercase().ends_with(".png")) => RuntimeResolvedSampling::Smooth,
+                    None => RuntimeResolvedSampling::Pixelated,
+                },
+                raster: matches!(&visual.kind, VisualKind::Image { .. }),
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             },
         });
     }
@@ -1566,6 +2211,7 @@ fn resolved_render_scene_2d(
             group.1.push(id);
         }
     }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     let resolved_cells = cells
         .iter()
         .map(|cell| RuntimeResolvedRenderCell {
@@ -1582,6 +2228,8 @@ fn resolved_render_scene_2d(
     )
     .into_iter()
     .collect();
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     Ok(RuntimeResolvedRenderScene {
         clips,
         instances,
@@ -1595,8 +2243,19 @@ fn resolved_render_scene_2d(
                 }
             })
             .collect(),
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         cells: resolved_cells,
         decorations,
+=======
+        cells: cells
+            .iter()
+            .map(|cell| RuntimeResolvedRenderCell {
+                position: [i32::from(cell.x), i32::from(cell.y), 0],
+                render_order: cell.render_order,
+                object_ids: cell.layers.iter().map(|layer| layer.object_id).collect(),
+            })
+            .collect(),
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         render_priority_count: u16::try_from(loaded.visuals.order.priorities.len())
             .expect("validated render priority count must fit u16"),
         animation_duration_ms: loaded.animation.tween.interval_ms,
@@ -1622,6 +2281,7 @@ fn runtime_visual_transform(transform: &LoadedVisualTransform) -> RuntimeVisualT
             RuntimeVisualTransform::Flip { enabled: *enabled }
         }
     }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 }
 
 fn runtime_visual_space(space: LoadedVisualSpace) -> RuntimeVisualSpace {
@@ -1768,31 +2428,239 @@ fn surface_snapshot<const D: usize, Size: GridSize<D>>(
         .surface_state()
         .active_modal_component()
         .map(|component| component.id.as_str());
+=======
+}
+
+fn runtime_visual_space(space: LoadedVisualSpace) -> RuntimeVisualSpace {
+    match space {
+        LoadedVisualSpace::World => RuntimeVisualSpace::World,
+        LoadedVisualSpace::Local => RuntimeVisualSpace::Local,
+    }
+}
+
+fn resolved_render_scene_3d(
+    resources: &RuntimePuzzle3Resources,
+    cells: &[puzzle_runtime_contract::RuntimePuzzle3Cell],
+) -> Result<RuntimeResolvedRenderScene, puzzle_presentation::PresentationError> {
+    let clips = resources
+        .visuals
+        .iter()
+        .map(|(name, visual)| {
+            let frames = visual
+                .frames
+                .iter()
+                .map(|frame| resolve_voxel_frame(&frame.layers, &visual.palette))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(RuntimeResolvedVisualClip {
+                id: name.clone(),
+                frames,
+                frame_duration_ms: visual.frame_duration_ms.or_else(|| {
+                    visual.duration_ms.map(|duration| {
+                        duration
+                            / u64::try_from(visual.frames.len())
+                                .expect("validated frame count must fit u64")
+                    })
+                }),
+                layout: RuntimeResolvedVisualLayout {
+                    fit: RuntimeResolvedFitMode::Contain,
+                    width: 1,
+                    height: 1,
+                    sampling: RuntimeResolvedSampling::Pixelated,
+                    raster: false,
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, puzzle_presentation::PresentationError>>()?;
+    let objects = resources
+        .objects
+        .values()
+        .map(|object| (object.id, object))
+        .collect::<HashMap<_, _>>();
+    let mut instances = Vec::new();
+    let mut groups = Vec::new();
+    for cell in cells {
+        let mut grouped = BTreeMap::<u64, (RuntimeVisualComposition, Vec<u64>)>::new();
+        for object_ref in &cell.objects {
+            let object = objects.get(&object_ref.id).ok_or_else(|| {
+                puzzle_presentation::PresentationError::UnknownVisual(format!(
+                    "object:{}",
+                    object_ref.id
+                ))
+            })?;
+            let Some(visual_name) = &object.visual else {
+                continue;
+            };
+            let visual = resources.visuals.get(visual_name).ok_or_else(|| {
+                puzzle_presentation::PresentationError::UnknownVisual(visual_name.clone())
+            })?;
+            let id =
+                u64::try_from(instances.len() + 1).expect("render instance count must fit u64");
+            instances.push(RuntimeResolvedRenderInstance {
+                id,
+                object_id: Some(object_ref.id),
+                visual: visual_name.clone(),
+                cell: [
+                    i32::from(cell.position.x),
+                    i32::from(cell.position.y),
+                    i32::from(cell.position.z.unwrap_or(0)),
+                ],
+                transform: visual.spatial_affine,
+                opacity: 1.0,
+                frame_elapsed_ms: None,
+                playback: RuntimeResolvedPlayback::Loop,
+                render_order: object_ref.render_order,
+            });
+            let group = grouped
+                .entry(object_ref.render_order)
+                .or_insert((object.composition, Vec::new()));
+            if group.0 != object.composition {
+                return Err(puzzle_presentation::PresentationError::IncompatibleCompositionFrames);
+            }
+            group.1.push(id);
+        }
+        groups.extend(
+            grouped
+                .into_iter()
+                .map(
+                    |(render_order, (composition, instances))| RuntimeResolvedCompositionGroup {
+                        render_order,
+                        composition,
+                        instances,
+                    },
+                ),
+        );
+    }
+    Ok(RuntimeResolvedRenderScene {
+        clips,
+        instances,
+        composition_groups: groups,
+        cells: cells
+            .iter()
+            .map(|cell| RuntimeResolvedRenderCell {
+                position: [
+                    i32::from(cell.position.x),
+                    i32::from(cell.position.y),
+                    i32::from(cell.position.z.unwrap_or(0)),
+                ],
+                render_order: cell.render_order,
+                object_ids: cell.objects.iter().map(|object| object.id).collect(),
+            })
+            .collect(),
+        render_priority_count: u16::try_from(resources.order.priorities.len())
+            .expect("validated render priority count must fit u16"),
+        animation_duration_ms: resources.render.animation.tween.interval_ms,
+    })
+}
+
+fn runtime_visual_order(order: &puzzle_lang::VisualOrderDef) -> VisualOrderRef<'_> {
+    VisualOrderRef {
+        direction_priority: &order.direction_priority,
+        priorities: order
+            .priorities
+            .iter()
+            .map(|priority| VisualPriorityRef {
+                objects: &priority.objects,
+                animations: &priority.animations,
+                merge: priority.merge,
+            })
+            .collect(),
+    }
+}
+
+fn scene_layers(loaded: &LoadedGame, session: &GameSession) -> Vec<ProjectedSceneLayer> {
+    session
+        .surface_state()
+        .components()
+        .iter()
+        .filter(|component| {
+            loaded
+                .scenes
+                .iter()
+                .any(|definition| definition.name == component.definition)
+        })
+        .map(|component| {
+            let name = &component.definition;
+            let state = session.scene_state_for(&component.id);
+            let scene = scene_puzzle_state(loaded, session, &component.id, name).map(
+                |(puzzle_state, level)| {
+                    RuntimeRendererState::TwoD(scene_snapshot_for_state(
+                        loaded,
+                        puzzle_state,
+                        level,
+                        scene_resources(loaded, name),
+                    ))
+                },
+            );
+            ProjectedSceneLayer {
+                id: component.id.clone(),
+                projection: RuntimeAuthoredComponentProjection {
+                    name: name.clone(),
+                    focused: component.id == session.surface_state().focused_component(),
+                    choice_cursor: (component.id == session.surface_state().focused_component())
+                        .then(|| session.focused_choice_cursor(loaded))
+                        .flatten(),
+                    scene,
+                    scene_state: scene_state(state),
+                    scene_puzzles: scene_puzzles(state),
+                },
+            }
+        })
+        .collect()
+}
+
+fn surface_snapshot<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+    session: &GridGameSession<D, Size>,
+    authored_components: Vec<ProjectedSceneLayer>,
+    has_progress_save: bool,
+) -> RuntimeSurface {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     let components = session
         .surface_state()
         .components()
         .iter()
         .filter(|component| component.visibility == puzzle_lang::ComponentVisibility::Visible)
         .map(|component| {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+            let authored_projection = authored_components
+                .iter()
+                .find(|candidate| candidate.id == component.id)
+                .map(|candidate| candidate.projection.clone());
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             let presentation = match resolved_surface_component_definition(
                 loaded,
                 session,
                 &component.id,
                 &component.definition,
                 &component.properties,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
                 condition_context,
                 component.id == session.surface_state().focused_component(),
                 active_modal == Some(component.id.as_str()),
+=======
+                has_progress_save,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             ) {
                 Ok(scene) => RuntimeComponentPresentation::Ready(scene),
                 Err(error) => RuntimeComponentPresentation::Error { error },
             };
             RuntimeSurfaceComponent {
                 id: component.id.clone(),
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
                 placement: component.placement,
                 visibility: component.visibility,
                 modal: component.modal,
                 await_event: component.awaited_event.clone(),
+=======
+                definition: component.definition.clone(),
+                placement: component.placement,
+                visibility: component.visibility,
+                modal: component.modal,
+                properties: ordered_scene_values(&component.properties),
+                await_event: component.awaited_event.clone(),
+                authored_projection,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                 presentation,
             }
         })
@@ -1804,6 +2672,7 @@ fn surface_snapshot<const D: usize, Size: GridSize<D>>(
     }
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 fn referenced_viewport_sources(surface: &RuntimeSurface) -> BTreeSet<RuntimeViewportSourceId> {
     fn collect(
         components: &[RuntimeResolvedSceneComponent],
@@ -1832,10 +2701,304 @@ fn referenced_viewport_sources(surface: &RuntimeSurface) -> BTreeSet<RuntimeView
         if let RuntimeComponentPresentation::Ready(scene) = &component.presentation {
             collect(&scene.components, &mut sources);
         }
+=======
+fn resolved_surface_component_definition<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+    session: &GridGameSession<D, Size>,
+    instance_id: &str,
+    definition_name: &str,
+    properties: &HashMap<String, SceneValue>,
+    has_progress_save: bool,
+) -> Result<RuntimeResolvedScene, String> {
+    if definition_name == STANDARD_MESSAGE_COMPONENT {
+        let text = properties
+            .get(STANDARD_MESSAGE_TEXT_PROPERTY)
+            .ok_or_else(|| {
+                format!(
+                    "component `{instance_id}` is missing required `{STANDARD_MESSAGE_TEXT_PROPERTY}` property"
+                )
+            })?;
+        return Ok(RuntimeResolvedScene {
+            name: STANDARD_MESSAGE_COMPONENT.to_string(),
+            layout: SceneLayoutDef::default(),
+            events: Some(BTreeMap::from([(
+                STANDARD_MESSAGE_DISMISS_EVENT.to_string(),
+                RuntimeResolvedEventBinding {
+                    pointer: true,
+                    keys: "input".to_string(),
+                },
+            )])),
+            keys: None,
+            components: vec![RuntimeResolvedSceneComponent::Text {
+                role: SceneTextRoleDef::Body,
+                value: scene_value_to_string(text),
+                text_align: None,
+                layout: SceneLayoutDef::default(),
+            }],
+        });
+    }
+
+    let definition = loaded
+        .scenes
+        .iter()
+        .find(|definition| definition.name == definition_name)
+        .ok_or_else(|| format!("unknown presented component definition: {definition_name}"))?;
+    resolved_scene_definition(
+        loaded,
+        session,
+        instance_id,
+        definition,
+        properties,
+        has_progress_save,
+        &HashMap::new(),
+    )
+}
+
+fn resolved_scene_definition<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+    session: &GridGameSession<D, Size>,
+    instance_id: &str,
+    definition: &SceneDef,
+    properties: &HashMap<String, SceneValue>,
+    has_progress_save: bool,
+    state_override: &HashMap<String, SceneValue>,
+) -> Result<RuntimeResolvedScene, String> {
+    let values = scene_presentation_values(
+        session,
+        instance_id,
+        properties,
+        has_progress_save,
+        state_override,
+    );
+    Ok(RuntimeResolvedScene {
+        name: definition.name.clone(),
+        layout: definition.layout.clone(),
+        components: resolved_scene_components(loaded, session, &definition.components, &values)?,
+        keys: Some(
+            definition
+                .key_bindings
+                .iter()
+                .map(|binding| RuntimeKeyBinding {
+                    effect: binding.effect.clone(),
+                    keys: binding.keys.iter().map(key_trigger_name).collect(),
+                })
+                .collect(),
+        ),
+        events: None,
+    })
+}
+
+fn scene_presentation_values<const D: usize, Size: GridSize<D>>(
+    session: &GridGameSession<D, Size>,
+    instance_id: &str,
+    properties: &HashMap<String, SceneValue>,
+    has_progress_save: bool,
+    state_override: &HashMap<String, SceneValue>,
+) -> HashMap<String, SceneValue> {
+    let mut values = HashMap::new();
+    for (name, value) in session.session_values() {
+        values.insert(name.clone(), value.clone());
+        values.insert(format!("game.{name}"), value.clone());
+        values.insert(format!("gameState.{name}"), value.clone());
+    }
+    let has_progress_save = SceneValue::Bool(has_progress_save);
+    values.insert("has_progress_save".to_string(), has_progress_save.clone());
+    values.insert("game.has_progress_save".to_string(), has_progress_save);
+    values.insert(
+        "levelIndex".to_string(),
+        SceneValue::Int(session.level_index() as i64),
+    );
+    values.insert("canUndo".to_string(), SceneValue::Bool(session.can_undo()));
+    values.insert("canRedo".to_string(), SceneValue::Bool(session.can_redo()));
+    if let Some(state) = session.scene_state_for(instance_id) {
+        for (name, value) in &state.values {
+            values.insert(name.clone(), value.clone());
+            values.insert(format!("scene.{name}"), value.clone());
+            values.insert(format!("sceneState.{name}"), value.clone());
+        }
+    }
+    for (name, value) in state_override {
+        values.insert(name.clone(), value.clone());
+        values.insert(format!("scene.{name}"), value.clone());
+        values.insert(format!("sceneState.{name}"), value.clone());
+    }
+    for (name, value) in properties {
+        values.insert(name.clone(), value.clone());
+        values.insert(format!("properties.{name}"), value.clone());
+    }
+    values
+}
+
+fn resolved_scene_components<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+    session: &GridGameSession<D, Size>,
+    components: &[SceneComponent],
+    values: &HashMap<String, SceneValue>,
+) -> Result<Vec<RuntimeResolvedSceneComponent>, String> {
+    components
+        .iter()
+        .map(|component| resolved_scene_component(loaded, session, component, values))
+        .collect()
+}
+
+fn resolved_scene_component<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+    session: &GridGameSession<D, Size>,
+    component: &SceneComponent,
+    values: &HashMap<String, SceneValue>,
+) -> Result<RuntimeResolvedSceneComponent, String> {
+    let resolve = |expr: &SceneExpr| session.resolve_scene_expression(loaded, expr, values);
+    Ok(match component {
+        SceneComponent::Viewport(viewport) => RuntimeResolvedSceneComponent::Viewport {
+            dimension: match viewport.projection {
+                ViewportProjectionDef::TwoD => RuntimeViewportDimension::TwoD,
+                ViewportProjectionDef::ThreeD => RuntimeViewportDimension::ThreeD,
+            },
+            source: viewport.source.clone(),
+            layout: viewport.layout.clone(),
+        },
+        SceneComponent::Frame(frame) => RuntimeResolvedSceneComponent::Frame {
+            kind: frame.kind.clone(),
+            source: frame.source.clone(),
+            layout: frame.layout.clone(),
+        },
+        SceneComponent::Text(text) => {
+            let value = match &text.content {
+                SceneTextContent::Literal(value) => value.clone(),
+                SceneTextContent::Path(path) => {
+                    scene_value_to_string(&resolve(&SceneExpr::Path(path.clone()))?)
+                }
+                SceneTextContent::Expr(expr) => scene_value_to_string(&resolve(expr)?),
+            };
+            RuntimeResolvedSceneComponent::Text {
+                role: text.role,
+                value,
+                text_align: text.text_align,
+                layout: text.layout.clone(),
+            }
+        }
+        SceneComponent::Button(button) => RuntimeResolvedSceneComponent::Button {
+            label: scene_value_to_string(&resolve(&button.label)?),
+            effect: button.effect.clone(),
+            layout: button.layout.clone(),
+        },
+        SceneComponent::Choice(choice) => RuntimeResolvedSceneComponent::Choice {
+            label: scene_value_to_string(&resolve(&choice.label)?),
+            effect: choice.effect.clone(),
+            layout: choice.layout.clone(),
+        },
+        SceneComponent::Row(container) => RuntimeResolvedSceneComponent::Row {
+            layout: container.layout.clone(),
+            children: resolved_scene_components(loaded, session, &container.children, values)?,
+        },
+        SceneComponent::Column(container) => RuntimeResolvedSceneComponent::Column {
+            layout: container.layout.clone(),
+            children: resolved_scene_components(loaded, session, &container.children, values)?,
+        },
+        SceneComponent::Box(container) => RuntimeResolvedSceneComponent::Box {
+            layout: container.layout.clone(),
+            children: resolved_scene_components(loaded, session, &container.children, values)?,
+        },
+        SceneComponent::Conditional(conditional) => {
+            let condition = resolve(&conditional.condition)?;
+            let SceneValue::Bool(condition) = condition else {
+                return Err(format!(
+                    "scene conditional resolved to a non-boolean value: {condition:?}"
+                ));
+            };
+            RuntimeResolvedSceneComponent::Conditional {
+                condition,
+                children: resolved_scene_components(
+                    loaded,
+                    session,
+                    &conditional.children,
+                    values,
+                )?,
+                else_children: resolved_scene_components(
+                    loaded,
+                    session,
+                    &conditional.else_children,
+                    values,
+                )?,
+            }
+        }
+    })
+}
+
+fn scene_values_from_json(value: &Value) -> Result<HashMap<String, SceneValue>, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "scene preview state must be a JSON object".to_string())?;
+    object
+        .iter()
+        .map(|(name, value)| {
+            let value = match value {
+                Value::Bool(value) => SceneValue::Bool(*value),
+                Value::Number(value) => value
+                    .as_i64()
+                    .map(SceneValue::Int)
+                    .ok_or_else(|| format!("scene preview value `{name}` must be an integer"))?,
+                Value::String(value) => SceneValue::Text(value.clone()),
+                _ => {
+                    return Err(format!(
+                        "scene preview value `{name}` must be a boolean, integer, or string"
+                    ));
+                }
+            };
+            Ok((name.clone(), value))
+        })
+        .collect()
+}
+
+fn scene_puzzles<const D: usize, Size: GridSize<D>>(
+    state: Option<&puzzle_play::GridSceneRuntimeState<D, Size>>,
+) -> Vec<String> {
+    let Some(state) = state else {
+        return Vec::new();
+    };
+    let mut names = state.puzzles.keys().collect::<Vec<_>>();
+    names.sort();
+    names.into_iter().map(|name| name.clone()).collect()
+}
+
+fn scene_puzzle_states(
+    loaded: &LoadedGame,
+    session: &GameSession,
+) -> BTreeMap<String, RuntimeRendererState> {
+    let Some(state) = session.scene_state() else {
+        return BTreeMap::new();
+    };
+    let mut entries = BTreeMap::new();
+    let mut names = state.puzzles.keys().collect::<Vec<_>>();
+    names.sort();
+    for name in names {
+        let Some(puzzle) = state.puzzles.get(name) else {
+            continue;
+        };
+        let level = puzzle
+            .active_level_index
+            .and_then(|index| loaded.levels.get(index));
+        let entry = scene_snapshot_for_state(
+            loaded,
+            &puzzle.state,
+            level,
+            scene_resources(loaded, session.surface_state().focused_component()),
+        );
+        entries.insert(name.clone(), RuntimeRendererState::TwoD(entry));
+    }
+    entries
+}
+
+fn key_trigger_name(key: &KeyTrigger) -> String {
+    match key {
+        KeyTrigger::Char(ch) => ch.to_string(),
+        KeyTrigger::Named(name) => name.clone(),
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
     sources
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 fn resolved_surface_component_definition<const D: usize, Size: GridSize<D>>(
     loaded: &LoadedGridGame<D, Size>,
     session: &GridGameSession<D, Size>,
@@ -1894,6 +3057,32 @@ fn resolved_surface_component_definition<const D: usize, Size: GridSize<D>>(
         &HashMap::new(),
         node_actions_enabled,
     )
+=======
+fn scene_puzzle_state<'a>(
+    loaded: &'a LoadedGame,
+    session: &'a GameSession,
+    instance_id: &str,
+    definition_name: &str,
+) -> Option<(&'a PuzzleState, Option<&'a Level>)> {
+    let scene = loaded
+        .scenes
+        .iter()
+        .find(|scene| scene.name == definition_name)?;
+    let state = session.scene_state_for(instance_id)?;
+    let puzzle = if let Some(rule) = &scene.puzzle_rule {
+        rule.target
+            .split('.')
+            .next_back()
+            .and_then(|puzzle_name| state.puzzles.get(puzzle_name))
+    } else {
+        first_puzzle_component(&scene.components)
+            .and_then(|puzzle_name| state.puzzles.get(puzzle_name))
+    }?;
+    let level = puzzle
+        .active_level_index
+        .and_then(|index| loaded.levels.get(index));
+    Some((&puzzle.state, level))
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 fn resolved_scene_definition<const D: usize, Size: GridSize<D>>(
@@ -2396,6 +3585,7 @@ fn object_id_by_name(loaded: &LoadedGame, object_name: &str) -> Option<ObjectId>
         .find_map(|(id, label)| (label == object_name).then_some(*id))
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 fn compile_audio_catalog(sounds: &puzzle_lang::SoundsDef) -> Result<AudioAssetCatalog, String> {
     AudioAssetCatalog::compile(
         sounds
@@ -2523,10 +3713,99 @@ fn resolved_view_2d(
 ) -> Result<puzzle_runtime_contract::RuntimeResolvedView2d, puzzle_presentation::PresentationError>
 {
     let focus_objects = loaded
+=======
+fn sounds_snapshot<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+) -> RuntimeSounds {
+    let sounds = runtime_sounds_def(&loaded.sounds);
+    RuntimeSounds {
+        sfx: sounds
+            .sfx
+            .into_iter()
+            .map(|sound| RuntimeSfxSound {
+                name: sound.name,
+                seed: sound.seed,
+                type_target: sound.type_target,
+                volume: sound.volume,
+            })
+            .collect(),
+        music: sounds
+            .music
+            .into_iter()
+            .map(|sound| RuntimeMusicSound {
+                name: sound.name,
+                seed: sound.seed,
+                height: sound.height,
+                bars: sound.bars,
+                bpm: sound.bpm,
+                volume: sound.volume,
+            })
+            .collect(),
+    }
+}
+
+fn theme_snapshot(theme: &ThemeDef) -> RuntimeTheme {
+    let variables = theme
+        .variables
+        .iter()
+        .map(|variable| (variable.name.clone(), variable.value.clone()))
+        .collect();
+    RuntimeTheme {
+        name: theme.name.clone(),
+        variables,
+    }
+}
+
+fn input_buffer_settings<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+) -> RuntimeInputBufferSettings {
+    RuntimeInputBufferSettings {
+        queue_during_wait: loaded.input_buffer.queue_during_wait,
+        fast_forward_wait: loaded.input_buffer.fast_forward_wait,
+        min_wait_ms: loaded.input_buffer.min_wait_ms,
+    }
+}
+
+fn animation_settings<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+) -> RuntimeAnimationSettings {
+    RuntimeAnimationSettings {
+        tween: RuntimeTweenSettings {
+            enabled: loaded.animation.tween.enabled,
+            interval_ms: loaded.animation.tween.interval_ms,
+        },
+    }
+}
+
+fn puzzle_settings(loaded: &LoadedGame) -> RuntimePuzzle2Settings {
+    RuntimePuzzle2Settings {
+        render: RuntimeRender2d {},
+        grid: RuntimeGridRender2d {
+            visibility: loaded.render.grid.occupied_cells || loaded.render.grid.all_cells,
+            occupied_cells: loaded.render.grid.occupied_cells,
+            all_cells: loaded.render.grid.all_cells,
+        },
+        input_buffer: input_buffer_settings(loaded),
+        animation: animation_settings(loaded),
+    }
+}
+
+fn screen_snapshot(loaded: &LoadedGame) -> RuntimePuzzle2Screen {
+    let viewport_size = match loaded.screen.viewport_size {
+        ViewportSizeDef::Full => RuntimeViewportSize2d::Full,
+        ViewportSizeDef::Size { width, height } => RuntimeViewportSize2d::Size { width, height },
+    };
+    let viewport_mode = match loaded.screen.viewport_mode {
+        ViewportModeDef::Paged => RuntimeViewportMode2d::Paged,
+        ViewportModeDef::Centered => RuntimeViewportMode2d::Centered,
+    };
+    let viewport_focus_objects = loaded
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         .object_groups
         .get(&loaded.screen.viewport_focus)
         .cloned()
         .or_else(|| object_id_by_name(loaded, &loaded.screen.viewport_focus).map(|id| vec![id]))
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         .unwrap_or_default();
     let focus = cells.iter().find_map(|cell| {
         cell.layers
@@ -2547,6 +3826,18 @@ fn resolved_view_2d(
         ViewportModeDef::Centered => ViewMode2d::Centered,
     };
     resolve_view_2d([width, height], requested_size, mode, focus)
+=======
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| id.0)
+        .collect::<Vec<_>>();
+    RuntimePuzzle2Screen {
+        viewport_size,
+        viewport_focus: loaded.screen.viewport_focus.clone(),
+        viewport_focus_objects,
+        viewport_mode,
+    }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 fn inputs<const D: usize, Size: GridSize<D>>(
@@ -2559,7 +3850,13 @@ fn inputs<const D: usize, Size: GridSize<D>>(
         .map(|(id, name)| RuntimeInputBinding {
             id: id.0,
             name: name.clone(),
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             triggers: input_triggers(loaded, *id),
+=======
+            key: key_for_input(loaded, *id),
+            arrow: arrow_for_input(loaded, *id),
+            keys: key_triggers_for_input(loaded, *id),
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         })
         .collect()
 }
@@ -2775,6 +4072,7 @@ fn input_triggers<const D: usize, Size: GridSize<D>>(
     triggers
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 fn runtime_key_trigger(key: &KeyTrigger) -> RuntimeKeyTrigger {
     match key {
         KeyTrigger::Char(value) => RuntimeKeyTrigger::Character { value: *value },
@@ -2793,6 +4091,23 @@ fn runtime_key_trigger(key: &KeyTrigger) -> RuntimeKeyTrigger {
             }
         },
     }
+=======
+fn arrow_name(arrow: ArrowKey) -> &'static str {
+    match arrow {
+        ArrowKey::Up => "ArrowUp",
+        ArrowKey::Down => "ArrowDown",
+        ArrowKey::Left => "ArrowLeft",
+        ArrowKey::Right => "ArrowRight",
+    }
+}
+
+fn scene_state<const D: usize, Size: GridSize<D>>(
+    state: Option<&puzzle_play::GridSceneRuntimeState<D, Size>>,
+) -> BTreeMap<String, SceneValue> {
+    state
+        .map(|state| ordered_scene_values(&state.values))
+        .unwrap_or_default()
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 fn scene_resources<'a>(
@@ -2866,6 +4181,7 @@ fn level_records<const D: usize, Size: GridSize<D>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use puzzle_lang::ComponentPlacement;
     use serde_json::json;
 
     fn cell_has_object(cell: &Value, object: &str) -> bool {
@@ -2874,6 +4190,7 @@ mod tests {
             .is_some_and(|layers| layers.iter().any(|layer| layer["object"] == object))
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn projected_selected_choice(snapshot: &Value) -> &str {
         fn selected_label(components: &[Value]) -> Option<&str> {
             components.iter().find_map(|component| {
@@ -2906,11 +4223,26 @@ mod tests {
             .unwrap_or_else(|| {
                 panic!(
                     "focused choice component should project one selected node: {}",
+=======
+    fn projected_choice_cursor(snapshot: &Value) -> usize {
+        snapshot["surface"]["components"]
+            .as_array()
+            .and_then(|components| {
+                components
+                    .iter()
+                    .find_map(|component| component["choiceCursor"].as_u64())
+            })
+            .and_then(|cursor| usize::try_from(cursor).ok())
+            .unwrap_or_else(|| {
+                panic!(
+                    "focused choice component should project its cursor: {}",
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                     snapshot["surface"]
                 )
             })
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn projected_selected_action(snapshot: &Value) -> RuntimeSceneActionToken {
         fn selected_action(components: &[Value]) -> Option<RuntimeSceneActionToken> {
             components.iter().find_map(|component| {
@@ -3010,11 +4342,17 @@ mod tests {
         let mut development = runtime.development_snapshot_with_events(&player.presentation_events);
         development.player = player.clone();
         puzzle_presentation_json::to_value(&development).unwrap()
+=======
+    fn standalone_export(source: &str) -> Value {
+        let document = puzzle_lang::parse_game_for_path(source, "export_test.puzzle").unwrap();
+        serde_json::to_value(StandaloneRuntimeExport::new(document)).unwrap()
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     fn runtime_scene_fixture_source() -> &'static str {
         r#"
 const title = "Runtime Scene Fixture"
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 
 scene title {
 layout {
@@ -3025,6 +4363,8 @@ choice "Continue" -> goto playing
 }
 }
 }
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
 puzzle board {
 layers {
@@ -3068,6 +4408,19 @@ level "microban.2" {
 }
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+scene title {
+layout {
+heading title
+choice "New Game" -> goto playing("microban.1")
+if game.has_progress_save {
+choice "Continue" -> goto playing
+}
+}
+}
+
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 scene playing {
 layout {
 puzzle board = board
@@ -3086,6 +4439,7 @@ step board
             "typed_runtime_scene_fixture.puzzle",
         )
         .unwrap();
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 
         let initialized = runtime.dispatch_typed(SessionAction::Initialize).unwrap();
         assert_eq!(initialized.surface.focus, "title");
@@ -3130,6 +4484,111 @@ step board
             .expect("playing viewport source must be projected")
         else {
             panic!("fixture must project a 2D renderer scene");
+=======
+
+        let snapshot = runtime.dispatch_typed(SessionAction::Initialize).unwrap();
+
+        assert_eq!(snapshot.revision, 0);
+        assert_eq!(snapshot.level_count, 2);
+        assert!(!snapshot.surface.components.is_empty());
+        assert!(snapshot.scenes.iter().any(|scene| scene.name == "title"));
+        assert!(snapshot.scenes.iter().any(|scene| scene.name == "playing"));
+        let RuntimeRendererState::TwoD(scene) = snapshot
+            .scene
+            .as_ref()
+            .expect("initialized model scene must be projected")
+        else {
+            panic!("fixture must project a 2D renderer scene");
+        };
+        assert_eq!(
+            scene.render_scene.instances.len(),
+            scene
+                .render_scene
+                .composition_groups
+                .iter()
+                .map(|group| group.instances.len())
+                .sum::<usize>()
+        );
+        let json = puzzle_presentation_json::to_value(&snapshot).unwrap();
+        assert!(json["scene"]["renderScene"].is_object());
+    }
+
+    #[test]
+    fn snapshot_materializes_authored_visuals_as_typed_linear_rgba_clips() {
+        let source = r#"
+const title = typed_visual_scene
+puzzle default {
+layers {
+actor = Player
+}
+empty .
+rules {
+}
+levels {
+legend {
+P = Player
+}
+level "start" {
+P
+}
+}
+}
+visuals {
+visual Player {
+colors = #f00
+0
+}
+}
+"#;
+        let runtime = RuntimeSession::from_source(source, "typed_visual_scene.puzzle").unwrap();
+        let snapshot = runtime.snapshot();
+        let RuntimeRendererState::TwoD(scene) = snapshot.scene.unwrap() else {
+            panic!("fixture must project a 2D renderer scene");
+        };
+
+        assert_eq!(scene.render_scene.clips.len(), 1);
+        assert_eq!(scene.render_scene.instances.len(), 1);
+        let RuntimeResolvedVisualFrame::Pixels { pixels, .. } =
+            &scene.render_scene.clips[0].frames[0]
+        else {
+            panic!("authored ASCII visual must become a pixel clip");
+        };
+        assert_eq!(pixels[0].color.red, 1.0);
+        assert_eq!(pixels[0].color.green, 0.0);
+        assert_eq!(pixels[0].color.blue, 0.0);
+
+        let projected: serde_json::Value = serde_json::from_str(
+            &runtime
+                .renderer_state_json()
+                .expect("current state must project independently of the active surface"),
+        )
+        .expect("typed renderer state must serialize as JSON");
+        assert_eq!(projected["width"], 1);
+        assert_eq!(projected["height"], 1);
+        assert_eq!(
+            projected["renderScene"]["clips"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            projected["renderScene"]["instances"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn standalone_session_from_export_requires_runtime_loaded_document() {
+        let export = json!({
+            "source": "title invalid\nlevels {\nlegend {\nP = Player\n}\nP\n}\n",
+            "puzzlePath": "compiled_export.puzzle",
+        });
+
+        let error = match RuntimeSession::from_export_json(&export.to_string()) {
+            Ok(_) => panic!("export without runtimeLoadedDocument should be rejected"),
+            Err(error) => error,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         };
         assert_eq!(
             scene.render_scene.instances.len(),
@@ -3454,7 +4913,11 @@ step board
     #[test]
     fn snapshot_materializes_authored_visuals_as_typed_linear_rgba_clips() {
         let source = r#"
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 const title = typed_visual_scene
+=======
+const title = export_runtime_bundle
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 puzzle default {
 layers {
 actor = Player
@@ -3478,6 +4941,7 @@ colors = #f00
 }
 }
 "#;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let runtime = RuntimeSession::from_source(source, "typed_visual_scene.puzzle").unwrap();
         let snapshot = runtime.snapshot();
         let RuntimeRendererState::TwoD(scene) = snapshot
@@ -3487,8 +4951,18 @@ colors = #f00
             .expect("implicit playing viewport must be projected")
         else {
             panic!("fixture must project a 2D renderer scene");
+=======
+        let mut export = standalone_export(source);
+        export["source"] = json!("this is not puzzle syntax");
+        export["puzzlePath"] = json!("bad_source_path.puzzle");
+
+        let error = match RuntimeSession::from_export_json(&export.to_string()) {
+            Ok(_) => panic!("compiler fields must be rejected"),
+            Err(error) => error,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         };
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         assert_eq!(scene.render_scene.clips.len(), 1);
         assert_eq!(scene.render_scene.instances.len(), 1);
         let RuntimeResolvedVisualFrame::Pixels { pixels, .. } =
@@ -3499,6 +4973,35 @@ colors = #f00
         assert_eq!(pixels[0].color.red, 1.0);
         assert_eq!(pixels[0].color.green, 0.0);
         assert_eq!(pixels[0].color.blue, 0.0);
+=======
+    #[test]
+    fn standalone_session_from_export_rejects_unsupported_runtime_version() {
+        let mut export = standalone_export(runtime_scene_fixture_source());
+        export["runtimeLoadedDocument"]["version"] = json!(
+            STANDALONE_RUNTIME_EXPORT_VERSION
+                .checked_add(1)
+                .expect("test version remains in range")
+        );
+
+        let error = match RuntimeSession::from_export_json(&export.to_string()) {
+            Ok(_) => panic!("unsupported runtime version must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("unsupported runtimeLoadedDocument version"));
+    }
+
+    #[test]
+    fn standalone_session_from_export_rejects_dangling_program_reference() {
+        let mut export = standalone_export(runtime_scene_fixture_source());
+        export["runtimeLoadedDocument"]["document"]["models"][0]["Puzzle2d"]["game"]["levels"][0]
+            ["program"] = json!([{"Catalog": 999}, "Main"]);
+
+        let error = match RuntimeSession::from_export_json(&export.to_string()) {
+            Ok(_) => panic!("dangling program reference must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("invalid program reference"), "{error}");
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     #[test]
@@ -3530,7 +5033,12 @@ A
 }
 }
 "#;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let mut bridge = RuntimeSession::from_source(source, "export_test.puzzle").unwrap();
+=======
+        let export = standalone_export(source);
+        let mut bridge = RuntimeSession::from_export_json(&export.to_string()).unwrap();
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
         let waiting: Value = serde_json::from_str(
             &bridge
@@ -3664,6 +5172,75 @@ level "start" { A }
     }
 
     #[test]
+    fn runtime_session_owns_the_single_input_queued_during_a_wait() {
+        let source = r#"
+const title = queued_input_runtime
+puzzle default {
+input first
+input second
+layers { actor = A B C }
+empty .
+rules {
+if input == first {
+[ A ] -> [ C ]
+fall
+}
+if input == second {
+[ B ] -> [ A ]
+}
+}
+routine fall {
+[ C ] -> wait 100ms
+[ C ] -> [ B ]
+}
+levels {
+legend {
+A = A
+B = B
+C = C
+}
+level "start" { A }
+}
+}
+"#;
+        let mut runtime = RuntimeSession::from_source(source, "queued_input_runtime.puzzle")
+            .expect("queued input fixture should compile");
+        let waiting: Value = serde_json::from_str(
+            &runtime
+                .dispatch(SessionAction::Input {
+                    name: "first".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        let queued: Value = serde_json::from_str(
+            &runtime
+                .dispatch(SessionAction::Input {
+                    name: "second".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            queued["revision"],
+            waiting["revision"].as_u64().unwrap() + 1
+        );
+        assert_eq!(queued["busy"], true);
+
+        let resumed: Value =
+            serde_json::from_str(&runtime.dispatch(SessionAction::Resume).unwrap()).unwrap();
+        assert_eq!(resumed["busy"], false);
+        assert!(cell_has_object(&resumed["scene"]["cells"][0], "A"));
+
+        let first_undo: Value =
+            serde_json::from_str(&runtime.dispatch(SessionAction::Undo).unwrap()).unwrap();
+        assert!(cell_has_object(&first_undo["scene"]["cells"][0], "B"));
+        let second_undo: Value =
+            serde_json::from_str(&runtime.dispatch(SessionAction::Undo).unwrap()).unwrap();
+        assert!(cell_has_object(&second_undo["scene"]["cells"][0], "A"));
+    }
+
+    #[test]
     fn standalone_snapshot_serializes_mixed_presentation_events_in_authored_order() {
         let source = r#"
 const title = runtime_mixed_presentation
@@ -3738,6 +5315,7 @@ P.
                     component["presentation"]["events"][STANDARD_MESSAGE_DISMISS_EVENT]["pointer"],
                     true
                 );
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
                 event_kinds.push("component:modal".to_string());
                 let token: RuntimeSceneActionToken = serde_json::from_value(
                     component["presentation"]["events"][STANDARD_MESSAGE_DISMISS_EVENT]
@@ -3745,6 +5323,12 @@ P.
                         .clone(),
                 )
                 .expect("active modal should project its typed dismissal token");
+=======
+                event_kinds.push(format!(
+                    "component:{}",
+                    component["definition"].as_str().unwrap()
+                ));
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                 serde_json::from_str(
                     &bridge
                         .dispatch(SessionAction::SceneAction { token })
@@ -3779,6 +5363,7 @@ P.
         }
     }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     #[test]
     fn standalone_snapshot_projects_each_presented_component_instance_state() {
         let source = r#"
@@ -3920,6 +5505,73 @@ puzzle board = default
             &bridge
                 .dispatch(SessionAction::GotoLevel { level: 0 })
                 .unwrap(),
+=======
+    #[test]
+    fn standalone_snapshot_projects_each_presented_component_instance_state() {
+        let source = r#"
+const title = runtime_component_instances
+
+puzzle default {
+layers { actor = Player }
+empty .
+rules {}
+levels {
+legend { P = Player }
+level "start" { P }
+}
+}
+
+scene playing {
+layout { puzzle board = default }
+}
+
+scene panel {
+var count = 1
+layout { text count }
+}
+"#;
+        let mut bridge =
+            RuntimeSession::from_source(source, "runtime_component_instances.puzzle").unwrap();
+        let present = SceneEffect::PresentComponent {
+            definition: "panel".to_string(),
+            properties: Vec::new(),
+            placement: ComponentPlacement::Content,
+            await_event: None,
+        };
+
+        let _ = bridge
+            .dispatch(SessionAction::SceneEffect {
+                effect: present.clone(),
+            })
+            .unwrap();
+        let snapshot: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::SceneEffect { effect: present })
+                .unwrap(),
+        )
+        .unwrap();
+        let panels = snapshot["surface"]["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|component| component["definition"] == "panel")
+            .collect::<Vec<_>>();
+
+        assert_eq!(panels.len(), 2);
+        assert_ne!(panels[0]["id"], panels[1]["id"]);
+        assert_eq!(panels[0]["sceneState"]["count"], 1);
+        assert_eq!(panels[1]["sceneState"]["count"], 1);
+        assert_eq!(panels[0]["presentation"]["components"][0]["value"], "1");
+        assert_eq!(panels[1]["presentation"]["components"][0]["value"], "1");
+    }
+
+    #[cfg(not(feature = "editor-debug"))]
+    #[test]
+    fn player_session_contract_rejects_editor_debug_input() {
+        let mut bridge = RuntimeSession::from_source(
+            runtime_scene_fixture_source(),
+            "runtime_scene_fixture.puzzle",
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         )
         .unwrap();
         let sources = snapshot["viewportSources"].as_array().unwrap();
@@ -3957,7 +5609,12 @@ levels main of main {
   P
 }
 "#;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let mut bridge = RuntimeSession::from_source(source, "export_test.puzzle").unwrap();
+=======
+        let export = standalone_export(source);
+        let mut bridge = RuntimeSession::from_export_json(&export.to_string()).unwrap();
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
         let body: Value =
             serde_json::from_str(&bridge.apply_debug_input_name_json("right").unwrap()).unwrap();
@@ -3976,9 +5633,15 @@ levels main of main {
 
         let initial: Value =
             serde_json::from_str(&bridge.dispatch(SessionAction::Snapshot).unwrap()).unwrap();
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         assert_eq!(initial["surface"]["focus"], "title");
         assert!(initial.get("title").is_none());
         assert!(initial.get("gameState").is_none());
+=======
+        assert_eq!(initial["surface"]["focus"], "board");
+        assert!(initial.get("title").is_none());
+        assert_eq!(initial["gameState"]["title"], "Runtime Scene Fixture");
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         assert_eq!(initial["solverState"]["kind"], "2d");
         assert!(initial["solverState"]["slots"].is_array());
         assert!(initial["solverState"].get("slotMarks").is_none());
@@ -4010,17 +5673,33 @@ levels main of main {
 
     #[test]
     fn snapshot_resolves_scene_expressions_before_browser_projection() {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let bridge = RuntimeSession::from_source(
+=======
+        let mut bridge = RuntimeSession::from_source(
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             runtime_scene_fixture_source(),
             "runtime_scene_fixture.puzzle",
         )
         .unwrap();
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
+=======
+        let snapshot: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Command {
+                    name: "goto title".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let title = &snapshot["surface"]["components"]
             .as_array()
             .unwrap()
             .iter()
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             .find(|component| component["id"] == "title")
             .unwrap()["presentation"];
         assert_eq!(title["components"][0]["value"], "Runtime Scene Fixture");
@@ -4033,11 +5712,134 @@ levels main of main {
                 .iter()
                 .all(|component| component["kind"] != "conditional")
         );
+=======
+            .find(|component| component["definition"] == "title")
+            .unwrap()["presentation"];
+        assert_eq!(title["components"][0]["value"], "Runtime Scene Fixture");
+        let conditional = title["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|component| component["kind"] == "conditional")
+            .unwrap();
+
+        assert_eq!(conditional["condition"], false);
+        assert!(conditional["children"][0]["label"].is_string());
+        assert!(conditional["condition"].is_boolean());
+    }
+
+    #[test]
+    fn scene_preview_uses_the_same_rust_expression_resolver() {
+        let mut bridge = RuntimeSession::from_source(
+            runtime_scene_fixture_source(),
+            "runtime_scene_fixture.puzzle",
+        )
+        .unwrap();
+
+        let without_save: Value = serde_json::from_str(
+            &bridge
+                .resolve_scene_presentation_json("title", "{}")
+                .unwrap(),
+        )
+        .unwrap();
+        let without_save_conditional = without_save["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|component| component["kind"] == "conditional")
+            .unwrap();
+        assert_eq!(without_save_conditional["condition"], false);
+
+        bridge.has_persisted_progress = true;
+        let with_save: Value = serde_json::from_str(
+            &bridge
+                .resolve_scene_presentation_json("title", "{}")
+                .unwrap(),
+        )
+        .unwrap();
+        let with_save_conditional = with_save["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|component| component["kind"] == "conditional")
+            .unwrap();
+        assert_eq!(with_save_conditional["condition"], true);
+    }
+
+    #[test]
+    fn runtime_session_projects_and_acts_on_owned_choice_cursor() {
+        let source = r#"
+const title = runtime_choice_cursor
+
+puzzle board {
+  layers { actor = Player }
+  empty .
+  rules {
+  }
+}
+
+levels default of board {
+  legend P = Player
+  level "one" { P }
+}
+
+scene menu {
+  layout {
+    puzzle board
+    row {
+      choice "A" -> goto a
+      choice "B" -> goto b
+    }
+  }
+}
+
+scene a {
+  layout {
+    text "A"
+  }
+}
+
+scene b {
+  layout {
+    text "B"
+  }
+}
+"#;
+        let mut runtime = RuntimeSession::from_source(source, "runtime_choice_cursor.puzzle")
+            .expect("choice cursor fixture should compile");
+        runtime
+            .dispatch(SessionAction::Command {
+                name: "goto menu".to_string(),
+            })
+            .expect("choice fixture should enter the menu component");
+
+        let initial: Value = serde_json::from_str(&runtime.snapshot_json()).unwrap();
+        assert_eq!(projected_choice_cursor(&initial), 0);
+
+        let moved: Value = serde_json::from_str(
+            &runtime
+                .dispatch(SessionAction::ChoiceMove {
+                    direction: RuntimeChoiceDirection::Right,
+                })
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(projected_choice_cursor(&moved), 1);
+
+        let activated: Value = serde_json::from_str(
+            &runtime
+                .dispatch(SessionAction::ChoiceActivate { index: None })
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(activated["surface"]["focus"], "b");
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     #[test]
     fn runtime_session_projects_selected_state_on_the_owned_choice_node() {
         let source = r#"
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 const title = runtime_choice_cursor
 
 scene menu {
@@ -4135,6 +5937,9 @@ text "Select"
 }
 }
 
+=======
+const title = runtime_focus
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 puzzle default {
 layers {
 actor = Player
@@ -4244,6 +6049,7 @@ step board
                 .expect("right should move from editor state"),
         )
         .unwrap();
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         assert!(cell_has_object(
             &first_viewport_state(&moved)["cells"][1],
             "Player"
@@ -4259,6 +6065,19 @@ step board
             &first_viewport_state(&restarted)["cells"][0],
             "Player"
         ));
+=======
+        assert!(cell_has_object(&moved["scene"]["cells"][1], "Player"));
+
+        let restarted: Value = serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Command {
+                    name: "restart".to_string(),
+                })
+                .expect("restart should use editor start state"),
+        )
+        .unwrap();
+        assert!(cell_has_object(&restarted["scene"]["cells"][0], "Player"));
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
         assert!(
             bridge
@@ -4339,7 +6158,11 @@ level "start" { P }
     }
 
     #[test]
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn transition_flickscreen_resolves_player_group_to_typed_view() {
+=======
+    fn transition_flickscreen_focuses_player_group() {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let puzzlescript =
             include_str!("../../../crates/lang/tests/fixtures/puzzlescript/gallery/transition.ps");
         let source = puzzle_lang::translate_puzzlescript_to_canonical(puzzlescript).unwrap();
@@ -4388,7 +6211,23 @@ level "start" { P }
     }
 
     fn start_spec_2d_new_game(bridge: &mut RuntimeSession) -> Value {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         activate_selected_choice(bridge)
+=======
+        bridge
+            .dispatch(SessionAction::Command {
+                name: "clear_game_progress".to_string(),
+            })
+            .unwrap();
+        serde_json::from_str(
+            &bridge
+                .dispatch(SessionAction::Command {
+                    name: "goto playing(\"microban.1\")".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap()
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     #[test]
@@ -4569,6 +6408,7 @@ levels default of mover {
     }
 
     #[test]
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn restored_continue_token_is_executable_under_the_projected_progress_context() {
         let source = runtime_scene_fixture_source();
         let mut runtime =
@@ -4599,19 +6439,33 @@ levels default of mover {
     }
 
     #[test]
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     fn progress_is_persisted_only_after_the_matching_host_acknowledgement() {
         let mut runtime = RuntimeSession::from_source(
             runtime_scene_fixture_source(),
             "runtime_scene_fixture.puzzle",
         )
         .unwrap();
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let after_action = activate_selected_choice(&mut runtime);
+=======
+        let after_action: Value = serde_json::from_str(
+            &runtime
+                .dispatch(SessionAction::Command {
+                    name: "goto playing".to_string(),
+                })
+                .unwrap(),
+        )
+        .unwrap();
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         assert_eq!(after_action["has_progress_save"], false);
         let request = runtime
             .progress_save_request()
             .expect("successful session mutation should request persistence");
         assert!(
             runtime
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
                 .confirm_progress_persistence_applied(request.request_id + 1)
                 .unwrap_err()
                 .contains("stale")
@@ -4620,19 +6474,30 @@ levels default of mover {
             request.operation,
             RuntimeProgressPersistenceOperation::Write { .. }
         ));
+=======
+                .confirm_progress_save_written(request.request_id + 1)
+                .unwrap_err()
+                .contains("stale")
+        );
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         assert_eq!(
             serde_json::from_str::<Value>(&runtime.snapshot_json()).unwrap()["has_progress_save"],
             false
         );
 
         runtime
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             .confirm_progress_persistence_applied(request.request_id)
+=======
+            .confirm_progress_save_written(request.request_id)
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             .unwrap();
         assert!(runtime.progress_save_request().is_none());
         assert_eq!(
             serde_json::from_str::<Value>(&runtime.snapshot_json()).unwrap()["has_progress_save"],
             true
         );
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     }
 
     #[test]
@@ -4756,6 +6621,13 @@ scene playing {
             })
             .expect_err("one input must not be broadcast to multiple puzzle models");
         assert!(error.contains("ambiguous across 2 focused puzzle models"));
+=======
+        runtime.confirm_progress_save_cleared();
+        assert_eq!(
+            serde_json::from_str::<Value>(&runtime.snapshot_json()).unwrap()["has_progress_save"],
+            false
+        );
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     #[test]
@@ -4787,7 +6659,11 @@ scene playing {
         assert_eq!(snapshot["solverState"]["kind"], "puzzle3d");
         assert!(snapshot["solverState"].get("slotMarks").is_none());
         assert!(snapshot["solverState"].get("cellMarks").is_none());
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let spatial_view = viewport_state(&snapshot, "sokoban", "sokoban").clone();
+=======
+        let spatial_view = snapshot["scenePuzzleState"]["sokoban"].clone();
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let typed_view: RuntimePuzzle3Snapshot = serde_json::from_value(spatial_view.clone())
             .expect("Puzzle3 session view should satisfy the complete typed runtime contract");
         assert!(!typed_view.cells.is_empty());
@@ -4798,6 +6674,7 @@ scene playing {
                 .iter()
                 .any(|cell| !cell.object_ids.is_empty())
         );
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         assert!(spatial_view.get("objects").is_none());
         assert!(spatial_view.get("visuals").is_none());
         assert!(spatial_view.get("component").is_none());
@@ -4805,6 +6682,19 @@ scene playing {
         assert!(spatial_view.get("animationBatchId").is_none());
         assert!(spatial_view.get("render").is_some());
         assert!(spatial_view.get("order").is_none());
+=======
+        let authoring_resources = snapshot["puzzle3AuthoringResources"]
+            .as_object()
+            .expect("3D authoring resources must be outside renderer state");
+        assert!(authoring_resources["inputs"].as_array().is_some_and(|inputs| !inputs.is_empty()));
+        assert!(authoring_resources["objects"].as_object().is_some_and(|objects| !objects.is_empty()));
+        assert!(authoring_resources["visuals"].as_object().is_some_and(|visuals| !visuals.is_empty()));
+        assert!(spatial_view.get("objects").is_none());
+        assert!(spatial_view.get("visuals").is_none());
+        assert!(spatial_view.get("render").is_some());
+        assert!(spatial_view.get("order").is_none());
+        assert!(authoring_resources["order"].is_object());
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let second: Value = serde_json::from_str(
             &bridge
                 .dispatch(SessionAction::GotoLevel { level: 1 })

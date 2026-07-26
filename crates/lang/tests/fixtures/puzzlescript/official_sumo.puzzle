@@ -1,6 +1,6 @@
-title = "Multiple Patterns"
-author = "increpare"
-homepage = "www.puzzlescript.net"
+const title = "Multiple Patterns"
+const author = "increpare"
+const homepage = "www.puzzlescript.net"
 
 scene title {
 layout {

@@ -4,20 +4,28 @@
 export class WasmStandaloneSession {
     free(): void;
     [Symbol.dispose](): void;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     apply_debug_input_name(input_name: string): string;
     audio_feedback_event(now_seconds: number): string;
     audio_tick(now_seconds: number): string;
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     confirm_progress_save_cleared(): void;
     confirm_progress_save_written(request_id: number): void;
     dispatch(action_json: string): string;
     static fromExport(export_json: string): WasmStandaloneSession;
     constructor(source: string, puzzle_path: string);
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     presentation_event_consumed(now_seconds: number): string;
     presentation_frame(now_seconds: number): string;
     progress_save(): string;
     progress_save_request(): string;
     progress_storage_key(): string | undefined;
     progress_storage_save_version(): number | undefined;
+=======
+    progress_save_request(): string | undefined;
+    resolve_scene_presentation(scene_name: string, state_json: string): string;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     restore_progress_save(save_json: string): void;
     set_audio_feedback_wakeup(callback: Function): void;
     set_audio_visible(visible: boolean, now_seconds: number): string;
@@ -28,24 +36,44 @@ export class WasmStandaloneSession {
     visual_image_count(): number;
 }
 
+export function hydrate_render_scene_images(render_scene_json: string, image_assets_json: string): string;
+
+export function project_renderer_state(runtime_export_json: string, state_json: string, level_index: number): string;
+
+export function resolve_render_frame(render_scene_json: string, elapsed_ms: number): string;
+
+export function resolve_render_moment(render_scene_json: string, render_moment_json: string): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_wasmstandalonesession_free: (a: number, b: number) => void;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     readonly wasmstandalonesession_apply_debug_input_name: (a: number, b: number, c: number) => [number, number, number, number];
     readonly wasmstandalonesession_audio_feedback_event: (a: number, b: number) => [number, number];
+=======
+    readonly hydrate_render_scene_images: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly project_renderer_state: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+    readonly resolve_render_frame: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly resolve_render_moment: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     readonly wasmstandalonesession_confirm_progress_save_cleared: (a: number) => void;
     readonly wasmstandalonesession_confirm_progress_save_written: (a: number, b: number) => [number, number];
     readonly wasmstandalonesession_dispatch: (a: number, b: number, c: number) => [number, number, number, number];
     readonly wasmstandalonesession_fromExport: (a: number, b: number) => [number, number, number];
     readonly wasmstandalonesession_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     readonly wasmstandalonesession_presentation_event_consumed: (a: number, b: number) => [number, number, number, number];
     readonly wasmstandalonesession_presentation_frame: (a: number, b: number) => [number, number];
     readonly wasmstandalonesession_progress_save: (a: number) => [number, number];
     readonly wasmstandalonesession_progress_save_request: (a: number) => [number, number];
     readonly wasmstandalonesession_progress_storage_key: (a: number) => [number, number];
     readonly wasmstandalonesession_progress_storage_save_version: (a: number) => number;
+=======
+    readonly wasmstandalonesession_progress_save_request: (a: number) => [number, number];
+    readonly wasmstandalonesession_resolve_scene_presentation: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     readonly wasmstandalonesession_restore_progress_save: (a: number, b: number, c: number) => [number, number];
     readonly wasmstandalonesession_set_audio_feedback_wakeup: (a: number, b: any) => void;
     readonly wasmstandalonesession_set_audio_visible: (a: number, b: number, c: number) => [number, number];

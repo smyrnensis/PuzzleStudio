@@ -24,6 +24,7 @@ let currentDocumentIndex = 0;
 let activeFileId = "";
 let loadedSourceDocumentId = "";
 let loadedPreviewTargetKey = "";
+const previewEntryDocumentIdByWorkspace = new Map();
 let selectedFolderId = "";
 let selectedTreeId = "";
 let openTabIds = [];
@@ -186,6 +187,10 @@ async function loadSource() {
     activeFileId = useStored
       ? stored.activeFileId
       : documents[activeEmbeddedDocumentIndex()]?.id || documents[0]?.id || "";
+    selectPreviewEntryDocument(
+      documents.find((document) => document.puzzlePath === editorSeed.puzzlePath)
+        || documents.find((document) => document.id === activeFileId),
+    );
     openTabIds = useStored ? (stored.openTabIds || []) : [];
     selectedTreeId = activeFileId;
     currentDocumentIndex = activeDocumentIndex();
@@ -234,12 +239,19 @@ async function applyLoadedSourcePayload(payload) {
     fileTree = treeFromDocuments(sourceDocuments, { workspaceRoot, workspaceFolders: sourceFolders });
   }
   syncDocumentsFromTree();
+  const requestedEntry = documents.find((document) =>
+    isPuzzleDocument(document)
+    && normalizePath(document.workspaceRoot || "") === normalizePath(workspaceRoot || "")
+    && normalizePath(document.puzzlePath) === normalizePath(editorPathForHostPath(payload.puzzlePath || "", workspaceRoot))
+  );
   activeFileId = workspaceRoot
-    ? documents.find((document) => document.workspaceRoot === workspaceRoot && isPuzzleDocument(document))?.id
+    ? requestedEntry?.id
+      || documents.find((document) => document.workspaceRoot === workspaceRoot && isPuzzleDocument(document))?.id
       || documents.find((document) => document.workspaceRoot === workspaceRoot)?.id
       || documents[0]?.id
       || ""
     : documents[0]?.id || "";
+  selectPreviewEntryDocument(requestedEntry || documents.find((document) => document.id === activeFileId));
   openTabIds = [];
   selectedTreeId = activeFileId || workspaceFolder?.id || "";
   selectedFolderId = activeFileId
@@ -267,6 +279,7 @@ function resetEditorForNoOpenProject(options = {}) {
   activeFileId = "";
   loadedSourceDocumentId = "";
   loadedPreviewTargetKey = "";
+  previewEntryDocumentIdByWorkspace.clear();
   selectedTreeId = "";
   selectedFolderId = "";
   currentDocumentIndex = 0;
@@ -344,6 +357,12 @@ async function appendLoadedWorkspacePayload(payload, options = {}) {
   const workspaceFolder = workspaceFolderFromDocuments(root, sourceDocuments, sourceFolders);
   replaceWorkspaceTree(root, workspaceFolder);
   syncDocumentsFromTree();
+  const requestedEntry = documents.find((document) =>
+    isPuzzleDocument(document)
+    && normalizePath(document.workspaceRoot || "") === normalizePath(root)
+    && normalizePath(document.puzzlePath) === normalizePath(editorPathForHostPath(payload.puzzlePath || "", root))
+  );
+  selectPreviewEntryDocument(requestedEntry);
   if (activate) {
     activateWorkspaceRoot(root, workspaceFolder);
   } else {
@@ -357,7 +376,8 @@ async function appendLoadedWorkspacePayload(payload, options = {}) {
 function activateWorkspaceRoot(root, workspaceFolder = workspaceRootFolder(root)) {
   const normalizedRoot = normalizePath(root || "");
   workspaceRoot = root || workspaceRoot;
-  activeFileId = documents.find((document) =>
+  const selectedEntry = previewEntryDocumentForWorkspace(root);
+  activeFileId = selectedEntry?.id || documents.find((document) =>
     normalizePath(document.workspaceRoot || "") === normalizedRoot && isPuzzleDocument(document))?.id
     || documents.find((document) => normalizePath(document.workspaceRoot || "") === normalizedRoot)?.id
     || documents[0]?.id
@@ -742,7 +762,6 @@ async function ensureDocumentContentLoaded(document) {
     workspaceRoot: document.workspaceRoot || workspaceRoot,
     puzzlePath: document.puzzlePath,
     importedBy: document.importedBy,
-    parentGamePath: document.parentGamePath,
   });
   Object.assign(document, {
     ...loaded,
@@ -779,6 +798,32 @@ async function ensureWorkspaceDocumentsLoaded(root = workspaceRoot || "") {
     }
     await ensureDocumentContentLoaded(document);
   }
+  await refreshWorkspaceImportMetadata(normalizedRoot);
+}
+
+async function refreshWorkspaceImportMetadata(root) {
+  const entry = documents.find((document) => {
+    const documentRoot = normalizePath(document.workspaceRoot || workspaceRoot || "");
+    return isPuzzleDocument(document) && isTextDocument(document) && (!root || documentRoot === root);
+  });
+  if (!entry) {
+    return;
+  }
+  const resolveIndex = window.PuzzleStudioRuntime?.workspaceIndex;
+  if (typeof resolveIndex !== "function") {
+    throw new Error("Editor WASM workspace index is unavailable.");
+  }
+  const index = await resolveIndex({ workspaceDocuments: workspaceCompilerDocuments(entry) });
+  if (!Array.isArray(index?.documents)) {
+    throw new Error("Editor WASM workspace index is missing documents.");
+  }
+  for (const item of index.documents) {
+    const document = documentByPathForWorkspace(item.path, root);
+    if (!document) {
+      continue;
+    }
+    document.importedBy = Array.isArray(item.directImporters) ? item.directImporters.slice() : [];
+  }
 }
 
 async function ensurePreviewDocumentsLoaded(document) {
@@ -798,7 +843,7 @@ async function workspacePresentationManifest(document) {
     throw new Error("Editor WASM workspace presentation manifest is unavailable.");
   }
   const manifest = await resolveManifest({
-    puzzlePath: document?.puzzlePath,
+    puzzlePath: workspaceCompilerPath(document),
     workspaceDocuments: workspaceCompilerDocuments(document),
   });
   for (const field of ["cssPaths", "scriptPaths", "filePaths", "visualImageAssets"]) {
@@ -813,7 +858,6 @@ async function workspacePresentationManifest(document) {
 }
 
 async function ensureDeclaredPreviewAssetDocumentsLoaded(document, root, manifest) {
-  const baseDir = directoryName(document?.puzzlePath || "");
   const assetDocuments = new Set();
   for (const [kind, paths] of [
     ["css", manifest.cssPaths],
@@ -821,7 +865,7 @@ async function ensureDeclaredPreviewAssetDocumentsLoaded(document, root, manifes
     ["file", declaredFileAssetPaths(manifest)],
   ]) {
     for (const path of paths) {
-      const asset = documentByPathForWorkspace(normalizePath(joinPath(baseDir, path)), root);
+      const asset = documentByPathForWorkspace(path, root);
       if (!asset) {
         throw new Error(`declared ${kind} asset not found: ${path}`);
       }
@@ -1002,7 +1046,6 @@ function normalizeDocument(document, fallback = {}) {
     : Array.isArray(fallback.importedBy)
       ? fallback.importedBy.map((path) => editorPathForHostPath(path, documentWorkspaceRoot)).filter(Boolean)
       : [];
-  const parentGamePath = document.parentGamePath || fallback.parentGamePath || "";
   return {
     id: document.id || createDocumentId(),
     name: document.name || fileName(editorPath),
@@ -1014,7 +1057,6 @@ function normalizeDocument(document, fallback = {}) {
     syncedSource: document.syncedSource ?? document.source ?? "",
     dataUrl: document.dataUrl || "",
     contentLoaded,
-    declaresGameEntry: document.declaresGameEntry === true,
     previewHtml: "",
     previewError: "",
     gameCss: document.gameCss ?? fallback.gameCss ?? "",
@@ -1022,7 +1064,6 @@ function normalizeDocument(document, fallback = {}) {
       document.sourceFoldedBlockKeys ?? fallback.sourceFoldedBlockKeys,
     ),
     importedBy,
-    parentGamePath: parentGamePath ? editorPathForHostPath(parentGamePath, documentWorkspaceRoot) : "",
   };
 }
 
@@ -1223,13 +1264,11 @@ function storeDocument(document) {
     source: document.source || "",
     dataUrl: document.dataUrl || "",
     contentLoaded: document.contentLoaded !== false,
-    declaresGameEntry: document.declaresGameEntry === true,
     previewHtml: "",
     previewError: "",
     gameCss: document.gameCss || "",
     sourceFoldedBlockKeys: normalizeSourceFoldedBlockKeys(document.sourceFoldedBlockKeys),
     importedBy: Array.isArray(document.importedBy) ? document.importedBy : [],
-    parentGamePath: document.parentGamePath || "",
   };
 }
 
@@ -1641,43 +1680,40 @@ function normalizedDocumentTabWheelDelta(event) {
 }
 
 function activePreviewDocument() {
-  const selected = selectedTreeNode();
-  if (selected?.kind === "folder") {
-    const folderPreview = previewDocumentForFolder(selected);
-    if (folderPreview) {
-      return folderPreview;
-    }
+  const root = activeDocument()?.workspaceRoot || workspaceRoot || "";
+  return previewEntryDocumentForWorkspace(root);
+}
+
+function previewWorkspaceKey(root) {
+  return normalizePath(root || "");
+}
+
+function selectPreviewEntryDocument(document) {
+  if (!isPuzzleDocument(document)) {
+    return false;
   }
-  return previewDocumentFor(activeDocument());
+  const key = previewWorkspaceKey(document.workspaceRoot || workspaceRoot || "");
+  const changed = previewEntryDocumentIdByWorkspace.get(key) !== document.id;
+  previewEntryDocumentIdByWorkspace.set(key, document.id);
+  return changed;
+}
+
+function previewEntryDocumentForWorkspace(root) {
+  const key = previewWorkspaceKey(root);
+  const documentId = previewEntryDocumentIdByWorkspace.get(key);
+  if (!documentId) {
+    return null;
+  }
+  return documents.find((document) =>
+    isPuzzleDocument(document)
+    && previewWorkspaceKey(document.workspaceRoot || "") === key
+    && document.id === documentId
+  ) || null;
 }
 
 function recordLoadedPreviewTarget(document = activePreviewDocument()) {
   loadedPreviewTargetKey = document ? documentIdentityKey(document) : "";
   return loadedPreviewTargetKey;
-}
-
-function previewDocumentForFolder(folder) {
-  const dir = folderPath(folder);
-  const active = activeDocument();
-  if (active && documentPathIsInFolder(active, dir)) {
-    const activePreview = previewDocumentFor(active);
-    if (activePreview) {
-      return activePreview;
-    }
-  }
-
-  const directEntry = preferredPuzzleDocumentForDirectory(dir);
-  if (directEntry) {
-    return directEntry;
-  }
-  const inFolder = (document) => documentPathIsInFolder(document, dir);
-  const nestedGame = documents
-    .filter((item) => inFolder(item) && isPuzzleDocument(item))
-    .sort(comparePuzzleEntryDocuments)[0];
-  if (nestedGame) {
-    return previewDocumentFor(nestedGame);
-  }
-  return null;
 }
 
 function documentPathIsInFolder(document, folderDir) {
@@ -1689,228 +1725,24 @@ function documentPathIsInFolder(document, folderDir) {
   return path === dir || path.startsWith(`${dir}/`);
 }
 
-function parentGameDocumentForImportFragment(document) {
-  if (!isPuzzleDocument(document) || documentDeclaresGameEntry(document)) {
-    return null;
-  }
-  return parentGameCandidatesForDocument(document)[0] || null;
-}
-
-function parentGameCandidatesForDocument(document) {
-  if (!isPuzzleDocument(document)) {
-    return [];
-  }
-  if (documentDeclaresGameEntry(document)) {
-    return [document];
-  }
-  const targetRoot = normalizePath(document.workspaceRoot || workspaceRoot || "");
-  return documents
-    .filter((candidate) => {
-      if (!isPuzzleDocument(candidate) || !isTextDocument(candidate) || !documentDeclaresGameEntry(candidate)) {
-        return false;
-      }
-      const candidateRoot = normalizePath(candidate.workspaceRoot || workspaceRoot || "");
-      if (targetRoot && candidateRoot && targetRoot !== candidateRoot) {
-        return false;
-      }
-      return documentImportClosureContains(candidate, document, new Set());
-    })
-    .sort(comparePuzzleEntryDocuments);
-}
-
-function documentImportClosureContains(candidate, target, visited) {
-  if (!candidate || !target || visited.has(candidate.id)) {
-    return false;
-  }
-  visited.add(candidate.id);
-  for (const importPath of puzzleImportPathsForDocument(candidate)) {
-    const imported = documentByPathForWorkspace(importPath, candidate.workspaceRoot || workspaceRoot || "");
-    if (!imported || !isPuzzleDocument(imported) || !isTextDocument(imported)) {
-      continue;
-    }
-    if (imported.id === target.id || documentImportClosureContains(imported, target, visited)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function directImportersForDocument(document) {
   if (!isPuzzleDocument(document)) {
     return [];
   }
-  const targetRoot = normalizePath(document.workspaceRoot || workspaceRoot || "");
-  const importers = [];
-  for (const candidate of documents) {
-    if (!isPuzzleDocument(candidate) || !isTextDocument(candidate) || candidate.id === document.id) {
-      continue;
-    }
-    const candidateRoot = normalizePath(candidate.workspaceRoot || workspaceRoot || "");
-    if (targetRoot && candidateRoot && candidateRoot !== targetRoot) {
-      continue;
-    }
-    const importsTarget = puzzleImportPathsForDocument(candidate).some((importPath) => {
-      const imported = documentByPathForWorkspace(importPath, candidate.workspaceRoot || workspaceRoot || "");
-      return imported?.id === document.id;
-    });
-    if (importsTarget) {
-      importers.push(candidate);
-    }
-  }
-  return importers.sort(comparePuzzleEntryDocuments);
-}
-
-function puzzleImportPathsForDocument(document) {
-  if (!isPuzzleDocument(document) || !isTextDocument(document)) {
-    return [];
-  }
-  const baseDir = directoryName(document.puzzlePath || "");
-  const paths = [];
-  for (const rawLine of String(currentSourceForDocument(document) || "").split("\n")) {
-    const code = stripWorkspaceImportLineComment(rawLine).trim();
-    const match = code.match(/^import\s+"((?:\\.|[^"\\])*)"\s*$/);
-    if (match) {
-      paths.push(resolveWorkspaceImportPath(baseDir, match[1]));
-    }
-  }
-  return paths;
-}
-
-function stripWorkspaceImportLineComment(line) {
-  let quoted = false;
-  let escaped = false;
-  const text = String(line || "");
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const next = text[index + 1];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (char === "\"") {
-      quoted = !quoted;
-      continue;
-    }
-    if (!quoted && char === "/" && next === "/") {
-      return text.slice(0, index);
-    }
-  }
-  return text;
-}
-
-function resolveWorkspaceImportPath(baseDir, importPath, root = workspaceRoot || "") {
-  const normalized = normalizePath(importPath);
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) {
-    return editorPathForHostPath(normalized, root);
-  }
-  return normalizeWorkspacePathSegments(baseDir ? `${baseDir}/${normalized}` : normalized);
-}
-
-function normalizeWorkspacePathSegments(path) {
-  const parts = [];
-  for (const part of normalizePath(path).split("/")) {
-    if (!part || part === ".") {
-      continue;
-    }
-    if (part === "..") {
-      parts.pop();
-      continue;
-    }
-    parts.push(part);
-  }
-  return parts.join("/");
+  const root = document.workspaceRoot || workspaceRoot || "";
+  return (Array.isArray(document.importedBy) ? document.importedBy : [])
+    .map((path) => documentByPathForWorkspace(path, root))
+    .filter(Boolean)
+    .sort((left, right) => normalizePath(left.puzzlePath).localeCompare(normalizePath(right.puzzlePath)));
 }
 
 function documentByPathForWorkspace(path, root) {
   const target = normalizePath(path);
   const normalizedRoot = normalizePath(root || "");
   return documents.find((candidate) =>
-    normalizePath(candidate.puzzlePath) === target
+    workspaceCompilerPath(candidate) === target
     && (!normalizedRoot || !candidate.workspaceRoot || normalizePath(candidate.workspaceRoot) === normalizedRoot)
   ) || null;
-}
-
-function previewDocumentFor(document) {
-  if (isPuzzleDocument(document) && documentDeclaresGameEntry(document)) {
-    return document;
-  }
-  if (isPuzzleDocument(document)) {
-    return parentGameDocumentForImportFragment(document);
-  }
-
-  let dir = directoryName(document?.puzzlePath || "");
-  while (dir) {
-    const candidate = preferredPuzzleDocumentForDirectory(dir);
-    if (candidate) {
-      return candidate;
-    }
-    const parent = directoryName(dir);
-    if (!parent || parent === dir) {
-      break;
-    }
-    dir = parent;
-  }
-
-  const seeded = documents.find((item) => item.puzzlePath === editorSeed?.puzzlePath);
-  if (seeded) {
-    return seeded;
-  }
-  return documents.find((item) => isPuzzleDocument(item)) || null;
-}
-
-function preferredPuzzleDocumentForDirectory(dir) {
-  const normalizedDir = normalizePath(dir || "");
-  const direct = documents
-    .filter((item) =>
-      isPuzzleDocument(item)
-      && normalizePath(directoryName(item.puzzlePath)) === normalizedDir
-      && documentDeclaresGameEntry(item)
-    )
-    .sort(comparePuzzleEntryDocuments);
-  return direct[0] || null;
-}
-
-function documentDeclaresGameEntry(document) {
-  return isPuzzleDocument(document) && document.declaresGameEntry === true;
-}
-
-function comparePuzzleEntryDocuments(left, right) {
-  const leftDir = directoryName(left?.puzzlePath || "");
-  const rightDir = directoryName(right?.puzzlePath || "");
-  const leftRank = puzzleEntryRank(left?.puzzlePath || "", leftDir);
-  const rightRank = puzzleEntryRank(right?.puzzlePath || "", rightDir);
-  return leftRank - rightRank || normalizePath(left.puzzlePath).localeCompare(normalizePath(right.puzzlePath));
-}
-
-function puzzleEntryRank(path, dir) {
-  const name = fileName(path);
-  const folderName = fileName(dir);
-  if (name === "game.puzzle") {
-    return 0;
-  }
-  if (name === "game.puzzle3") {
-    return 1;
-  }
-  if (folderName && name === `${folderName}.puzzle`) {
-    return 2;
-  }
-  if (folderName && name === `${folderName}.puzzle3`) {
-    return 3;
-  }
-  if (name === "main.puzzle") {
-    return 4;
-  }
-  if (name === "main.puzzle3") {
-    return 5;
-  }
-  return 6;
 }
 
 function activePreviewSource() {
@@ -2208,9 +2040,6 @@ function fileIconSvg(node) {
   if (extension === "puzzle") {
     return editorIconSvg("puzzle", { className: "tree-icon" });
   }
-  if (extension === "puzzle3") {
-    return editorIconSvg("box", { className: "tree-icon" });
-  }
   return editorIconSvg("file", { className: "tree-icon" });
 }
 
@@ -2250,69 +2079,13 @@ function setTreeName(row, node) {
 }
 
 function buildTreeImportTitleIndex() {
-  const parentGamesById = new Map();
   const directImportersById = new Map();
   const puzzleDocuments = documents.filter((document) => isPuzzleDocument(document) && isTextDocument(document));
-  const gameEntries = puzzleDocuments.filter((document) => documentDeclaresGameEntry(document));
-  const pathsByDocumentId = new Map();
-
   for (const document of puzzleDocuments) {
-    pathsByDocumentId.set(document.id, puzzleImportPathsForDocument(document));
+    directImportersById.set(document.id, directImportersForDocument(document));
   }
 
-  const importedDocumentsFor = (document) => {
-    const root = document.workspaceRoot || workspaceRoot || "";
-    return (pathsByDocumentId.get(document.id) || [])
-      .map((importPath) => documentByPathForWorkspace(importPath, root))
-      .filter((imported) => imported && isPuzzleDocument(imported) && isTextDocument(imported));
-  };
-
-  for (const document of puzzleDocuments) {
-    if (documentDeclaresGameEntry(document)) {
-      parentGamesById.set(document.id, [document]);
-    }
-    const directImportedIds = new Set();
-    for (const imported of importedDocumentsFor(document)) {
-      if (imported.id === document.id || directImportedIds.has(imported.id)) {
-        continue;
-      }
-      directImportedIds.add(imported.id);
-      if (!directImportersById.has(imported.id)) {
-        directImportersById.set(imported.id, []);
-      }
-      directImportersById.get(imported.id).push(document);
-    }
-  }
-
-  for (const gameEntry of gameEntries) {
-    const visited = new Set();
-    const stack = importedDocumentsFor(gameEntry);
-    while (stack.length) {
-      const imported = stack.pop();
-      if (!imported || visited.has(imported.id)) {
-        continue;
-      }
-      visited.add(imported.id);
-      if (documentDeclaresGameEntry(imported)) {
-        stack.push(...importedDocumentsFor(imported));
-        continue;
-      }
-      if (!parentGamesById.has(imported.id)) {
-        parentGamesById.set(imported.id, []);
-      }
-      parentGamesById.get(imported.id).push(gameEntry);
-      stack.push(...importedDocumentsFor(imported));
-    }
-  }
-
-  for (const values of parentGamesById.values()) {
-    values.sort(comparePuzzleEntryDocuments);
-  }
-  for (const values of directImportersById.values()) {
-    values.sort(comparePuzzleEntryDocuments);
-  }
-
-  return { parentGamesById, directImportersById };
+  return directImportersById;
 }
 
 function setTreeImportTitle(row, node, importTitleIndex) {
@@ -2320,20 +2093,9 @@ function setTreeImportTitle(row, node, importTitleIndex) {
     return;
   }
   const lines = [];
-  const parentGames = importTitleIndex.parentGamesById.get(node.id) || [];
-  if (parentGames.length > 1) {
-    lines.push(`Parent games: ${parentGames.map((item) => item.puzzlePath || item.name || "game").join(", ")}`);
-    lines.push(`Preview uses: ${parentGames[0].puzzlePath || parentGames[0].name || "game"}`);
-  } else if (parentGames.length === 1 && parentGames[0].id !== node.id) {
-    lines.push(`Parent game: ${parentGames[0].puzzlePath || parentGames[0].name || "game"}`);
-  } else if (parentGames.length === 1) {
-    lines.push("Game entry");
-  }
-  const importers = importTitleIndex.directImportersById.get(node.id) || [];
+  const importers = importTitleIndex.get(node.id) || [];
   if (importers.length) {
     lines.push(`Imported by: ${importers.map((item) => item.puzzlePath || item.name).join(", ")}`);
-  } else if (!parentGames.length) {
-    lines.push("Not imported by a game entry");
   }
   if (lines.length) {
     row.title = lines.join("\n");
@@ -2442,18 +2204,8 @@ function directoryName(path) {
 }
 
 function isPuzzleDocument(document) {
-  return puzzleSourceProfile(document) !== "";
-}
-
-function puzzleSourceProfile(document) {
   const ext = extensionName(document?.puzzlePath || document?.name);
-  if (ext === "puzzle") {
-    return "puzzle2d";
-  }
-  if (ext === "puzzle3") {
-    return "puzzle3d";
-  }
-  return "";
+  return ext === "puzzle";
 }
 
 function isTextDocument(document) {
@@ -2463,7 +2215,7 @@ function isTextDocument(document) {
 function isTextFileName(name, mimeType = "") {
   const ext = extensionName(name);
   return [
-    "puzzle", "puzzle3", "css", "js", "mjs", "json", "svg", "txt", "md", "html", "xml", "csv", "tsv",
+    "puzzle", "css", "js", "mjs", "json", "svg", "txt", "md", "html", "xml", "csv", "tsv",
   ].includes(ext) || String(mimeType || "").startsWith("text/");
 }
 
@@ -2527,12 +2279,11 @@ function assetUrlForPath(path, baseDir = "", root = workspaceRoot) {
 }
 
 function assetResolverScript(document, manifest) {
-  const baseDir = directoryName(document?.puzzlePath);
   const root = document?.workspaceRoot || workspaceRoot;
   const entries = {};
   for (const path of declaredFileAssetPaths(manifest)) {
     const key = normalizePath(path);
-    const url = assetUrlForPath(key, baseDir, root);
+    const url = assetUrlForPath(key, "", root);
     if (!url) {
       throw new Error(`Declared puzzle asset not found: ${key}`);
     }
@@ -2569,7 +2320,6 @@ function rewriteCssAssetUrls(css, baseDir = "", root = workspaceRoot) {
 }
 
 function effectiveGameCss(document, manifest) {
-  const baseDir = directoryName(document.puzzlePath);
   const declaredCssPaths = manifest.cssPaths;
   const parts = [];
   for (const themeDocument of effectiveThemeCssDocuments(document, manifest.themeName || "")) {
@@ -2584,7 +2334,7 @@ function effectiveGameCss(document, manifest) {
     return parts.filter(Boolean).join("\n");
   }
   for (const path of declaredCssPaths) {
-    const cssDocument = documentByPath(normalizePath(joinPath(baseDir, path)));
+    const cssDocument = documentByPathForWorkspace(path, document.workspaceRoot || workspaceRoot);
     if (!cssDocument || !isTextDocument(cssDocument)) {
       throw new Error(`Declared CSS asset not found: ${path}`);
     }
@@ -2628,10 +2378,9 @@ function normalizeThemeAssetName(name) {
 }
 
 function effectiveGameVisualsJs(document, manifest) {
-  const baseDir = directoryName(document.puzzlePath);
   const scripts = [assetResolverScript(document, manifest)];
   for (const path of manifest.scriptPaths) {
-    const scriptDocument = documentByPath(normalizePath(joinPath(baseDir, path)));
+    const scriptDocument = documentByPathForWorkspace(path, document.workspaceRoot || workspaceRoot);
     if (!scriptDocument || !isTextDocument(scriptDocument)) {
       throw new Error(`Declared script asset not found: ${path}`);
     }
@@ -2771,49 +2520,13 @@ function loadEmbeddedDocument(index) {
 
 function loadFolderPreview(folder) {
   persistCurrentDocument();
-  const previewDocument = previewDocumentForFolder(folder);
-  if (previewDocument) {
-    activeFileId = previewDocument.id;
-    selectedTreeId = activeFileId;
-    selectedFolderId = findParentFolder(fileTree, activeFileId)?.id || folder.id;
-    loadEmbeddedDocument(activeDocumentIndex());
-    return;
-  }
-
   selectedFolderId = folder.id;
   selectedTreeId = folder.id;
   renderDocumentSelect();
-
-  invalidateCompiledPreview(previewDocument);
-  syncPreviewViewportAspect();
-  runButton.disabled = !previewDocument;
-  setActiveLevelIndex(0);
-  resetPreviewLog(previewDocument
-    ? `Run preview to compile ${previewDocument.puzzlePath || previewDocument.name || "preview"}.`
-    : "No preview target");
-  if (!previewDocument) {
-    appendPreviewLog("error", "No game entry for preview.", { source: "workspace" });
-  }
   updateSourceMeta();
-  resetLevelBuilderFromPreviewSource();
   saveDocumentStore(false);
 }
 
-function previewSelectionIsDetachedFromActiveDocument() {
-  const selected = selectedTreeNode();
-  const active = activeDocument();
-  return selected?.kind === "folder"
-    && active
-    && !documentPathIsInFolder(active, folderPath(selected));
-}
-
-function ensurePreviewTargetsActiveDocument() {
-  if (!previewSelectionIsDetachedFromActiveDocument()) {
-    return false;
-  }
-  loadEmbeddedDocument(activeDocumentIndex());
-  return true;
-}
 function workspaceRootForNode(node) {
   if (!node) {
     return workspaceRoot || "";

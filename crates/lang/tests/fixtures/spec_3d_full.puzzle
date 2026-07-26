@@ -53,7 +53,11 @@ layout {
 
 scene playing {
 keys {
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 q Escape -> goto level_select
+=======
+q Escape -> goto level_select	
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 layout {
 heading "Microban 3D"

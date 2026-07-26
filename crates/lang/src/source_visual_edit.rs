@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use crate::source_target::resolve_source_entries_from_document;
-use crate::{SourceTargetKind, parse_surface_source_target_document_for_profile};
+use crate::{SourceTargetKind, parse_surface_source_target_document_for_owner_dimension};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VisualEditMutationResult {
@@ -69,10 +69,7 @@ pub fn mutate_visual_source(
         "3d" => crate::ModelDimension::Three,
         other => return Err(format!("unknown visual edit dimension `{other}`")),
     };
-    let document = parse_surface_source_target_document_for_profile(
-        source,
-        source_profile_for_dimension(dimension),
-    );
+    let document = parse_surface_source_target_document_for_owner_dimension(source, dimension);
     let entries = resolve_source_entries_from_document(&document);
     match request.operation.as_str() {
         "insert" => insert_visual(source, &document, &entries, dimension, &request, false),
@@ -112,10 +109,7 @@ fn replace_visual(
     };
     let source = owned_source.as_deref().unwrap_or(source);
     let entries = if owned_source.is_some() {
-        let document = parse_surface_source_target_document_for_profile(
-            source,
-            source_profile_for_dimension(dimension),
-        );
+        let document = parse_surface_source_target_document_for_owner_dimension(source, dimension);
         resolve_source_entries_from_document(&document)
     } else {
         entries.to_vec()
@@ -163,13 +157,6 @@ fn matching_visual_targets<'a>(
         .collect()
 }
 
-fn source_profile_for_dimension(dimension: crate::ModelDimension) -> crate::PuzzleSourceProfile {
-    match dimension {
-        crate::ModelDimension::Two => crate::PuzzleSourceProfile::Puzzle2d,
-        crate::ModelDimension::Three => crate::PuzzleSourceProfile::Puzzle3d,
-    }
-}
-
 fn mutate_linked_definitions(
     source: &str,
     document: &crate::surface::SurfaceDocument,
@@ -212,10 +199,7 @@ fn reparsed_visual_target(
     dimension: crate::ModelDimension,
     name: &str,
 ) -> Result<(crate::surface::SurfaceDocument, crate::SourceTarget), String> {
-    let document = parse_surface_source_target_document_for_profile(
-        source,
-        source_profile_for_dimension(dimension),
-    );
+    let document = parse_surface_source_target_document_for_owner_dimension(source, dimension);
     let entries = resolve_source_entries_from_document(&document);
     let matching = matching_visual_targets(&entries, dimension, name);
     let [target] = matching.as_slice() else {
@@ -646,12 +630,18 @@ fn unique_name(
     dimension: crate::ModelDimension,
     original: &str,
 ) -> String {
-    let base = original.strip_suffix("_copy").unwrap_or(original);
+    let (object, tags) = original
+        .split_once(':')
+        .map_or((original, ""), |(object, tags)| (object, tags));
+    let base = object.strip_suffix("_copy").unwrap_or(object);
+    let tag_suffix = (!tags.is_empty())
+        .then(|| format!(":{tags}"))
+        .unwrap_or_default();
     for index in 1..=10_000 {
         let name = if index == 1 {
-            format!("{base}_copy")
+            format!("{base}_copy{tag_suffix}")
         } else {
-            format!("{base}_copy_{index}")
+            format!("{base}_copy_{index}{tag_suffix}")
         };
         if !visual_name_exists(entries, dimension, &name) {
             return name;
@@ -847,6 +837,18 @@ mod tests {
                 .contains("shape = {\n0\n}\n}\n\nvisual Goal_copy {")
         );
         assert_eq!(result.source.matches("visual Goal").count(), 2);
+    }
+
+    #[test]
+    fn duplicate_appends_copy_to_the_object_name_before_selector_tags() {
+        assert_eq!(
+            unique_name(&[], crate::ModelDimension::Two, "Box:red"),
+            "Box_copy:red"
+        );
+        assert_eq!(
+            unique_name(&[], crate::ModelDimension::Two, "Box:red:open"),
+            "Box_copy:red:open"
+        );
     }
 
     #[test]

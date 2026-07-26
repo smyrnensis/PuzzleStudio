@@ -3743,6 +3743,7 @@ dependencies = [
  "html-play",
  "puzzle-authoring",
  "puzzle-lang",
+ "puzzle-workspace",
 ]
 
 [[package]]
@@ -3761,6 +3762,7 @@ dependencies = [
  "puzzle-scene",
  "puzzle-session-contract",
  "puzzle-solver-runtime",
+ "puzzle-workspace",
  "serde_json",
 ]
 
@@ -5831,6 +5833,7 @@ dependencies = [
  "puzzle-presentation",
  "puzzle-runtime-contract",
  "puzzle-scene",
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
  "serde",
  "serde_json",
 ]
@@ -5863,7 +5866,28 @@ dependencies = [
  "puzzle-runtime-contract",
  "puzzle-scene",
  "puzzle-session-contract",
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "puzzle-presentation"
+version = "0.1.0"
+dependencies = [
+ "puzzle-runtime-contract",
+ "serde_json",
+]
+
+[[package]]
+name = "puzzle-presentation-json"
+version = "0.1.0"
+dependencies = [
+ "puzzle-lang",
+ "puzzle-runtime-contract",
+ "puzzle-scene",
+ "puzzle-session-contract",
  "serde_json",
 ]
 
@@ -5892,6 +5916,10 @@ dependencies = [
 name = "puzzle-session-contract"
 version = "0.1.0"
 dependencies = [
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+ "puzzle-lang",
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
  "puzzle-runtime-contract",
  "puzzle-scene",
  "serde",
@@ -5916,6 +5944,7 @@ dependencies = [
  "puzzle-play",
  "puzzle-runtime-contract",
  "puzzle-solver",
+ "puzzle-workspace",
  "serde",
  "serde_json",
 ]
@@ -5963,8 +5992,14 @@ dependencies = [
  "bevy",
  "puzzle-bevy-player",
  "puzzle-game-runtime",
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
  "puzzle-player-bootstrap",
  "puzzle-runtime-contract",
+=======
+ "puzzle-presentation",
+ "puzzle-runtime-contract",
+ "serde_json",
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
  "wasm-bindgen",
  "web-sys",
 ]
@@ -5981,6 +6016,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "puzzle-workspace"
+version = "0.1.0"
+dependencies = [
+ "puzzle-lang",
+]
+
+[[package]]
 name = "puzzlestudio"
 version = "0.1.0"
 dependencies = [
@@ -5988,6 +6030,7 @@ dependencies = [
  "html-play",
  "puzzle-agent-runtime",
  "puzzle-lang",
+ "puzzle-workspace",
 ]
 
 [[package]]

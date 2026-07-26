@@ -1,25 +1,4 @@
 #[cfg(not(target_arch = "wasm32"))]
-fn discover_default_puzzle_path() -> Result<PathBuf, AppError> {
-    let candidates =
-        discover_game_entries("games").map_err(|error| AppError::Config(error.to_string()))?;
-    match candidates.len() {
-        0 => Err(AppError::Config(
-            "no games/*/game.puzzle or games/*/game.puzzle3 entries found. Pass a path: html-play <path/to/game-folder-or-game.puzzle-or-game.puzzle3>"
-                .to_string(),
-        )),
-        1 => Ok(candidates[0].clone()),
-        _ => Err(AppError::Config(format!(
-            "multiple game entries found. Pass one explicitly: {}",
-            candidates
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))),
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn load_game_css(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, AppError> {
     load_asset_css(puzzle_path, &loaded.assets)
 }
@@ -136,7 +115,7 @@ fn resolve_asset_path(base_dir: &Path, asset_path: &str) -> Result<PathBuf, AppE
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
         return Err(AppError::Config(format!(
-            "asset path must be game-folder relative: {asset_path}"
+            "asset path must be workspace-relative: {asset_path}"
         )));
     }
     let resolved = base_dir.join(path);
@@ -222,7 +201,7 @@ fn push_asset_resolver_entry(
 ) -> Result<(), AppError> {
     let relative = path.strip_prefix(root).map_err(|_| {
         AppError::Config(format!(
-            "asset file is outside game folder: {}",
+            "asset file is outside workspace: {}",
             path.display()
         ))
     })?;
@@ -320,3 +299,199 @@ fn base64_encode(bytes: &[u8]) -> String {
     }
     out
 }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+=======
+
+fn generated_visuals_js(loaded: &LoadedGame) -> String {
+    if loaded.visuals.aliases.is_empty()
+        && loaded.visuals.entries.is_empty()
+        && loaded.visuals.order.priorities.is_empty()
+    {
+        return String::new();
+    }
+
+    let mut aliases = String::new();
+    aliases.push('{');
+    for (index, alias) in loaded.visuals.aliases.iter().enumerate() {
+        if index > 0 {
+            aliases.push(',');
+        }
+        push_json_string(&mut aliases, &alias.object);
+        aliases.push(':');
+        push_json_string(&mut aliases, &alias.visual);
+    }
+    aliases.push('}');
+
+    let mut entries = String::new();
+    entries.push('{');
+    for (index, visual) in loaded.visuals.entries.iter().enumerate() {
+        if index > 0 {
+            entries.push(',');
+        }
+        push_json_string(&mut entries, &visual.name);
+        entries.push(':');
+        push_visual(&mut entries, visual);
+    }
+    entries.push('}');
+    let order = serde_json::to_string(&loaded.visuals.order)
+        .expect("compiled visual order serialization must succeed");
+
+    format!(
+        "(() => {{\n  const previous = window.GameVisuals || {{}};\n  const createVisuals = window.PuzzleVisualRegistry?.create || ((config = {{}}) => ({{\n    aliases: {{ ...(config.aliases || {{}}) }},\n    entries: {{ ...(config.entries || {{}}) }},\n    order: {{ direction_priority: [...(config.order?.direction_priority || [])], priorities: [...(config.order?.priorities || [])] }},\n    boardClass: config.boardClass || \"\",\n    themeClass: config.themeClass || \"\",\n    editorPuzzle: {{ ...(config.editorPuzzle || {{}}) }},\n    autoAdvanceDelayMs: config.autoAdvanceDelayMs,\n  }}));\n  window.GameVisuals = createVisuals({{\n    ...previous,\n    aliases: {{ ...(previous.aliases || {{}}), ...{aliases} }},\n    entries: {{ ...(previous.entries || {{}}), ...{entries} }},\n    order: {order},\n  }});\n}})();"
+    )
+}
+
+fn push_visual(out: &mut String, visual: &VisualDef) {
+    match &visual.kind {
+        VisualKind::Solid(color) => {
+            out.push_str("{\"colors\":{\"0\":");
+            push_json_string(out, color);
+            out.push_str("},\"pattern\":[\"0\"]}");
+        }
+        VisualKind::Image { source } => {
+            out.push_str("{\"source\":");
+            push_json_string(out, source);
+            out.push('}');
+        }
+        VisualKind::Ascii { colors } => {
+            let pattern = visual
+                .frames
+                .first()
+                .and_then(|frame| frame.planes.first())
+                .expect("validated planar visual has a first frame and plane");
+            out.push_str("{\"colors\":{");
+            for (index, color) in colors.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                push_json_string(out, &color.token.to_string());
+                out.push(':');
+                push_json_string(out, &color.color);
+            }
+            out.push_str("},\"pattern\":[");
+            for (index, row) in pattern.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                push_json_string(out, row);
+            }
+            out.push_str("]}");
+        }
+    }
+    if !visual.transforms.is_empty()
+        || visual.fit != Default::default()
+        || visual.sampling.is_some()
+        || visual.animation_duration_ms.is_some()
+        || visual.pixels_per_cell.is_some()
+    {
+        out.pop();
+        if !visual.transforms.is_empty() {
+            out.push_str(",\"transforms\":[");
+            for (index, transform) in visual.transforms.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                match transform {
+                    VisualTransform::Rotate {
+                        degrees,
+                        axis,
+                        space,
+                    } => {
+                        out.push_str("{\"kind\":\"rotate\",\"degrees\":");
+                        out.push_str(&(degrees * axis[2]).to_string());
+                        out.push_str(",\"space\":\"");
+                        out.push_str(match space {
+                            puzzle_lang::VisualSpace::World => "world",
+                            puzzle_lang::VisualSpace::Local => "local",
+                        });
+                        out.push('"');
+                        out.push('}');
+                    }
+                    VisualTransform::Translate { value, space } => {
+                        out.push_str("{\"kind\":\"translate\",\"x\":");
+                        out.push_str(&value[0].to_string());
+                        out.push_str(",\"y\":");
+                        out.push_str(&value[1].to_string());
+                        out.push_str(",\"space\":\"");
+                        out.push_str(match space {
+                            puzzle_lang::VisualSpace::World => "world",
+                            puzzle_lang::VisualSpace::Local => "local",
+                        });
+                        out.push('"');
+                        out.push('}');
+                    }
+                    VisualTransform::Flip { enabled } => {
+                        out.push_str("{\"kind\":\"flip\",\"enabled\":");
+                        out.push_str(if *enabled { "true" } else { "false" });
+                        out.push('}');
+                    }
+                }
+            }
+            out.push(']');
+        }
+        if visual.fit != Default::default() {
+            out.push_str(",\"fit\":{\"mode\":");
+            push_json_string(out, visual_fit_mode_name(visual.fit.mode));
+            out.push_str(",\"width\":");
+            out.push_str(&visual.fit.width.to_string());
+            out.push_str(",\"height\":");
+            out.push_str(&visual.fit.height.to_string());
+            out.push('}');
+        }
+        if let Some(sampling) = visual.sampling {
+            out.push_str(",\"sampling\":");
+            push_json_string(out, visual_sampling_name(sampling));
+        }
+        if let Some(duration_ms) = visual.animation_duration_ms {
+            push_visual_loop(out, duration_ms, &visual.frames);
+        }
+        if let Some(pixels_per_cell) = visual.pixels_per_cell {
+            out.push_str(",\"pixelsPerCell\":{\"width\":");
+            out.push_str(&pixels_per_cell.width.to_string());
+            out.push_str(",\"height\":");
+            out.push_str(&pixels_per_cell.height.to_string());
+            out.push('}');
+        }
+        out.push('}');
+    }
+}
+
+fn push_visual_loop(out: &mut String, duration_ms: u64, frames: &[puzzle_lang::VisualFrameDef]) {
+    out.push_str(",\"durationMs\":");
+    out.push_str(&duration_ms.to_string());
+    out.push_str(",\"frames\":[");
+    for (frame_index, frame) in frames.iter().enumerate() {
+        if frame_index > 0 {
+            out.push(',');
+        }
+        out.push('[');
+        let plane = frame
+            .planes
+            .first()
+            .expect("validated planar visual frame has one plane");
+        for (row_index, row) in plane.iter().enumerate() {
+            if row_index > 0 {
+                out.push(',');
+            }
+            push_json_string(out, row);
+        }
+        out.push(']');
+    }
+    out.push(']');
+}
+
+fn visual_fit_mode_name(mode: puzzle_lang::VisualFitMode) -> &'static str {
+    match mode {
+        puzzle_lang::VisualFitMode::Contain => "contain",
+        puzzle_lang::VisualFitMode::Cover => "cover",
+        puzzle_lang::VisualFitMode::Stretch => "stretch",
+    }
+}
+
+fn visual_sampling_name(sampling: puzzle_lang::VisualSampling) -> &'static str {
+    match sampling {
+        puzzle_lang::VisualSampling::Pixelated => "pixelated",
+        puzzle_lang::VisualSampling::Smooth => "smooth",
+    }
+}
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544

@@ -15,50 +15,15 @@ pub fn export_loaded_document_visual_fixture_json(
                 "failed to serialize puzzle3 document fields: {error}"
             ))
         })?;
-    export_visual_fixture_json_with_title_and_scenes(
+    export_visual_fixture_json_with_scenes(
         game,
         presentation,
-        Some(&document.title),
         document_fields.as_deref(),
         &level_bundle_names,
     )
     .map_err(|error| {
         DiagnosticReport::error(format!("failed to export puzzle3 fixture: {error:?}"))
     })
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn parse_game_file(path: impl AsRef<Path>) -> Result<LoadedDocument, DiagnosticReport> {
-    let path = path.as_ref();
-    let source = fs::read_to_string(path).map_err(|error| {
-        DiagnosticReport::error(format!("failed to read {}: {error}", path.display()))
-    })?;
-    let profile = puzzle_source_profile_for_path(path).ok_or_else(|| {
-        DiagnosticReport::error(format!(
-            "game entry must be a .puzzle or .puzzle3 file: {}",
-            path.display()
-        ))
-    })?;
-    validate_source_profile(&source, profile)?;
-    let expanded = expand_game_imports_for_file(&source, path)?;
-    validate_source_profile(&expanded, profile)?;
-    parse_game_document_with_profile(&expanded, profile)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn parse_game2d_file(path: impl AsRef<Path>) -> Result<LoadedGame, DiagnosticReport> {
-    let path = path.as_ref();
-    if puzzle_source_profile_for_path(path) != Some(PuzzleSourceProfile::Puzzle2d) {
-        return Err(DiagnosticReport::error(format!(
-            "2D game entry must be a .puzzle file: {}",
-            path.display()
-        )));
-    }
-    let source = fs::read_to_string(path).map_err(|error| {
-        DiagnosticReport::error(format!("failed to read {}: {error}", path.display()))
-    })?;
-    let expanded = expand_game_imports_for_file(&source, path)?;
-    parse_game2d_document(&expanded)
 }
 
 pub fn parse_document_assets(source: &str) -> Result<AssetsDef, DiagnosticReport> {
@@ -97,13 +62,13 @@ fn parse_game2d_from_document_parts(
     }
     let mut scenes = parts.scenes.clone();
     let model_name = model.name.clone();
-    resolve_inferred_scene_puzzle_slots(&mut scenes, [("puzzle", &model_name)])?;
+    resolve_inferred_scene_puzzle_slots(&mut scenes, [("puzzle", &model_name)], None)?;
     let LoweredModel::Puzzle2d(mut game) = parse_model_from_document_parts(parts)? else {
         unreachable!("2D model dimension was validated before lowering");
     };
     resolve_default_wait_in_scenes(&mut scenes, game.default_wait_ms);
     game.scenes = add_implicit_model_scenes(scenes, [("puzzle", &model_name)]);
-    resolve_scene_actions(&mut game.scenes, &game.input_labels)?;
+    resolve_scene_actions(&mut game.scenes, &game.input_labels, None)?;
     add_scene_input_key_controls(&game.scenes, &game.input_labels, &mut game.controls);
     Ok(game)
 }
@@ -125,45 +90,299 @@ fn parse_model_from_document_parts(
 }
 
 fn parse_game_document(source: &str) -> Result<LoadedDocument, DiagnosticReport> {
-    validate_source_profile(source, PuzzleSourceProfile::Puzzle2d)?;
-    parse_game_document_with_profile(source, PuzzleSourceProfile::Puzzle2d)
-}
-
-fn parse_game_document_with_profile(
-    source: &str,
-    profile: PuzzleSourceProfile,
-) -> Result<LoadedDocument, DiagnosticReport> {
+    validate_puzzle_source(source)?;
     let parts = parse_document_source_parts_from_surface_source(source)?;
-    validate_document_source_profile(&parts, profile)?;
-    parse_loaded_document_parts(parts)
+    parse_loaded_document_parts(parts, None)
 }
 
-fn validate_document_source_profile(
-    parts: &DocumentSourceParts,
-    source_profile: PuzzleSourceProfile,
-) -> Result<(), DiagnosticReport> {
-    if source_profile == PuzzleSourceProfile::Puzzle3d {
-        let invalid = parts
-            .models
+pub fn parse_workspace_game(
+    entry_path: &str,
+    documents: &[WorkspaceSourceDocument],
+) -> Result<LoadedDocument, DiagnosticReport> {
+    let workspace = crate::WorkspaceAnalysis::new(documents)?;
+    workspace.compile_game(entry_path)
+}
+
+impl crate::WorkspaceAnalysis {
+    pub fn compile_game(&self, entry_path: &str) -> Result<LoadedDocument, DiagnosticReport> {
+        let plans = self.module_plan(entry_path)?;
+        let namespaces = plans
             .iter()
-            .find(|model| !model.dimension_is_explicit || model.dimension != ModelDimension::Three);
-        if let Some(model) = invalid {
-            return Err(DiagnosticReport::error_at_source_line_number(
-                format!(
-                    "puzzle `{}` in a .puzzle3 file must explicitly declare `dimension = 3`",
-                    model.name
-                ),
-                model.source_line.clone(),
-                model.source_line_number,
-            ));
+            .map(|plan| (plan.path.to_string(), plan.namespace.clone()))
+            .collect::<HashMap<_, _>>();
+        let mut parsed = Vec::with_capacity(plans.len());
+        for plan in &plans {
+            let parts = plan
+                .analysis
+                .strict_document_parts()
+                .map_err(|report| report.with_file(plan.path))?;
+            parsed.push((plan, parts));
+        }
+        let exports = parsed
+            .iter()
+            .map(|(plan, parts)| {
+                (
+                    plan.path.to_string(),
+                    WorkspaceModuleExports {
+                        models: parts
+                            .models
+                            .iter()
+                            .map(|model| model.name.clone())
+                            .collect(),
+                        scenes: parts
+                            .scenes
+                            .iter()
+                            .map(|scene| scene.name.clone())
+                            .collect(),
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        let mut entry_shell = None;
+        let mut models = Vec::new();
+        let mut model_catalogs = Vec::new();
+        let mut scenes = Vec::new();
+        let mut origins = WorkspaceOrigins::default();
+        for (plan, mut parts) in parsed {
+            if plan.namespace.is_empty() {
+                entry_shell = Some(parts.shell.clone());
+            } else {
+                validate_imported_document_shell(plan.path, &parts.shell)
+                    .map_err(|report| report.with_file(plan.path))?;
+            }
+            qualify_workspace_document_parts(&mut parts, plan, &namespaces, &exports)
+                .map_err(|report| report.with_file(plan.path))?;
+            for model in &parts.models {
+                origins
+                    .models
+                    .insert(model.name.clone(), plan.path.to_string());
+                origins
+                    .scenes
+                    .insert(model.name.clone(), plan.path.to_string());
+            }
+            for scene in &parts.scenes {
+                origins
+                    .scenes
+                    .insert(scene.name.clone(), plan.path.to_string());
+            }
+            models.extend(parts.models);
+            model_catalogs.extend(parts.model_catalogs);
+            scenes.extend(parts.scenes);
+        }
+        let shell = entry_shell.ok_or_else(|| {
+            DiagnosticReport::error(format!(
+                "workspace entry not found in module plan: {entry_path}"
+            ))
+        })?;
+        parse_loaded_document_parts(
+            DocumentSourceParts {
+                shell,
+                models,
+                model_catalogs,
+                scenes,
+                recognition: crate::surface::ParserRecognition::default(),
+            },
+            Some(&origins),
+        )
+    }
+}
+
+#[derive(Default)]
+struct WorkspaceOrigins {
+    models: HashMap<String, String>,
+    scenes: HashMap<String, String>,
+}
+
+struct WorkspaceModuleExports {
+    models: HashSet<String>,
+    scenes: HashSet<String>,
+}
+
+#[derive(Clone, Copy)]
+enum WorkspaceExportKind {
+    Model,
+    Scene,
+}
+
+fn validate_imported_document_shell(
+    path: &str,
+    shell: &DocumentShell,
+) -> Result<(), DiagnosticReport> {
+    let default = DocumentShell::default();
+    let has_settings = shell.default_wait_ms != default.default_wait_ms
+        || shell.input_buffer != default.input_buffer
+        || shell.animation != default.animation
+        || !shell.variables.is_empty()
+        || !shell.sounds.sfx.is_empty()
+        || !shell.sounds.music.is_empty()
+        || shell.theme.name != default.theme.name
+        || !shell.theme.variables.is_empty()
+        || !shell.assets.entries.is_empty();
+    if has_settings {
+        return Err(DiagnosticReport::error(format!(
+            "imported document `{path}` declares game-wide settings; document settings belong to the workspace entry"
+        )));
+    }
+    Ok(())
+}
+
+fn qualify_workspace_document_parts(
+    parts: &mut DocumentSourceParts,
+    plan: &crate::workspace::WorkspaceModulePlan<'_>,
+    namespaces: &HashMap<String, String>,
+    exports: &HashMap<String, WorkspaceModuleExports>,
+) -> Result<(), DiagnosticReport> {
+    for asset in &mut parts.shell.assets.entries {
+        asset.path = qualify_workspace_resource_path(plan.path, &asset.path)?;
+    }
+    for model in &mut parts.models {
+        model.name = qualify_local_declaration(&plan.namespace, &model.name);
+        for level in &mut model.body.levels.levels {
+            if let Some(puzzle) = &mut level.puzzle {
+                *puzzle = resolve_workspace_reference(
+                    puzzle,
+                    WorkspaceExportKind::Model,
+                    plan,
+                    namespaces,
+                    exports,
+                )?;
+            }
         }
     }
-
+    for scene in &mut parts.scenes {
+        scene.name = qualify_local_declaration(&plan.namespace, &scene.name);
+        for puzzle in &mut scene.state.puzzles {
+            puzzle.model = resolve_workspace_reference(
+                &puzzle.model,
+                WorkspaceExportKind::Model,
+                plan,
+                namespaces,
+                exports,
+            )?;
+        }
+        for binding in &mut scene.key_bindings {
+            qualify_scene_effect(&mut binding.effect, plan, namespaces, exports)?;
+        }
+        for routine in &mut scene.routines {
+            qualify_scene_effect(&mut routine.effect, plan, namespaces, exports)?;
+        }
+        for transition in &mut scene.transitions {
+            qualify_scene_effect(&mut transition.effect, plan, namespaces, exports)?;
+        }
+        qualify_scene_components(&mut scene.components, plan, namespaces, exports)?;
+    }
     Ok(())
+}
+
+fn qualify_scene_components(
+    components: &mut [SceneComponent],
+    plan: &crate::workspace::WorkspaceModulePlan<'_>,
+    namespaces: &HashMap<String, String>,
+    exports: &HashMap<String, WorkspaceModuleExports>,
+) -> Result<(), DiagnosticReport> {
+    for component in components {
+        match component {
+            SceneComponent::Frame(frame) => {
+                frame.source = resolve_workspace_reference(
+                    &frame.source,
+                    WorkspaceExportKind::Scene,
+                    plan,
+                    namespaces,
+                    exports,
+                )?;
+            }
+            SceneComponent::Button(button) | SceneComponent::Choice(button) => {
+                qualify_scene_effect(&mut button.effect, plan, namespaces, exports)?;
+            }
+            SceneComponent::Row(container)
+            | SceneComponent::Column(container)
+            | SceneComponent::Box(container) => {
+                qualify_scene_components(&mut container.children, plan, namespaces, exports)?;
+            }
+            SceneComponent::Conditional(conditional) => {
+                qualify_scene_components(&mut conditional.children, plan, namespaces, exports)?;
+                qualify_scene_components(
+                    &mut conditional.else_children,
+                    plan,
+                    namespaces,
+                    exports,
+                )?;
+            }
+            SceneComponent::Viewport(_) | SceneComponent::Text(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn qualify_scene_effect(
+    effect: &mut SceneEffect,
+    plan: &crate::workspace::WorkspaceModulePlan<'_>,
+    namespaces: &HashMap<String, String>,
+    exports: &HashMap<String, WorkspaceModuleExports>,
+) -> Result<(), DiagnosticReport> {
+    effect.try_map_scene_references(&mut |scene| {
+        resolve_workspace_reference(scene, WorkspaceExportKind::Scene, plan, namespaces, exports)
+    })
+}
+
+fn resolve_workspace_reference(
+    reference: &str,
+    kind: WorkspaceExportKind,
+    plan: &crate::workspace::WorkspaceModulePlan<'_>,
+    namespaces: &HashMap<String, String>,
+    exports: &HashMap<String, WorkspaceModuleExports>,
+) -> Result<String, DiagnosticReport> {
+    let (target_path, name) = if let Some((alias, name)) = reference.split_once(':') {
+        if name.contains(':') || !puzzle_authoring::is_identifier(name) {
+            return Err(DiagnosticReport::error(format!(
+                "workspace reference `{reference}` must name one directly imported declaration"
+            )));
+        }
+        let target = plan.imports.get(alias).ok_or_else(|| {
+            DiagnosticReport::error(format!(
+                "workspace reference `{reference}` uses unknown import alias `{alias}` in {}",
+                plan.path
+            ))
+        })?;
+        (target.as_str(), name)
+    } else {
+        (plan.path, reference)
+    };
+    let available = exports.get(target_path).ok_or_else(|| {
+        DiagnosticReport::error(format!("workspace module is unavailable: {target_path}"))
+    })?;
+    let exists = match kind {
+        WorkspaceExportKind::Model => available.models.contains(name),
+        WorkspaceExportKind::Scene => available.scenes.contains(name),
+    };
+    if !exists {
+        let label = match kind {
+            WorkspaceExportKind::Model => "puzzle model",
+            WorkspaceExportKind::Scene => "scene",
+        };
+        return Err(DiagnosticReport::error(format!(
+            "unknown {label} reference `{reference}` in {}",
+            plan.path
+        )));
+    }
+    let namespace = namespaces.get(target_path).ok_or_else(|| {
+        DiagnosticReport::error(format!("workspace module is unreachable: {target_path}"))
+    })?;
+    Ok(qualify_local_declaration(namespace, name))
+}
+
+fn qualify_local_declaration(namespace: &str, name: &str) -> String {
+    if namespace.is_empty() {
+        name.to_string()
+    } else {
+        format!("{namespace}:{name}")
+    }
 }
 
 fn parse_loaded_document_parts(
     parts: DocumentSourceParts,
+    origins: Option<&WorkspaceOrigins>,
 ) -> Result<LoadedDocument, DiagnosticReport> {
     let DocumentSourceParts {
         shell,
@@ -185,6 +404,7 @@ fn parse_loaded_document_parts(
     resolve_inferred_scene_puzzle_slots(
         &mut scenes,
         model_kinds.iter().map(|(kind, name)| (*kind, name)),
+        origins.map(|origins| &origins.scenes),
     )?;
     scenes =
         add_implicit_model_scenes(scenes, model_kinds.iter().map(|(kind, name)| (*kind, name)));
@@ -193,7 +413,16 @@ fn parse_loaded_document_parts(
     let mut lowered = Vec::with_capacity(models.len());
     let mut input_names = Vec::<String>::new();
     for (model, catalog) in models.iter().zip(&model_catalogs) {
-        let product = lower_model_with_shell(model, catalog, &shell)?;
+        let mut product = lower_model_with_shell(model, catalog, &shell).map_err(|report| {
+            match origins.and_then(|origins| origins.models.get(&model.name)) {
+                Some(file) => report.with_file(file),
+                None => report,
+            }
+        })?;
+        if let Some(file) = origins.and_then(|origins| origins.models.get(&model.name)) {
+            qualify_loaded_model_resource_paths(&mut product, file)
+                .map_err(|report| report.with_file(file))?;
+        }
         match &product {
             LoweredModel::Puzzle2d(game) => {
                 for name in game.input_labels.values() {
@@ -215,7 +444,11 @@ fn parse_loaded_document_parts(
         })?;
         input_labels.insert(InputId(id), name);
     }
-    resolve_scene_actions(&mut scenes, &input_labels)?;
+    resolve_scene_actions(
+        &mut scenes,
+        &input_labels,
+        origins.map(|origins| &origins.scenes),
+    )?;
 
     let mut loaded_models = Vec::with_capacity(models.len());
     for (model, product) in models.into_iter().zip(lowered) {
@@ -245,6 +478,39 @@ fn parse_loaded_document_parts(
     Ok(loaded_document_from_shell(shell, scenes, loaded_models))
 }
 
+fn qualify_loaded_model_resource_paths(
+    model: &mut LoweredModel,
+    owner_path: &str,
+) -> Result<(), DiagnosticReport> {
+    let visuals = match model {
+        LoweredModel::Puzzle2d(game) => &mut game.visuals,
+        LoweredModel::Puzzle3d { game, .. } => &mut game.visuals,
+    };
+    for visual in &mut visuals.entries {
+        if let VisualKind::Image { source } = &mut visual.kind {
+            *source = qualify_workspace_resource_path(owner_path, source)?;
+        }
+    }
+    Ok(())
+}
+
+fn qualify_workspace_resource_path(
+    owner_path: &str,
+    resource_path: &str,
+) -> Result<String, DiagnosticReport> {
+    if resource_path.starts_with("data:")
+        || resource_path.starts_with("http:")
+        || resource_path.starts_with("https:")
+        || resource_path.starts_with('#')
+    {
+        return Ok(resource_path.to_string());
+    }
+    crate::WorkspacePath::parse(owner_path)
+        .and_then(|owner| owner.resolve_relative(resource_path))
+        .map(|path| path.as_str().to_string())
+        .map_err(DiagnosticReport::error)
+}
+
 fn model_dimension_kind(dimension: ModelDimension) -> &'static str {
     match dimension {
         ModelDimension::Two => "puzzle",
@@ -258,10 +524,6 @@ fn loaded_document_from_shell(
     models: Vec<LoadedDocumentModel>,
 ) -> LoadedDocument {
     LoadedDocument {
-        title: shell.title,
-        subtitle: shell.subtitle,
-        author: shell.author,
-        homepage: shell.homepage,
         default_wait_ms: shell.default_wait_ms,
         input_buffer: shell.input_buffer,
         animation: shell.animation,
@@ -295,6 +557,7 @@ fn add_implicit_model_scenes<'a>(
 fn resolve_inferred_scene_puzzle_slots<'a>(
     scenes: &mut [SceneDef],
     models: impl IntoIterator<Item = (&'a str, &'a String)>,
+    scene_files: Option<&HashMap<String, String>>,
 ) -> Result<(), DiagnosticReport> {
     let mut model_kinds = HashMap::<String, String>::new();
     let mut ambiguous = HashSet::<String>::new();
@@ -311,23 +574,33 @@ fn resolve_inferred_scene_puzzle_slots<'a>(
     }
 
     for scene in scenes {
-        let mut resolved_puzzle_kinds = HashMap::new();
-        for puzzle in &scene.state.puzzles {
-            if ambiguous.contains(&puzzle.model) {
-                return Err(DiagnosticReport::error(format!(
-                    "scene puzzle slot `{}` references an ambiguous puzzle model",
-                    puzzle.name
-                )));
+        let file = scene_files
+            .and_then(|files| files.get(&scene.name))
+            .cloned();
+        let result = (|| {
+            let mut resolved_puzzle_kinds = HashMap::new();
+            for puzzle in &scene.state.puzzles {
+                if ambiguous.contains(&puzzle.model) {
+                    return Err(DiagnosticReport::error(format!(
+                        "scene puzzle slot `{}` references an ambiguous puzzle model",
+                        puzzle.name
+                    )));
+                }
+                let Some(kind) = model_kinds.get(&puzzle.model) else {
+                    return Err(DiagnosticReport::error(format!(
+                        "scene puzzle slot `{}` references unknown puzzle model `{}`",
+                        puzzle.name, puzzle.model
+                    )));
+                };
+                resolved_puzzle_kinds.insert(puzzle.name.clone(), kind.clone());
             }
-            let Some(kind) = model_kinds.get(&puzzle.model) else {
-                return Err(DiagnosticReport::error(format!(
-                    "scene puzzle slot `{}` references unknown puzzle model `{}`",
-                    puzzle.name, puzzle.model
-                )));
-            };
-            resolved_puzzle_kinds.insert(puzzle.name.clone(), kind.clone());
-        }
-        resolve_scene_viewport_projections(&mut scene.components, &resolved_puzzle_kinds);
+            resolve_scene_viewport_projections(&mut scene.components, &resolved_puzzle_kinds);
+            Ok::<(), DiagnosticReport>(())
+        })();
+        result.map_err(|report| match file {
+            Some(file) => report.with_file(file),
+            None => report,
+        })?;
     }
 
     Ok(())
@@ -446,7 +719,9 @@ fn push_puzzle3_fixture_surface(out: &mut String, root: &str) {
     out.push_str(&root);
     out.push_str(", \"definition\": ");
     out.push_str(&root);
-    out.push_str(", \"placement\": \"root\", \"visibility\": \"visible\", \"modal\": false }] },\n");
+    out.push_str(
+        ", \"placement\": \"root\", \"visibility\": \"visible\", \"modal\": false }] },\n",
+    );
 }
 
 fn push_puzzle3_scene_json(
@@ -566,10 +841,6 @@ fn key_trigger_name(key: &KeyTrigger) -> String {
 
 #[derive(Clone, Debug)]
 struct DocumentShell {
-    title: String,
-    subtitle: Option<String>,
-    author: Option<String>,
-    homepage: Option<String>,
     default_wait_ms: u64,
     input_buffer: InputBufferDef,
     animation: AnimationDef,
@@ -580,7 +851,7 @@ struct DocumentShell {
 }
 
 #[derive(Clone, Debug)]
-struct DocumentSourceParts {
+pub(crate) struct DocumentSourceParts {
     shell: DocumentShell,
     models: Vec<model_syntax::PuzzleModelSyntax>,
     model_catalogs: Vec<Catalog>,
@@ -612,10 +883,6 @@ impl PendingSceneSource {
 impl Default for DocumentShell {
     fn default() -> Self {
         Self {
-            title: "Untitled puzzle".to_string(),
-            subtitle: None,
-            author: None,
-            homepage: None,
             default_wait_ms: DEFAULT_WAIT_MS,
             input_buffer: InputBufferDef::default(),
             animation: AnimationDef::default(),
@@ -663,6 +930,12 @@ fn parse_document_source_parts_from_logical_lines(
     let (model_lines, pending_scenes) =
         split_document_scene_sources(logical_lines, &mut recognition)?;
     let document_entries = model_syntax::parse_document_entries(&model_lines)?;
+    for entry in document_entries
+        .iter()
+        .filter(|entry| entry.directive == puzzle_authoring::PuzzleDirectiveSurface::Import)
+    {
+        recognition.merge(entry.semantics.fixed.clone());
+    }
     model_syntax::validate_closed_entries(&document_entries, "document")?;
     let shell = parse_document_shell_entries(&document_entries)?;
     let models = model_syntax::parse_puzzle_models_from_document_entries(&document_entries)?;
@@ -690,19 +963,7 @@ fn parse_document_shell_entries(
     for entry in entries {
         let tokens = split_header_tokens(&entry.header.text);
         match entry.directive {
-            puzzle_authoring::PuzzleDirectiveSurface::Metadata => match tokens.as_slice() {
-                ["title", ..] => {
-                    shell.title = parse_metadata_text(&entry.header, "title")?;
-                }
-                ["subtitle", ..] => {
-                    shell.subtitle = Some(parse_metadata_text(&entry.header, "subtitle")?);
-                }
-                ["author", ..] => {
-                    shell.author = Some(parse_metadata_text(&entry.header, "author")?);
-                }
-                ["homepage", ..] => {
-                    shell.homepage = Some(parse_metadata_text(&entry.header, "homepage")?);
-                }
+            puzzle_authoring::PuzzleDirectiveSurface::DocumentSetting => match tokens.as_slice() {
                 ["default_wait_time", ..] => {
                     shell.default_wait_ms = parse_default_wait_time_directive(&entry.header)?;
                 }
@@ -711,10 +972,7 @@ fn parse_document_shell_entries(
                     parse_theme_statement(&lines, 0, &mut shell.theme)?;
                 }
                 _ => {
-                    return Err(parse_error(
-                        &entry.header,
-                        "unknown document metadata directive",
-                    ));
+                    return Err(parse_error(&entry.header, "unknown document setting"));
                 }
             },
             puzzle_authoring::PuzzleDirectiveSurface::Variable => {
@@ -998,24 +1256,21 @@ fn parse_default_model_scene(
     Ok(scene)
 }
 
-pub fn validate_source_profile_for_path(
+pub fn validate_puzzle_source_for_path(
     source: &str,
     path: impl AsRef<Path>,
 ) -> Result<(), DiagnosticReport> {
     let path = path.as_ref();
-    let profile = puzzle_source_profile_for_path(path).ok_or_else(|| {
-        DiagnosticReport::error(format!(
-            "puzzle source must use .puzzle or .puzzle3 extension: {}",
+    if !is_puzzle_source_path(path) {
+        return Err(DiagnosticReport::error(format!(
+            "puzzle source must use .puzzle extension: {}",
             path.display()
-        ))
-    })?;
-    validate_source_profile(source, profile)
+        )));
+    }
+    validate_puzzle_source(source)
 }
 
-fn validate_source_profile(
-    source: &str,
-    _profile: PuzzleSourceProfile,
-) -> Result<(), DiagnosticReport> {
+fn validate_puzzle_source(source: &str) -> Result<(), DiagnosticReport> {
     let document = parse_surface_structure_document(source);
     if document.lines.iter().any(|line| {
         line.scope.is_none() && line.tokens.first().is_some_and(|token| token == "puzzle3")
@@ -1094,7 +1349,7 @@ mod document_surface_flow_tests {
     }
 
     #[test]
-    fn source_dimension_selects_lowering_independently_of_puzzle_extension() {
+    fn puzzle_declaration_dimension_selects_lowering() {
         let document = parse_game_for_path(
             r#"
 puzzle space {
@@ -1117,7 +1372,7 @@ rules {
     }
 
     #[test]
-    fn puzzle3_extension_does_not_implicitly_select_dimension_three() {
+    fn puzzle3_extension_is_rejected() {
         let error = parse_game_for_path(
             r#"
 puzzle space {
@@ -1133,10 +1388,7 @@ rules {
         .unwrap_err()
         .to_string();
 
-        assert!(
-            error.contains("must explicitly declare `dimension = 3`"),
-            "{error}"
-        );
+        assert!(error.contains("must use .puzzle extension"), "{error}");
     }
 }
 
@@ -1144,11 +1396,8 @@ rules {
 pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, DiagnosticReport> {
     let path = path.as_ref();
     if path.is_dir() {
-        if let Some(entry) = game_entry_in_directory(path)? {
-            return Ok(entry);
-        }
         return Err(DiagnosticReport::error(format!(
-            "game folder must contain a .puzzle or .puzzle3 file that declares a puzzle model: {}",
+            "game entry must be an explicit .puzzle file, not a directory: {}",
             path.display()
         )));
     }
@@ -1156,400 +1405,17 @@ pub fn resolve_game_entry(path: impl AsRef<Path>) -> Result<PathBuf, DiagnosticR
     if path.is_file() {
         if !is_puzzle_source_path(path) {
             return Err(DiagnosticReport::error(format!(
-                "game entry must be a folder, .puzzle file, or .puzzle3 file: {}",
+                "game entry must be a .puzzle file: {}",
                 path.display()
             )));
         }
-        let source = fs::read_to_string(path).map_err(|error| {
-            DiagnosticReport::error(format!(
-                "failed to read game entry {}: {error}",
-                path.display()
-            ))
-        })?;
-        if source_declares_game_entry(&source) {
-            return Ok(path.to_path_buf());
-        }
-        let mut dir = path.parent();
-        while let Some(current) = dir {
-            if let Some(entry) = game_entry_in_directory(current)? {
-                return Ok(entry);
-            }
-            dir = current.parent();
-        }
-        return Err(DiagnosticReport::error(format!(
-            "puzzle source file declares no puzzle model and no containing game entry was found: {}",
-            path.display()
-        )));
+        return Ok(path.to_path_buf());
     }
 
     Err(DiagnosticReport::error(format!(
         "game entry not found: {}",
         path.display()
     )))
-}
-
-pub fn source_declares_game_entry(source: &str) -> bool {
-    let mut depth = 0_i32;
-    for raw_line in source.lines() {
-        let code = raw_line.split("//").next().unwrap_or("");
-        let trimmed = code.trim();
-        if depth == 0 {
-            let first = trimmed.split_whitespace().next().unwrap_or("");
-            if first == "puzzle" {
-                return true;
-            }
-        }
-        for ch in code.chars() {
-            match ch {
-                '{' => depth += 1,
-                '}' => depth = (depth - 1).max(0),
-                _ => {}
-            }
-        }
-    }
-    false
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn game_import_paths(source: &str) -> Result<Vec<PathBuf>, DiagnosticReport> {
-    let mut paths = Vec::new();
-    for line in logical_lines_with_locations(source)? {
-        let tokens = split_header_tokens(&line.text);
-        if matches!(tokens.as_slice(), ["import", _]) {
-            paths.push(import_path(tokens[1], &line.text)?);
-        }
-    }
-    Ok(paths)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn game_entry_in_directory(dir: &Path) -> Result<Option<PathBuf>, DiagnosticReport> {
-    let mut candidates = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|error| {
-        DiagnosticReport::error(format!(
-            "failed to read game entry directory {}: {error}",
-            dir.display()
-        ))
-    })? {
-        let path = entry
-            .map_err(|error| {
-                DiagnosticReport::error(format!("failed to read game entry: {error}"))
-            })?
-            .path();
-        if !is_puzzle_source_path(&path) {
-            continue;
-        }
-        let source = fs::read_to_string(&path).map_err(|error| {
-            DiagnosticReport::error(format!(
-                "failed to read game entry candidate {}: {error}",
-                path.display()
-            ))
-        })?;
-        if source_declares_game_entry(&source) {
-            candidates.push(path);
-        }
-    }
-    candidates.sort_by(|left, right| {
-        let left_rank = game_entry_path_rank(left, dir);
-        let right_rank = game_entry_path_rank(right, dir);
-        left_rank
-            .cmp(&right_rank)
-            .then_with(|| left.display().to_string().cmp(&right.display().to_string()))
-    });
-    Ok(candidates.into_iter().next())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn game_entry_path_rank(path: &Path, dir: &Path) -> usize {
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("");
-    let folder_name = dir
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("");
-    if name == "game.puzzle" {
-        0
-    } else if name == "game.puzzle3" {
-        1
-    } else if !folder_name.is_empty() && name == format!("{folder_name}.puzzle") {
-        2
-    } else if !folder_name.is_empty() && name == format!("{folder_name}.puzzle3") {
-        3
-    } else if name == "main.puzzle" {
-        4
-    } else if name == "main.puzzle3" {
-        5
-    } else {
-        6
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn discover_game_entries(root: impl AsRef<Path>) -> Result<Vec<PathBuf>, DiagnosticReport> {
-    let mut candidates = Vec::new();
-    for entry in fs::read_dir(root.as_ref()).map_err(|error| {
-        DiagnosticReport::error(format!(
-            "failed to read game root {}: {error}",
-            root.as_ref().display()
-        ))
-    })? {
-        let path = entry
-            .map_err(|error| {
-                DiagnosticReport::error(format!("failed to read game entry: {error}"))
-            })?
-            .path();
-        if path.is_dir() {
-            if let Some(entry) = game_entry_in_directory(&path)? {
-                candidates.push(entry);
-            }
-        } else if is_puzzle_source_path(&path) {
-            let source = fs::read_to_string(&path).map_err(|error| {
-                DiagnosticReport::error(format!(
-                    "failed to read game entry candidate {}: {error}",
-                    path.display()
-                ))
-            })?;
-            if source_declares_game_entry(&source) {
-                candidates.push(path);
-            }
-        }
-    }
-    candidates.sort();
-    Ok(candidates)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn expand_game_imports_for_file(
-    source: &str,
-    path: impl AsRef<Path>,
-) -> Result<String, DiagnosticReport> {
-    let path = path.as_ref();
-    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut import_stack = vec![canonical_import_path(path)];
-    expand_game_imports(source, base_dir, &mut import_stack, None)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn expand_game_imports_for_file_under_root(
-    source: &str,
-    path: impl AsRef<Path>,
-    root: impl AsRef<Path>,
-) -> Result<String, DiagnosticReport> {
-    let path = path.as_ref();
-    let root = canonical_import_path(root.as_ref());
-    let canonical_path = canonical_import_path(path);
-    if !canonical_path.starts_with(&root) {
-        return Err(DiagnosticReport::error(format!(
-            "can only import puzzle files under {}",
-            root.display()
-        )));
-    }
-    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut import_stack = vec![canonical_path];
-    expand_game_imports(source, base_dir, &mut import_stack, Some(&root))
-}
-
-/// Expands a 2D puzzle entry against an explicit in-memory document set.
-/// Hosts provide files; the language layer alone interprets import syntax.
-pub fn expand_game_imports_from_documents(
-    entry_path: &str,
-    documents: &[WorkspaceSourceDocument],
-) -> Result<String, DiagnosticReport> {
-    Ok(expand_game_imports_from_documents_with_origins(entry_path, documents)?.source)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExpandedWorkspaceSource {
-    pub source: String,
-    line_origins: Vec<WorkspaceSourceLineOrigin>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WorkspaceSourceLineOrigin {
-    path: String,
-    line: usize,
-}
-
-impl ExpandedWorkspaceSource {
-    pub fn remap_diagnostic_report(&self, report: DiagnosticReport) -> DiagnosticReport {
-        let diagnostics = report
-            .into_diagnostics()
-            .into_iter()
-            .map(|mut diagnostic| {
-                let Some(span) = diagnostic.primary_span.as_mut() else {
-                    return diagnostic;
-                };
-                let Some(line) = span.line else {
-                    return diagnostic;
-                };
-                let Some(origin) = self.line_origins.get(line.saturating_sub(1)) else {
-                    return diagnostic;
-                };
-                span.file = Some(origin.path.clone());
-                span.line = Some(origin.line);
-                diagnostic
-            })
-            .collect();
-        DiagnosticReport::from_diagnostics(diagnostics)
-    }
-}
-
-/// Expands workspace imports while retaining the original file and line for
-/// every emitted source line. Consumers that compile the expanded source must
-/// remap their diagnostics through the returned value before exposing them.
-pub fn expand_game_imports_from_documents_with_origins(
-    entry_path: &str,
-    documents: &[WorkspaceSourceDocument],
-) -> Result<ExpandedWorkspaceSource, DiagnosticReport> {
-    let entry = normalize_virtual_import_path(Path::new(entry_path));
-    let mut sources = HashMap::new();
-    for document in documents {
-        let path = normalize_virtual_import_path(Path::new(&document.path));
-        if path.as_os_str().is_empty() {
-            return Err(DiagnosticReport::error(
-                "workspace document path must not be empty".to_string(),
-            ));
-        }
-        if sources
-            .insert(path.clone(), document.source.as_str())
-            .is_some()
-        {
-            return Err(DiagnosticReport::error(format!(
-                "duplicate workspace document path: {}",
-                path.display()
-            )));
-        }
-    }
-    let source = sources.get(&entry).copied().ok_or_else(|| {
-        DiagnosticReport::error(format!(
-            "workspace puzzle entry not found: {}",
-            entry.display()
-        ))
-    })?;
-    expand_virtual_game_imports(source, &entry, &sources, &mut vec![entry.clone()])
-}
-
-fn expand_virtual_game_imports(
-    source: &str,
-    current_path: &Path,
-    sources: &HashMap<PathBuf, &str>,
-    import_stack: &mut Vec<PathBuf>,
-) -> Result<ExpandedWorkspaceSource, DiagnosticReport> {
-    let mut out = String::new();
-    let mut line_origins = Vec::new();
-    for (line_index, raw_line) in source.split_inclusive('\n').enumerate() {
-        let source_line_number = line_index + 1;
-        let content = raw_line.strip_suffix('\n').unwrap_or(raw_line);
-        let requested = import_directive_path(content).map_err(|report| {
-            workspace_import_diagnostic(report, current_path, source_line_number, content)
-        })?;
-        if let Some(requested) = requested {
-            if requested.is_absolute() {
-                return Err(workspace_import_diagnostic(
-                    DiagnosticReport::error("workspace imports must be relative"),
-                    current_path,
-                    source_line_number,
-                    content,
-                ));
-            }
-            let base = current_path.parent().unwrap_or_else(|| Path::new(""));
-            let resolved = normalize_virtual_import_path(&base.join(requested));
-            if import_stack.contains(&resolved) {
-                return Err(workspace_import_diagnostic(
-                    DiagnosticReport::error(format!(
-                        "cyclic import: {}",
-                        import_stack
-                            .iter()
-                            .chain(std::iter::once(&resolved))
-                            .map(|path| path.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(" -> ")
-                    )),
-                    current_path,
-                    source_line_number,
-                    content,
-                ));
-            }
-            let imported = sources.get(&resolved).copied().ok_or_else(|| {
-                workspace_import_diagnostic(
-                    DiagnosticReport::error(format!(
-                        "import not found: {} from {}",
-                        resolved.display(),
-                        current_path.display()
-                    )),
-                    current_path,
-                    source_line_number,
-                    content,
-                )
-            })?;
-            import_stack.push(resolved.clone());
-            let expanded = expand_virtual_game_imports(imported, &resolved, sources, import_stack);
-            import_stack.pop();
-            let expanded = expanded?;
-            line_origins.extend(expanded.line_origins);
-            if expanded.source.is_empty() {
-                line_origins.push(WorkspaceSourceLineOrigin {
-                    path: resolved.display().to_string(),
-                    line: 1,
-                });
-            }
-            out.push_str(&expanded.source);
-            if !expanded.source.ends_with('\n') {
-                out.push('\n');
-            }
-        } else {
-            out.push_str(raw_line);
-            line_origins.push(WorkspaceSourceLineOrigin {
-                path: current_path.display().to_string(),
-                line: source_line_number,
-            });
-        }
-    }
-    Ok(ExpandedWorkspaceSource {
-        source: out,
-        line_origins,
-    })
-}
-
-fn workspace_import_diagnostic(
-    report: DiagnosticReport,
-    path: &Path,
-    line: usize,
-    source_line: &str,
-) -> DiagnosticReport {
-    let diagnostics = report
-        .into_diagnostics()
-        .into_iter()
-        .map(|mut diagnostic| {
-            let span = diagnostic
-                .primary_span
-                .get_or_insert_with(|| DiagnosticSpan::source_line(source_line));
-            span.file = Some(path.display().to_string());
-            span.line = Some(line);
-            if span.source_line.is_none() {
-                span.source_line = Some(source_line.to_string());
-            }
-            diagnostic
-        })
-        .collect();
-    DiagnosticReport::from_diagnostics(diagnostics)
-}
-
-fn normalize_virtual_import_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normalized.pop();
-            }
-            Component::Normal(part) => normalized.push(part),
-            Component::RootDir | Component::Prefix(_) => {}
-        }
-    }
-    normalized
 }
 
 enum LoweredModel {
@@ -1650,10 +1516,7 @@ fn lower_model_with_shell_inner(
     model_catalog: &Catalog,
     shell: &DocumentShell,
 ) -> Result<LoweredModel, DiagnosticReport> {
-    let title = shell.title.clone();
-    let subtitle = shell.subtitle.clone();
-    let author = shell.author.clone();
-    let homepage = shell.homepage.clone();
+    let model_source = source::LogicalLine::new(&model.source_line, model.source_line_number);
     let mut layer_count = None;
     let mut empty_char = Some('.');
     let mut named_layers = HashMap::<String, u16>::new();
@@ -1742,6 +1605,7 @@ fn lower_model_with_shell_inner(
             let mut char_objects = catalog.char_objects.clone();
             char_objects.extend(body.local_char_objects.clone());
             Ok(PreparedLevelBody {
+                source: level.source,
                 name: level.name,
                 pack: level.pack,
                 puzzle,
@@ -1931,6 +1795,7 @@ fn lower_model_with_shell_inner(
         })
         .collect::<HashSet<_>>();
     let mut programs = lower_programs(
+        &model_source,
         rule_definitions,
         main_statements,
         main_local_frame,
@@ -1988,10 +1853,6 @@ fn lower_model_with_shell_inner(
             .map(|(name, def)| (def.id, name.clone()))
             .collect::<HashMap<_, _>>();
         let game = LoadedGridGame {
-            title,
-            subtitle,
-            author,
-            homepage,
             game: canonical_game,
             inputs: materialized.inputs,
             warnings,
@@ -2058,6 +1919,7 @@ fn lower_model_with_shell_inner(
         .map(|(index, prepared)| {
             let parsed_level = parse_level(
                 &game,
+                &prepared.source,
                 &prepared.lines,
                 empty_char,
                 &prepared.char_objects,
@@ -2121,10 +1983,6 @@ fn lower_model_with_shell_inner(
     let solver_strategy = crate::spatial_materialize2::solver(&solver_strategy)?;
 
     Ok(LoweredModel::Puzzle2d(LoadedGame {
-        title,
-        subtitle,
-        author,
-        homepage,
         game,
         inputs: crate::spatial_orientation::materialize_inputs(
             ModelDimension::Two,
@@ -2525,104 +2383,4 @@ fn collect_duplicate_output_key_warnings<'a>(
             );
         }
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn expand_game_imports(
-    source: &str,
-    base_dir: &Path,
-    import_stack: &mut Vec<PathBuf>,
-    root: Option<&Path>,
-) -> Result<String, DiagnosticReport> {
-    let mut out = String::new();
-    for raw_line in source.split_inclusive('\n') {
-        let content = raw_line.strip_suffix('\n').unwrap_or(raw_line);
-        if let Some(path) = import_directive_path(content)? {
-            let imported = read_import_expanded(base_dir, &path, import_stack, root)?;
-            out.push_str(&imported);
-            if !imported.ends_with('\n') {
-                out.push('\n');
-            }
-            continue;
-        }
-        out.push_str(raw_line);
-    }
-    Ok(out)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_import_expanded(
-    base_dir: &Path,
-    path: &Path,
-    import_stack: &mut Vec<PathBuf>,
-    root: Option<&Path>,
-) -> Result<String, DiagnosticReport> {
-    let resolved = resolve_import_path(base_dir, path);
-    let canonical = canonical_import_path(&resolved);
-    if let Some(root) = root {
-        if !canonical.starts_with(root) {
-            return Err(DiagnosticReport::error(format!(
-                "can only import puzzle files under {}",
-                root.display()
-            )));
-        }
-    }
-    if import_stack.contains(&canonical) {
-        return Err(DiagnosticReport::error(format!(
-            "cyclic import: {}",
-            import_stack
-                .iter()
-                .chain(std::iter::once(&canonical))
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(" -> ")
-        )));
-    }
-    let source = match read_import_path(&resolved) {
-        Ok(source) => source,
-        Err(error) => return Err(error),
-    };
-    let nested_base = resolved.parent().unwrap_or(base_dir);
-    import_stack.push(canonical);
-    let expanded = expand_game_imports(&source, nested_base, import_stack, root);
-    import_stack.pop();
-    expanded
-}
-
-fn import_path(token: &str, line: &str) -> Result<PathBuf, DiagnosticReport> {
-    let path = token
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .ok_or_else(|| parse_error(line, "import path must be quoted"))?;
-    Ok(PathBuf::from(path))
-}
-
-fn import_directive_path(line: &str) -> Result<Option<PathBuf>, DiagnosticReport> {
-    let line = strip_line_comment(line).trim();
-    let tokens = split_header_tokens(line);
-    if !matches!(tokens.as_slice(), ["import", _]) {
-        return Ok(None);
-    }
-    import_path(tokens[1], line).map(Some)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn resolve_import_path(base_dir: &Path, path: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        base_dir.join(path)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn canonical_import_path(path: &Path) -> PathBuf {
-    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn read_import_path(path: &Path) -> Result<String, DiagnosticReport> {
-    fs::read_to_string(path).map_err(|error| {
-        DiagnosticReport::error(format!("failed to read {}: {error}", path.display()))
-    })
 }

@@ -28,7 +28,7 @@ would therefore be ambiguous.
 
 ## Frames And Voxel Layers
 Inside a shape, a line containing only `>` starts the next animation frame. In a
-3D shape, a line containing only `-` starts the next -Z voxel layer of the same
+3D shape, a line containing only `-` starts the next +Z (`down`) voxel layer of the same
 frame. Do not put blank lines around these separators.
 
 ```puzzle
@@ -63,7 +63,7 @@ translate local (0, -0.25)
 ```
 
 Rotation is `rotate [world|local] <angle> [from <angle>]`. In 3D, the same
-axis-less form rotates around +Z (`up`); append `around <axis>` to select
+axis-less form rotates around +Z (`down`); append `around <axis>` to select
 another axis. Operations run in source order; put a transform on the visual
 reference that needs it rather than deriving rotated shapes globally.
 For a four-way 3D visual authored facing front,
