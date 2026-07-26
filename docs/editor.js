@@ -234,7 +234,7 @@ function normalizeEditorShortcut(shortcut) {
     throw new Error("Editor shortcut requires at least one key.");
   }
   const modifiers = Array.isArray(shortcut.modifiers) ? shortcut.modifiers : [];
-  if (modifiers.some((modifier) => modifier !== "primary")) {
+  if (modifiers.some((modifier) => !["primary", "shift"].includes(modifier))) {
     throw new Error(`Unsupported editor shortcut modifier: ${modifiers.join(", ")}`);
   }
   return {
@@ -247,14 +247,25 @@ function setEditorShortcutHint(element, shortcut) {
   if (!element) {
     throw new Error("Editor shortcut hint requires an element.");
   }
-  element.dataset.shortcut = JSON.stringify(normalizeEditorShortcut(shortcut));
+  setEditorShortcutHints(element, [shortcut]);
+}
+
+function setEditorShortcutHints(element, shortcuts) {
+  if (!element) {
+    throw new Error("Editor shortcut hint requires an element.");
+  }
+  if (!Array.isArray(shortcuts) || !shortcuts.length) {
+    throw new Error("Editor shortcut hints require at least one shortcut.");
+  }
+  element.dataset.shortcuts = JSON.stringify(shortcuts.map(normalizeEditorShortcut));
 }
 
 function editorShortcutMatches(event, shortcut) {
   const normalized = normalizeEditorShortcut(shortcut);
   const expectsPrimary = normalized.modifiers.includes("primary");
+  const expectsShift = normalized.modifiers.includes("shift");
   const hasPrimary = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
-  if (hasPrimary !== expectsPrimary || event.altKey || event.shiftKey) {
+  if (hasPrimary !== expectsPrimary || event.altKey || event.shiftKey !== expectsShift) {
     return false;
   }
   const eventKey = event.key.length === 1 ? event.key.toLowerCase() : event.key;
@@ -285,6 +296,11 @@ function createEditorShortcutHint(shortcut) {
   if (normalized.modifiers.includes("primary")) {
     keycap.append(editorIconElement("command"));
   }
+  if (normalized.modifiers.includes("shift")) {
+    const shift = document.createElement("span");
+    shift.textContent = "⇧";
+    keycap.append(shift);
+  }
   const key = document.createElement("span");
   key.textContent = editorShortcutKeyLabel(normalized.keys[0]);
   keycap.append(key);
@@ -298,7 +314,7 @@ function editorTooltipTargetFromEventTarget(target) {
   }
   const hasIconGlyph = element.querySelector("svg")
     || element.classList.contains("visual-brush-size-input");
-  const hasHoverContent = element.dataset.tooltip || hasIconGlyph || element.dataset.shortcut;
+  const hasHoverContent = element.dataset.tooltip || hasIconGlyph || element.dataset.shortcuts;
   if (
     element.classList.contains("visual-cell")
     || element.classList.contains("source-outline-row")
@@ -331,7 +347,7 @@ function compactEditorTooltipText(text) {
     ["Paint empty voxel", "Eraser"],
     ["Paint transparent", "Eraser"],
     ["Pick color from screen", "Pick color"],
-    ["Pick selected color", "Pick color"],
+    ["Edit selected color", "Edit color"],
     ["Remove selected color", "Remove color"],
     ["Reset 3D preview camera", "Reset camera"],
     ["Reset solution preview", "Reset"],
@@ -432,7 +448,7 @@ function ensureEditorHoverTooltip() {
   return editorHoverTooltip;
 }
 
-function renderEditorHoverTooltip(text, shortcut) {
+function renderEditorHoverTooltip(text, shortcuts) {
   const tooltip = ensureEditorHoverTooltip();
   tooltip.replaceChildren();
   if (text) {
@@ -441,7 +457,7 @@ function renderEditorHoverTooltip(text, shortcut) {
     label.textContent = text;
     tooltip.append(label);
   }
-  if (shortcut) {
+  for (const shortcut of shortcuts || []) {
     tooltip.append(createEditorShortcutHint(shortcut));
   }
   return tooltip;
@@ -485,9 +501,9 @@ function positionEditorHoverTooltip() {
 
 function showEditorHoverTooltip(element) {
   const text = editorTooltipText(element);
-  const shortcutJson = String(element.dataset.shortcut || "").trim();
-  const shortcut = shortcutJson ? JSON.parse(shortcutJson) : null;
-  if (!text && !shortcut) {
+  const shortcutsJson = String(element.dataset.shortcuts || "").trim();
+  const shortcuts = shortcutsJson ? JSON.parse(shortcutsJson) : [];
+  if (!text && !shortcuts.length) {
     hideEditorHoverTooltip(element);
     return;
   }
@@ -496,7 +512,7 @@ function showEditorHoverTooltip(element) {
     element.dataset.hoverTitle = element.getAttribute("title") || "";
     element.removeAttribute("title");
   }
-  const tooltip = renderEditorHoverTooltip(text, shortcut);
+  const tooltip = renderEditorHoverTooltip(text, shortcuts);
   tooltip.hidden = false;
   positionEditorHoverTooltip();
 }
@@ -586,6 +602,9 @@ let activeLevelSolveRequest = null;
 let editorSolverWorker = null;
 const editorSolverWorkerRequests = new Map();
 let activeSolverDisplaySceneRequestKey = "";
+let solverRenderProjectionKey = "";
+let solverRenderProjectionScene = null;
+let solverRenderProjectionRequest = 0;
 let completedSolverTaskKey = "";
 let levelSolutionPreview = null;
 let solverObservationPreview = null;
@@ -629,7 +648,6 @@ let currentPreviewMode = "play";
 let currentEditorDimension = "2d";
 let currentLevelPaneMode = "edit";
 let currentVisualPaneMode = "visual";
-let toolPaneSaveShortcutMode = "";
 let levelPaintDrag = null;
 let levelBucketActive = false;
 let levelResizeMode = null;
@@ -735,6 +753,7 @@ let visual3d = {
   animationDurationMs: null,
   frameDurationMs: null,
   shapeBind: null,
+  sourcePreludeRows: [],
   sourceSpatialOps: [],
 };
 let sounds = {
@@ -860,6 +879,7 @@ function visualEditSnapshot(kind) {
         animationDurationMs: visual3d.animationDurationMs,
         frameDurationMs: visual3d.frameDurationMs,
         shapeBind: cloneVisualEditValue(visual3d.shapeBind || null),
+        sourcePreludeRows: cloneVisualEditValue(visual3d.sourcePreludeRows || []),
         sourceSpatialOps: cloneVisualEditValue(visual3d.sourceSpatialOps || []),
         hoverSlice: visual3d.hoverSlice,
       },
@@ -1003,6 +1023,7 @@ function restoreVisualEditSnapshot(snapshot) {
     visual3d.animationDurationMs = Number.isFinite(state.animationDurationMs) ? state.animationDurationMs : null;
     visual3d.frameDurationMs = Number.isFinite(state.frameDurationMs) ? state.frameDurationMs : null;
     visual3d.shapeBind = cloneVisualEditValue(state.shapeBind || null);
+    visual3d.sourcePreludeRows = cloneVisualEditValue(state.sourcePreludeRows || []);
     visual3d.sourceSpatialOps = cloneVisualEditValue(state.sourceSpatialOps || []);
     visual3d.hoverSlice = Number.isInteger(state.hoverSlice) ? state.hoverSlice : null;
     visual3d.addPaletteOpen = false;
@@ -1067,157 +1088,6 @@ function isTextEntryTarget(target) {
     return false;
   }
   return target?.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(tagName);
-}
-
-function handleVisualEditUndoShortcut(event) {
-  if (event.altKey || isTextEntryTarget(event.target)) {
-    return false;
-  }
-  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
-  const modifier = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
-  if (!modifier) {
-    return false;
-  }
-  const redo = (key === "z" && event.shiftKey) || (!event.metaKey && key === "y");
-  if (!redo && (event.shiftKey || key !== "z")) {
-    return false;
-  }
-  const kind = currentVisualEditKind();
-  if (!kind) {
-    return false;
-  }
-  const handled = redo ? redoVisualEdit(kind) : undoVisualEdit(kind);
-  if (!handled) {
-    return false;
-  }
-  event.preventDefault();
-  event.stopPropagation();
-  return true;
-}
-
-function toolPaneSaveShortcutModeIsActive(mode) {
-  if (mode === "edit") {
-    return isPaneVisible("level") && levelBuilder && !levelBuilder.hidden;
-  }
-  if (mode === "level3d") {
-    return isPaneVisible("level") && level3dBuilder && !level3dBuilder.hidden;
-  }
-  if (mode === "visual") {
-    return isPaneVisible("visual") && visualBuilder && !visualBuilder.hidden;
-  }
-  if (mode === "visual3d") {
-    return isPaneVisible("visual") && visual3dBuilder && !visual3dBuilder.hidden;
-  }
-  if (mode === "sounds") {
-    return isPaneVisible("sounds") && soundsBuilder && !soundsBuilder.hidden;
-  }
-  return false;
-}
-
-function toolPaneSaveShortcutModeForTarget(target) {
-  const element = target instanceof Element ? target : null;
-  if (!element || sourceEditorWrap?.contains(element)) {
-    return "";
-  }
-  if (isPaneVisible("level")) {
-    if (levelBuilder && !levelBuilder.hidden && levelBuilder.contains(element)) {
-      return "edit";
-    }
-    if (level3dBuilder && !level3dBuilder.hidden && level3dBuilder.contains(element)) {
-      return "level3d";
-    }
-  }
-  if (isPaneVisible("visual")) {
-    if (visualBuilder && !visualBuilder.hidden && visualBuilder.contains(element)) {
-      return "visual";
-    }
-    if (visual3dBuilder && !visual3dBuilder.hidden && visual3dBuilder.contains(element)) {
-      return "visual3d";
-    }
-  }
-  if (isPaneVisible("sounds") && soundsBuilder && !soundsBuilder.hidden && soundsBuilder.contains(element)) {
-    return "sounds";
-  }
-  return "";
-}
-
-function rememberToolPaneSaveShortcutContext(target) {
-  toolPaneSaveShortcutMode = toolPaneSaveShortcutModeForTarget(target);
-}
-
-function currentToolPaneSaveShortcutMode(event) {
-  for (const mode of [
-    toolPaneSaveShortcutModeForTarget(event?.target),
-    toolPaneSaveShortcutModeForTarget(document.activeElement),
-    toolPaneSaveShortcutMode,
-  ]) {
-    if (mode && toolPaneSaveShortcutModeIsActive(mode)) {
-      return mode;
-    }
-  }
-  return "";
-}
-
-function reportToolPaneSourceUpdateUnavailable(paneId, message) {
-  setPaneStatus(paneId, message, "is-error");
-  setStatus(message, "is-error");
-  return true;
-}
-
-function updateToolPaneSourceForMode(mode) {
-  if (!toolPaneSaveShortcutModeIsActive(mode)) {
-    return false;
-  }
-  if (mode === "edit") {
-    if (typeof updateLevelInSource !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("level", "Level source update unavailable");
-    }
-    updateLevelInSource();
-    return true;
-  }
-  if (mode === "level3d") {
-    if (typeof updateLevel3dInSource !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("level", "3D level source update unavailable");
-    }
-    updateLevel3dInSource();
-    return true;
-  }
-  if (mode === "visual") {
-    if (typeof updateVisualInSource !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("visual", "Visual source update unavailable");
-    }
-    const update = updateVisualInSource();
-    if (update && typeof update.catch === "function") {
-      update.catch((error) => {
-        console.error(error);
-        reportToolPaneSourceUpdateUnavailable("visual", "Visual source update failed");
-      });
-    }
-    return true;
-  }
-  if (mode === "visual3d") {
-    if (typeof updateVisual3dInSource !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("visual", "3D visual source update unavailable");
-    }
-    updateVisual3dInSource();
-    return true;
-  }
-  if (mode === "sounds") {
-    if (typeof updateSoundsDefinition !== "function") {
-      return reportToolPaneSourceUpdateUnavailable("sounds", "Sound source update unavailable");
-    }
-    updateSoundsDefinition(sounds.mode === "music" ? "music" : "sfx");
-    return true;
-  }
-  return false;
-}
-
-function handleToolPaneSaveShortcut(event) {
-  const mode = currentToolPaneSaveShortcutMode(event);
-  if (mode) {
-    return updateToolPaneSourceForMode(mode);
-  }
-  return false;
 }
 
 initializeEditorTheme();
@@ -1713,9 +1583,21 @@ function workspaceSourceSnapshot(entryDocument) {
     return isPuzzleDocument(document) && isTextDocument(document) && (!root || documentRoot === root);
   }).map((document) => ({
     documentId: document.id || "",
-    path: document.puzzlePath || document.name,
+    path: workspaceCompilerPath(document),
     source: currentSourceForDocument(document),
   }));
+}
+
+function workspaceCompilerPath(document) {
+  const path = normalizePath(document?.puzzlePath || document?.name || "");
+  const root = normalizePath(document?.workspaceRoot || workspaceRoot || "").replace(/\/+$/, "");
+  if (!root) {
+    return path;
+  }
+  if (path.startsWith(`${root}/`)) {
+    return path.slice(root.length + 1);
+  }
+  throw new Error(`Workspace document is outside its root: ${path}`);
 }
 
 function compilerDocumentsForSnapshot(snapshot) {
@@ -1736,7 +1618,7 @@ function capturePreviewBuildInput(document, presentationManifest) {
   return {
     id: createDocumentId(),
     documentId: document.id || "",
-    puzzlePath: entryPath,
+    puzzlePath: entry.path,
     workspaceRoot: document.workspaceRoot || workspaceRoot || "",
     source: entry.source,
     documents: documentsSnapshot,
@@ -1843,7 +1725,6 @@ async function renderPreview() {
 }
 
 async function ensurePreviewExportForLevelAction(options = {}) {
-  ensurePreviewTargetsActiveDocument();
   let exportData = previewBuild?.exportData;
   const freshEnough = !options.requireFresh || !previewBuildIsStale;
   if (exportData && freshEnough && (!options.requirePreviewFrame || previewFrameHasCurrentCompiledPreview)) {
@@ -1912,7 +1793,7 @@ function ensureLevel3dRuntimePreviewForOpenPane() {
 }
 
 async function runPreviewFromSourcePane() {
-  ensurePreviewTargetsActiveDocument();
+  selectPreviewEntryDocument(activeDocument());
   openPreviewModePane("play", { focus: false });
   runButton.disabled = true;
   setStatus("Saving before preview", "");
@@ -2008,56 +1889,6 @@ function invalidateCompiledPreview(document = activePreviewDocument()) {
 
 function workspaceCompilerDocuments(entryDocument) {
   return compilerDocumentsForSnapshot(workspaceSourceSnapshot(entryDocument));
-}
-
-function expandPuzzleSectionHeadersForWasm(source) {
-  const lines = String(source || "").split("\n");
-  const out = [];
-  let openSection = null;
-  let i = 0;
-  while (i < lines.length) {
-    const section = sectionHeaderAtForWasm(lines, i);
-    if (section) {
-      if (openSection) {
-        out.push("end");
-      }
-      out.push(section.block);
-      openSection = section;
-      i += 3;
-      continue;
-    }
-
-    const line = lines[i];
-    const trimmed = stripLineCommentForWasm(line).trim();
-    if (openSection && trimmed) {
-      const normalizedLine = braceNormalizedLineForSectionForWasm(trimmed);
-      if (normalizedLine === "end") {
-        if (openSection.nestedDepth === 0) {
-          out.push("end");
-          openSection = null;
-        } else {
-          openSection.nestedDepth -= 1;
-        }
-      } else {
-        const tokens = normalizedLine.split(/\s+/).filter(Boolean);
-        if (openSection.nestedDepth === 0 && sectionBoundaryForWasm(openSection.block, tokens)) {
-          out.push("end");
-          openSection = null;
-          continue;
-        }
-        if (startsNestedBlockForWasm(openSection.block, tokens, normalizedLine)) {
-          openSection.nestedDepth += 1;
-        }
-      }
-    }
-
-    out.push(line);
-    i += 1;
-  }
-  if (openSection) {
-    out.push("end");
-  }
-  return out.join("\n");
 }
 
 function sectionHeaderAtForWasm(lines, start) {
@@ -2164,32 +1995,6 @@ function stripLineCommentForWasm(line) {
 
 function isIdentifierForWasm(value) {
   return /^[_A-Za-z][_A-Za-z0-9]*$/.test(value || "");
-}
-
-function resolveWasmImportPath(baseDir, importPath) {
-  if (typeof resolveWorkspaceImportPath === "function") {
-    return resolveWorkspaceImportPath(baseDir, importPath, activeDocument()?.workspaceRoot || workspaceRoot || "");
-  }
-  const normalized = normalizePath(importPath);
-  if (!normalized || normalized.startsWith("/")) {
-    return normalizePath(normalized.replace(/^\/+/, ""));
-  }
-  return normalizePathSegments(baseDir ? `${baseDir}/${normalized}` : normalized);
-}
-
-function normalizePathSegments(path) {
-  const parts = [];
-  for (const part of normalizePath(path).split("/")) {
-    if (!part || part === ".") {
-      continue;
-    }
-    if (part === "..") {
-      parts.pop();
-      continue;
-    }
-    parts.push(part);
-  }
-  return parts.join("/");
 }
 
 function documentByPath(path) {
@@ -3159,8 +2964,6 @@ function stateDataFromSceneCells(scene, levelIndex = currentEditableLevelIndex(p
     height,
     layerCount,
     slots,
-    slotMarks: Array.from({ length: slots.length }, () => []),
-    cellMarks: Array.from({ length: width * height }, () => []),
     variables: Array.isArray(previewDebugSnapshot?.gameState?.variables)
       ? cloneJson(previewDebugSnapshot.gameState.variables)
       : Array.from({ length: variablesLength }, () => 0),
@@ -3729,12 +3532,12 @@ function syncPreviewVirtualSize() {
 }
 
 function previewAspectForScene(exportData = previewBuild?.exportData, sceneName = "") {
-  const scenes = exportData?.scenes || exportData?.screens || [];
+  const scenes = exportData?.scenes || [];
   let scene = sceneName
     ? scenes.find((candidate) => candidate?.name === sceneName)
     : null;
   if (!scene) {
-    const initialName = exportData?.currentScene || exportData?.screen || scenes[0]?.name || "";
+    const initialName = exportData?.surface?.focus || scenes[0]?.name || "";
     scene = initialName
       ? scenes.find((candidate) => candidate?.name === initialName)
       : null;
@@ -3844,6 +3647,23 @@ function focusedPuzzleSourceContext(document = activeDocument()) {
   }
   const source = sourceForDocument(document);
   return { document, source };
+}
+
+async function focusedPuzzleSourceContextWithEntries(context = focusedPuzzleSourceContext()) {
+  if (!context?.document) {
+    return null;
+  }
+  const documentId = context.document.id || "";
+  await loadSurfaceEntriesForSource(context.source, { reportUnavailable: true });
+  const current = focusedPuzzleSourceContext();
+  if (
+    !current?.document
+    || (current.document.id || "") !== documentId
+    || current.source !== context.source
+  ) {
+    return null;
+  }
+  return current;
 }
 
 function firstFocusedPuzzleEntry(kind, context = focusedPuzzleSourceContext()) {
@@ -3988,26 +3808,6 @@ async function loadSurfaceEntriesForSource(source, options = {}) {
   request.promise = window.PuzzleStudioRuntime.sourceEntryInfo(text)
     .then((entryInfo) => {
       const entries = normalizeResolvedSourceTargets(text, entryInfo?.entries);
-      const activeSourceDocument = activeDocument();
-      if (
-        isPuzzleDocument(activeSourceDocument)
-        && currentSourceForDocument(activeSourceDocument) === text
-      ) {
-        const previousPreviewDocument = activePreviewDocument();
-        const previousPreviewTarget = previousPreviewDocument
-          ? documentIdentityKey(previousPreviewDocument)
-          : "";
-        activeSourceDocument.declaresGameEntry = entryInfo?.declaresGameEntry === true;
-        ensurePreviewTargetsActiveDocument();
-        const nextPreviewDocument = activePreviewDocument();
-        const nextPreviewTarget = nextPreviewDocument
-          ? documentIdentityKey(nextPreviewDocument)
-          : "";
-        recordLoadedPreviewTarget(nextPreviewDocument);
-        if (nextPreviewTarget !== previousPreviewTarget) {
-          schedulePreview();
-        }
-      }
       if (surfaceEntriesRequest === request) {
         surfaceEntriesCache = { source: text, entries };
         surfaceEntriesRequest = null;
@@ -4015,11 +3815,17 @@ async function loadSurfaceEntriesForSource(source, options = {}) {
       return entries;
     })
     .catch((error) => {
-      if (surfaceEntriesRequest === request) {
+      const currentRequest = surfaceEntriesRequest === request;
+      if (currentRequest) {
         surfaceEntriesRequest = null;
       }
       const message = `Source entries unavailable: ${userFacingRuntimeError(error)}`;
-      if (options.reportUnavailable !== false) {
+      const activeContext = focusedPuzzleSourceContext();
+      if (
+        options.reportUnavailable !== false
+        && currentRequest
+        && activeContext?.source === text
+      ) {
         setStatus(message, "is-error");
       }
       throw new Error(message);
@@ -4445,10 +4251,14 @@ function openLevelPaneForCurrentPreviewLevel() {
   return true;
 }
 
-function openLevelPaneForCurrentDimension() {
-  const context = focusedPuzzleSourceContext();
-  ensurePreviewTargetsActiveDocument();
-  const mode = levelModeForEditorDimension(currentEditorDimension);
+async function openLevelPaneForCurrentDimension(options = {}) {
+  const context = await focusedPuzzleSourceContextWithEntries();
+  if (!context) {
+    return false;
+  }
+  const mode = ["edit", "level3d"].includes(options.mode)
+    ? options.mode
+    : levelModeForEditorDimension(currentEditorDimension);
   const loaded = loadAvailableLevelPaneEntry(context, {
     mode,
     silent: true,
@@ -4466,6 +4276,7 @@ function openLevelPaneForCurrentDimension() {
     applyPaneVisibility();
     hideEditorHoverTooltip();
   }
+  return Boolean(loaded);
 }
 
 function openVisualPaneForCurrentDimension() {
@@ -4555,6 +4366,12 @@ function syncPreviewModeButtonState() {
   const visualAnimationActive = currentVisualPaneMode === "visual3d" ? Boolean(visual3d.animationMode) : Boolean(visual.animationMode);
   visualAnimateModeButton?.classList.toggle("is-active", visualPaneVisible && visualAnimationActive);
   visualAnimateModeButton?.setAttribute("aria-pressed", String(visualPaneVisible && visualAnimationActive));
+  if (visualSourceActionBank) {
+    visualSourceActionBank.hidden = !visualPaneVisible || currentVisualPaneMode !== "visual";
+  }
+  if (visual3dSourceActionBank) {
+    visual3dSourceActionBank.hidden = !visualPaneVisible || currentVisualPaneMode !== "visual3d";
+  }
   for (const button of visualDimensionButtons) {
     const active = normalizeEditorDimension(button.dataset.visualDimension) === currentEditorDimension;
     button.classList.toggle("is-active", active);
@@ -5226,7 +5043,6 @@ async function ensurePreviewSolverBuild() {
 }
 
 async function prepareCurrentDraftSolverBuild() {
-  ensurePreviewTargetsActiveDocument();
   const document = activePreviewDocument();
   if (!isPuzzleDocument(document)) {
     setLevelSolveStatus("No rule model for edited level", "is-error");
@@ -5367,7 +5183,6 @@ function loadLevelSourceTarget(target, options = {}) {
   if (!isPuzzleDocument(activeDocument()) || !isTextDocument(activeDocument())) {
     return null;
   }
-  ensurePreviewTargetsActiveDocument();
   const document = activeDocument();
   const source = sourceEditorDocumentValue();
   const sourceEntry = sourceEditableEntryFromTarget(source, target, { defaultName: "" });
@@ -5375,7 +5190,6 @@ function loadLevelSourceTarget(target, options = {}) {
 }
 
 function loadLevelSourceEntry(source, entry, options = {}) {
-  ensurePreviewTargetsActiveDocument();
   const document = options.document || activeDocument();
   if (!isPuzzleDocument(document) || !isTextDocument(document)) {
     reportLevelSourceLoadFailure("No level source document is active.", options);
@@ -6958,8 +6772,8 @@ function renderLevelLayerPreviews() {
     const view = document.createElement("span");
     view.className = "level-layer-preview-view game-preview-scope board";
     view.setAttribute("aria-hidden", "true");
-    if (window.PuzzleRenderer) {
-      new window.PuzzleRenderer(view, { renderMode: "dom", themeRoot: view }).render(levelScene(levelLayerCells(index, exportData), exportData));
+    if (window.PuzzleAuthoringRenderer) {
+      new window.PuzzleAuthoringRenderer(view, { themeRoot: view }).render(levelScene(levelLayerCells(index, exportData), exportData));
     }
     const label = document.createElement("span");
     label.className = "level-layer-preview-index";
@@ -7000,12 +6814,16 @@ function renderLevelEraserButton() {
   button.title = "Eraser";
   button.dataset.tooltip = "Eraser";
   button.append(renderLevelEraserIcon());
-  button.addEventListener("click", () => {
-    level.selectedObjectId = 0;
-    setLevelActiveLayerForObject(0);
-    renderLevelPalette();
-  });
+  button.addEventListener("click", selectLevelEraser);
   return button;
+}
+
+function selectLevelEraser() {
+  if (levelPlaytestActive) return false;
+  level.selectedObjectId = 0;
+  setLevelActiveLayerForObject(0);
+  renderLevelPalette();
+  return true;
 }
 
 function renderLevelPaletteGroup(label, objects) {
@@ -7035,14 +6853,25 @@ function renderLevelPaletteGroup(label, objects) {
     label.textContent = object.name;
     button.append(label);
 
-    button.addEventListener("click", () => {
-      level.selectedObjectId = object.id;
-      setLevelActiveLayerForObject(object.id);
-      renderLevelPalette();
-    });
+    button.addEventListener("click", () => selectLevelPaletteObject(object.id));
     group.append(button);
   }
   levelPalette.append(group);
+}
+
+function selectLevelPaletteObject(objectId) {
+  const object = level.palette.find((candidate) => candidate.id === objectId && candidate.id !== 0);
+  if (!object || levelPlaytestActive) return false;
+  level.selectedObjectId = object.id;
+  setLevelActiveLayerForObject(object.id);
+  renderLevelPalette();
+  return true;
+}
+
+function selectLevelPaletteIndex(index) {
+  const objects = level.palette.filter((object) => object.id !== 0);
+  const object = objects[index];
+  return object ? selectLevelPaletteObject(object.id) : false;
 }
 
 function renderLevelAddLegendButton() {
@@ -7163,13 +6992,29 @@ function renderSolverBoard() {
   }
   const scene = displayedSolverScene(exportData);
   if (!scene) {
+    clearSolverRenderProjection();
     solverBoard.replaceChildren();
     syncSolverBoardScale();
     scheduleBoardScaleSync();
     return;
   }
-  if (solverRenderer) {
+  if (solverRenderer && scene.renderScene) {
+    clearSolverRenderProjection();
     solverRenderer.render(scene);
+    syncSolverBoardScale();
+    scheduleBoardScaleSync();
+    return;
+  }
+  const levelIndex = solverTaskLevelIndex(activeSolverTask)
+    ?? currentEditableLevelIndex(exportData);
+  const state = solverRenderStateFromScene(scene, levelIndex);
+  const key = JSON.stringify([
+    previewBuild?.id || "",
+    levelIndex,
+    state,
+  ]);
+  if (solverRenderer && solverRenderProjectionKey === key && solverRenderProjectionScene) {
+    solverRenderer.render(solverRenderProjectionScene);
     syncSolverBoardScale();
     scheduleBoardScaleSync();
     return;
@@ -7177,6 +7022,54 @@ function renderSolverBoard() {
   solverBoard.replaceChildren();
   syncSolverBoardScale();
   scheduleBoardScaleSync();
+  requestSolverRenderProjection(key, state, levelIndex, exportData);
+}
+
+function clearSolverRenderProjection() {
+  solverRenderProjectionKey = "";
+  solverRenderProjectionScene = null;
+  solverRenderProjectionRequest += 1;
+}
+
+function solverRenderStateFromScene(scene, levelIndex) {
+  const state = stateDataFromSceneCells(scene, levelIndex);
+  const variables = activeSolverTask?.state?.data?.variables
+    || previewBuild?.exportData?.levels?.[levelIndex]?.initialState?.variables;
+  state.variables = Array.isArray(variables)
+    ? cloneJson(variables)
+    : Array.from({ length: previewDebugVariablesLength(levelIndex) }, () => 0);
+  state.levelFiredRules = [];
+  return state;
+}
+
+function requestSolverRenderProjection(key, state, levelIndex, exportData) {
+  if (!solverRenderer || !window.PuzzleStudioRuntime?.projectRendererState) {
+    setLevelSolveStatus("Typed solver renderer projection is unavailable", "is-error");
+    return;
+  }
+  if (solverRenderProjectionKey === key) {
+    return;
+  }
+  solverRenderProjectionKey = key;
+  solverRenderProjectionScene = null;
+  const request = ++solverRenderProjectionRequest;
+  window.PuzzleStudioRuntime.projectRendererState({
+    runtimeExport: exportData,
+    state,
+    levelIndex,
+  }).then((resolved) => {
+    if (request !== solverRenderProjectionRequest || key !== solverRenderProjectionKey) {
+      return;
+    }
+    solverRenderProjectionScene = resolved;
+    renderSolverBoard();
+  }).catch((error) => {
+    if (request !== solverRenderProjectionRequest || key !== solverRenderProjectionKey) {
+      return;
+    }
+    solverRenderProjectionKey = "";
+    setLevelSolveStatus(`Solver render projection failed: ${userFacingRuntimeError(error)}`, "is-error");
+  });
 }
 
 function scheduleBoardScaleSync(passes = 2) {
@@ -7458,8 +7351,8 @@ function renderObjectPreview(object) {
   const root = document.createElement("span");
   root.className = "game-preview-scope level-token-visual board";
   root.setAttribute("aria-hidden", "true");
-  if (window.PuzzleRenderer) {
-    new window.PuzzleRenderer(root, { renderMode: "dom", themeRoot: root }).render(objectScene(object));
+  if (window.PuzzleAuthoringRenderer) {
+    new window.PuzzleAuthoringRenderer(root, { themeRoot: root }).render(objectScene(object));
   }
   return root;
 }
@@ -8364,12 +8257,11 @@ function solverRequestForTask(task) {
     state: task.state.data,
     materializeLevelStart: task.state.lifecycle === "playable-start",
     maxDepth: 512,
-    maxNodes: 5_000_000,
+    maxStoredNodes: 5_000_000,
   };
 }
 
 async function solveEditedLevelFromEditor() {
-  ensurePreviewTargetsActiveDocument();
   const exportData = currentLevelExportData();
   if (!exportData) {
     setLevelSolveStatus("No rule model for edited level", "is-error");
@@ -9105,7 +8997,6 @@ function levelSourceText() {
 }
 
 function addLevelToSource() {
-  ensurePreviewTargetsActiveDocument();
   const previewDocument = activePreviewDocument();
   if (!previewDocument) {
     setStatus("No game entry for level", "is-error");
@@ -9280,8 +9171,6 @@ function levelStateData(exportData) {
     layerCount,
     levelIndex,
     slots,
-    slotMarks: Array.from({ length: slots.length }, () => []),
-    cellMarks: Array.from({ length: width * height }, () => []),
     variables: Array.from({ length: variablesLength }, () => 0),
   };
 }
@@ -9320,8 +9209,6 @@ function stateDataFromScene(scene, exportData, levelIndex = currentEditableLevel
     layerCount,
     levelIndex,
     slots,
-    slotMarks: Array.from({ length: slots.length }, () => []),
-    cellMarks: Array.from({ length: width * height }, () => []),
     variables: Array.from({ length: variablesLength }, () => 0),
   };
 }
@@ -9405,8 +9292,6 @@ function puzzle3dStateDataFromSnapshot(snapshot, exportData = previewBuild?.expo
     layerCount,
     levelIndex,
     slots,
-    slotMarks: Array.from({ length: slots.length }, () => []),
-    cellMarks: Array.from({ length: width * depth * height }, () => []),
     variables: Array.isArray(levelEntry?.initialState?.variables)
       ? cloneJson(levelEntry.initialState.variables)
       : [],
@@ -9852,7 +9737,6 @@ function objectSetKey(objects) {
 }
 
 function addLevelPaletteObjectToLegend(object) {
-  ensurePreviewTargetsActiveDocument();
   const exportData = currentLevelExportData();
   const objectName = String(object?.name || "").trim();
   const objectEntry = engineObjects(exportData).find((candidate) => candidate.name === objectName);
@@ -10608,22 +10492,6 @@ previewLogOutput?.addEventListener("keydown", (event) => {
   }
   activatePreviewLogLocationFromEvent(event);
 });
-saveButton.addEventListener("click", () => {
-  saveCurrentDocument(true).catch((error) => {
-    console.error(error);
-    setEditorStatus("Save failed", "is-error");
-    saveButton.disabled = false;
-  });
-});
-document.addEventListener("keydown", handleSaveShortcut);
-document.addEventListener("keydown", handleExplorerToggleShortcut);
-document.addEventListener("keydown", handleVisualEditUndoShortcut);
-document.addEventListener("pointerdown", (event) => {
-  rememberToolPaneSaveShortcutContext(event.target);
-}, true);
-document.addEventListener("focusin", (event) => {
-  rememberToolPaneSaveShortcutContext(event.target);
-});
 document.addEventListener("click", (event) => {
   if (fileActionsMenu?.hidden) {
     return;
@@ -11009,11 +10877,10 @@ window.addEventListener("message", (event) => {
     if (event.source && previewFrame?.contentWindow && event.source !== previewFrame.contentWindow) {
       return;
     }
-    saveCurrentDocument(true).catch((error) => {
-      console.error(error);
-      setEditorStatus("Save failed", "is-error");
-      saveButton.disabled = false;
-    });
+    invokeEditorCommand(
+      "workspace.save",
+      editorCommandContext(null, previewFrame, "button")
+    );
     return;
   }
   if (event.data?.type === "PuzzleStudioPreviewLayout") {
@@ -11188,7 +11055,9 @@ playModeButton.addEventListener("click", () => {
   openPreviewModePane("play");
 });
 editModeButton.addEventListener("click", () => {
-  openLevelPaneForCurrentDimension();
+  void openLevelPaneForCurrentDimension().catch((error) => {
+    setStatus(`Level selection failed: ${userFacingRuntimeError(error)}`, "is-error");
+  });
 });
 solverModeButton.addEventListener("click", () => {
   openSolverPaneForCurrentLevel().catch((error) => {
@@ -11204,7 +11073,6 @@ for (const button of editorDimensionButtons) {
       ? firstFocusedPuzzleEntry(activeKind, context)
       : firstFocusedPuzzleEntry("level", context);
     if (first) {
-      ensurePreviewTargetsActiveDocument();
       openPreviewModePane(activeKind === "visual"
         ? visualModeForEditorDimension(first.dimension)
         : levelModeForEditorDimension(first.dimension));
@@ -11216,14 +11084,12 @@ for (const button of editorDimensionButtons) {
 }
 for (const button of levelPaneModeButtons) {
   button.addEventListener("click", () => {
-    const context = focusedPuzzleSourceContext();
     if (!["edit", "level3d"].includes(button.dataset.levelPaneMode)) {
       return;
     }
-    ensurePreviewTargetsActiveDocument();
-    if (!loadLevelPaneEntryForMode(button.dataset.levelPaneMode, context, { silent: true, recordHistory: false })) {
-      return;
-    }
+    void openLevelPaneForCurrentDimension({ mode: button.dataset.levelPaneMode }).catch((error) => {
+      setStatus(`Level selection failed: ${userFacingRuntimeError(error)}`, "is-error");
+    });
   });
 }
 visualModeButton.addEventListener("click", () => {
@@ -11363,29 +11229,6 @@ psImportSourceInput?.addEventListener("input", () => {
     setEditorStatus("PuzzleScript import is unavailable", "is-error");
   }
 });
-psImportCopyButton?.addEventListener("click", () => {
-  const api = window.PuzzleStudioImportExport;
-  if (typeof api?.copyPuzzleScriptImportOutput !== "function") {
-    setEditorStatus("PuzzleScript import is unavailable", "is-error");
-    return;
-  }
-  api.copyPuzzleScriptImportOutput().catch((error) => {
-    console.error(error);
-    api.setPuzzleScriptImportStatus?.("Copy failed", "is-error");
-  });
-});
-psImportAddFileButton?.addEventListener("click", () => {
-  const api = window.PuzzleStudioImportExport;
-  if (typeof api?.addPuzzleScriptImportFile !== "function") {
-    setEditorStatus("PuzzleScript import is unavailable", "is-error");
-    return;
-  }
-  api.addPuzzleScriptImportFile().catch((error) => {
-    console.error(error);
-    api.setPuzzleScriptImportStatus?.(error.message || String(error), "is-error");
-  });
-});
-levelPlaytestButton?.addEventListener("click", toggleLevelPlaytest);
 levelBoard.addEventListener("pointerdown", startLevelPaint);
 levelBoard.addEventListener("pointermove", continueLevelPaint);
 levelBoard.addEventListener("pointerup", stopLevelPaint);
@@ -11439,7 +11282,6 @@ levelEdgeButtons.forEach((button) => {
 });
 levelExpandButton?.addEventListener("click", () => toggleLevelResizeMode("expand"));
 levelShrinkButton?.addEventListener("click", () => toggleLevelResizeMode("shrink"));
-levelGridButton?.addEventListener("click", toggleLevelGrid);
 document.addEventListener("pointerdown", (event) => {
   if (!level.addPaletteOpen || event.target?.closest?.(".level-palette-add-wrap")) {
     return;
@@ -11451,7 +11293,6 @@ levelRotateLeftButton?.addEventListener("click", rotateLevelLeft);
 levelRotateRightButton?.addEventListener("click", rotateLevelRight);
 levelFlipHorizontalButton?.addEventListener("click", flipLevelHorizontal);
 levelFlipVerticalButton?.addEventListener("click", flipLevelVertical);
-levelFillButton?.addEventListener("click", toggleLevelBucketMode);
 syncLevelResizeControls();
 levelNamespaceInput.addEventListener("input", () => {
   syncLevelNameOptions();
@@ -11474,30 +11315,12 @@ levelNameInput.addEventListener("keydown", (event) => {
 levelNameInput.addEventListener("change", () => {
   loadSelectedLevelNameFromInput();
 });
-copyLevelButton.addEventListener("click", copyLevelToClipboard);
-addLevelButton.addEventListener("click", addLevelToSource);
-updateLevelButton.addEventListener("click", updateLevelInSource);
 solveLevelButton.addEventListener("click", () => {
   solveLevel().catch((error) => {
     setLevelSolveStatus(`Solve failed: ${userFacingRuntimeError(error)}`, "is-error");
   });
 });
-levelSolveShortcutButton?.addEventListener("click", () => {
-  solveEditedLevelFromEditor().catch((error) => {
-    setLevelSolveStatus(`Solve failed: ${userFacingRuntimeError(error)}`, "is-error");
-  });
-});
-level3dSolveShortcutButton?.addEventListener("click", () => {
-  solveEditedLevelFromEditor().catch((error) => {
-    setLevelSolveStatus(`Solve failed: ${userFacingRuntimeError(error)}`, "is-error");
-  });
-});
-solutionPrevButton.addEventListener("click", () => setSolutionStep((levelSolutionPreview?.index || 0) - 1));
-solutionNextButton.addEventListener("click", () => setSolutionStep((levelSolutionPreview?.index || 0) + 1));
-solutionPlayButton.addEventListener("click", toggleSolutionPlayback);
 solutionSpeedSelect.addEventListener("change", changeSolutionPlaybackSpeed);
-solutionResetButton.addEventListener("click", resetSolutionPreview);
-solutionExportButton.addEventListener("click", exportSolution);
 solutionSeekInput.addEventListener("input", seekSolutionStep);
 solutionSeekInput.addEventListener("change", seekSolutionStep);
 

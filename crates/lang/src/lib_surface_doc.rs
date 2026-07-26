@@ -6,14 +6,14 @@ pub fn parse_game_for_path(
     source: &str,
     path: impl AsRef<Path>,
 ) -> Result<LoadedDocument, DiagnosticReport> {
-    let profile = puzzle_source_profile_for_path(path.as_ref()).ok_or_else(|| {
-        DiagnosticReport::error(format!(
-            "puzzle source must use .puzzle or .puzzle3 extension: {}",
+    if !is_puzzle_source_path(path.as_ref()) {
+        return Err(DiagnosticReport::error(format!(
+            "puzzle source must use .puzzle extension: {}",
             path.as_ref().display()
-        ))
-    })?;
-    validate_source_profile(source, profile)?;
-    parse_game_document_with_profile(source, profile)
+        )));
+    }
+    validate_puzzle_source(source)?;
+    parse_game_document(source)
 }
 
 pub fn parse_game2d(source: &str) -> Result<LoadedGame, DiagnosticReport> {
@@ -74,25 +74,23 @@ pub(crate) struct ParseSnapshot {
 }
 
 impl ParseSnapshot {
-    pub(crate) fn parse(source: &str, source_profile: Option<PuzzleSourceProfile>) -> Self {
+    pub(crate) fn parse(source: &str, owner_dimension: Option<ModelDimension>) -> Self {
         let source_scan = source::scan_surface_source(source);
         let parser_catalog = Some(parser_surface_catalog_from_source_scan(
             &source_scan,
-            source_profile,
+            owner_dimension,
         ));
-        Self::from_scan(source_profile, source_scan, parser_catalog)
+        Self::from_scan(source_scan, parser_catalog)
     }
 
     fn from_scan(
-        source_profile: Option<PuzzleSourceProfile>,
         source_scan: source::SurfaceSourceScan,
         parser_catalog: Option<
             crate::surface::ParseProduct<Result<ParserSurfaceSnapshot, DiagnosticReport>>,
         >,
     ) -> Self {
         let parser_product = parser_catalog.as_ref();
-        let mut document =
-            build_surface_document_from_source_scan(&source_scan, parser_product, source_profile);
+        let mut document = build_surface_document_from_source_scan(&source_scan, parser_product);
         let strict_diagnostic = match source_scan.strict_logical_lines() {
             Ok(logical_lines) => {
                 document.logical_lines = logical_lines;
@@ -148,6 +146,18 @@ impl ParseSnapshot {
             .compile_parts
     }
 
+    pub(crate) fn strict_document_parts(&self) -> Result<DocumentSourceParts, DiagnosticReport> {
+        self.validate_strict_parser_product()?;
+        self.parser_catalog
+            .as_ref()
+            .expect("strict parser snapshot requires parser product")
+            .value
+            .as_ref()
+            .map_err(Clone::clone)?
+            .compile_parts
+            .clone()
+    }
+
     fn validate_strict_parser_product(&self) -> Result<(), DiagnosticReport> {
         if let Some(report) = &self.strict_diagnostic {
             return Err(report.clone());
@@ -169,7 +179,7 @@ impl ParseSnapshot {
         &mut self,
         old_source: &str,
         new_source: &str,
-        source_profile: Option<PuzzleSourceProfile>,
+        owner_dimension: Option<ModelDimension>,
         edit_start: usize,
         edit_end: usize,
         insert_len: usize,
@@ -185,10 +195,10 @@ impl ParseSnapshot {
         } else {
             Some(parser_surface_catalog_from_source_scan(
                 &source_scan,
-                source_profile,
+                owner_dimension,
             ))
         };
-        *self = Self::from_scan(source_profile, source_scan, parser_catalog);
+        *self = Self::from_scan(source_scan, parser_catalog);
         (rescanned_lines, parser_catalog_reused)
     }
 
@@ -249,14 +259,14 @@ fn parse_surface_source_target_document(source: &str) -> SurfaceDocument {
     build_surface_document(source, SurfaceDocumentProducts::SOURCE_TARGET)
 }
 
-fn parse_surface_source_target_document_for_profile(
+fn parse_surface_source_target_document_for_owner_dimension(
     source: &str,
-    source_profile: PuzzleSourceProfile,
+    owner_dimension: ModelDimension,
 ) -> SurfaceDocument {
-    try_build_surface_document_with_profile(
+    try_build_surface_document_with_owner_dimension(
         source,
         SurfaceDocumentProducts::SOURCE_TARGET,
-        Some(source_profile),
+        Some(owner_dimension),
     )
     .expect("surface document scan failed")
 }
@@ -269,23 +279,22 @@ fn try_build_surface_document(
     source: &str,
     products: SurfaceDocumentProducts,
 ) -> Result<SurfaceDocument, DiagnosticReport> {
-    try_build_surface_document_with_profile(source, products, None)
+    try_build_surface_document_with_owner_dimension(source, products, None)
 }
 
-fn try_build_surface_document_with_profile(
+fn try_build_surface_document_with_owner_dimension(
     source: &str,
     products: SurfaceDocumentProducts,
-    source_profile: Option<PuzzleSourceProfile>,
+    owner_dimension: Option<ModelDimension>,
 ) -> Result<SurfaceDocument, DiagnosticReport> {
     let source_scan = source::scan_surface_source(source);
     let parser_catalog = products
         .needs_parser_catalog()
-        .then(|| parser_surface_catalog_from_source_scan(&source_scan, source_profile));
+        .then(|| parser_surface_catalog_from_source_scan(&source_scan, owner_dimension));
     let mut document = try_build_surface_document_from_scan(
         &source_scan,
         products,
         parser_catalog.as_ref(),
-        source_profile,
     )?;
     if let Some(parser_product) = parser_catalog
         && let Err(report) = parser_product.value
@@ -301,7 +310,6 @@ fn try_build_surface_document_from_scan(
     parser_catalog: Option<
         &crate::surface::ParseProduct<Result<ParserSurfaceSnapshot, DiagnosticReport>>,
     >,
-    source_profile: Option<PuzzleSourceProfile>,
 ) -> Result<SurfaceDocument, DiagnosticReport> {
     let mut sink = SurfaceSink::default();
     let structural_blocks = surface_structural_blocks(&scan);
@@ -355,7 +363,6 @@ fn try_build_surface_document_from_scan(
         normalize_surface_completion_symbols(&mut sink);
     }
     let mut document = sink.into_document();
-    document.source_profile = source_profile;
     if products.semantic_tokens {
         document.unclassified_highlight_spans = unclassified_highlight_spans(&document);
     }
@@ -411,13 +418,11 @@ pub(crate) fn build_surface_document_from_source_scan(
     parser_catalog: Option<
         &crate::surface::ParseProduct<Result<ParserSurfaceSnapshot, DiagnosticReport>>,
     >,
-    source_profile: Option<PuzzleSourceProfile>,
 ) -> SurfaceDocument {
     try_build_surface_document_from_scan(
         source_scan,
         SurfaceDocumentProducts::FULL,
         parser_catalog,
-        source_profile,
     )
     .expect("surface document scan failed")
 }
@@ -448,6 +453,7 @@ fn surface_structural_blocks(scan: &source::SurfaceSourceScan) -> Vec<SurfaceStr
                     header,
                     scope,
                     role,
+                    outline_policy,
                     virtual_braces,
                     option_block,
                 } => {
@@ -473,6 +479,7 @@ fn surface_structural_blocks(scan: &source::SurfaceSourceScan) -> Vec<SurfaceStr
                         &tokens,
                         *scope,
                         role,
+                        *outline_policy,
                         authoring_kind,
                         *virtual_braces,
                         parent,
@@ -524,6 +531,7 @@ fn surface_outline_block(
     tokens: &[String],
     scope: SourceScope,
     role: SurfaceStructuralBlockRole,
+    policy: crate::surface::SurfaceOutlinePolicy,
     authoring_kind: Option<authoring_grammar::AuthoringKind>,
     virtual_braces: bool,
     parent: Option<usize>,
@@ -532,10 +540,7 @@ fn surface_outline_block(
     if role != SurfaceStructuralBlockRole::SourceTree {
         return None;
     }
-    let policy = authoring_kind
-        .map(|kind| authoring_grammar::authoring_kind_spec(kind).outline_policy)
-        .unwrap_or(authoring_grammar::AuthoringOutlinePolicy::Visible);
-    if policy == authoring_grammar::AuthoringOutlinePolicy::Hidden {
+    if policy == crate::surface::SurfaceOutlinePolicy::Hidden {
         return None;
     }
     let first = tokens.first().cloned().unwrap_or_default();
@@ -562,14 +567,17 @@ fn surface_outline_block(
     } else {
         first.clone()
     };
-    let label = if visual_shape_entry
-        && authoring_kind != Some(authoring_grammar::AuthoringKind::VisualConfig)
-    {
+    let label = if authoring_kind == Some(authoring_grammar::AuthoringKind::VisualConfig) {
+        tokens
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| header.to_string())
+    } else if visual_shape_entry {
         first.clone()
     } else {
         header.to_string()
     };
-    let suppress_children = policy == authoring_grammar::AuthoringOutlinePolicy::CollapseChildren
+    let suppress_children = policy == crate::surface::SurfaceOutlinePolicy::CollapseChildren
         || (authoring_kind.is_none()
             && (matches!(
                 first.as_str(),
@@ -641,7 +649,7 @@ mod surface_document_flow_tests {
         validate_source_highlight_projection,
     };
     use crate::surface::SurfaceSemanticKind;
-    use crate::{PuzzleSourceProfile, SourceHighlightKind, highlight_source};
+    use crate::{SourceHighlightKind, highlight_source};
 
     #[test]
     fn bare_shape_reference_is_not_highlighted_as_inline_pixels() {
@@ -817,8 +825,7 @@ A = #4a4
 B = #a4a
 }
 }
-visual {
-selector = Box:kind
+visual Box:kind {
 colors = piece_color:kind
 shape = {
 0
@@ -1252,7 +1259,7 @@ __invalid_unowned_surface_node__ {
 "#;
         validate_source_highlight_projection(source)
             .expect("invalid syntax should still have a complete highlight projection");
-        let highlighted = highlight_source(source, PuzzleSourceProfile::Puzzle2d);
+        let highlighted = highlight_source(source);
 
         assert!(
             highlighted.spans.iter().any(|span| {
@@ -1273,7 +1280,7 @@ __invalid_unowned_surface_node__ {
     #[test]
     fn canonical_game_surfaces_have_complete_highlight_projections() {
         for (name, source) in [
-            ("spec_3d", include_str!("../../../games/spec_3d.puzzle3")),
+            ("spec_3d", include_str!("../../../games/spec_3d.puzzle")),
             (
                 "microban",
                 include_str!("../../../games/microban/game.puzzle"),

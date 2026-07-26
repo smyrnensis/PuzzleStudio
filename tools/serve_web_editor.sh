@@ -9,7 +9,7 @@ open_browser=1
 entry_path=""
 
 usage() {
-  echo "usage: tools/serve_web_editor.sh [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [--port 8891] [--no-open]"
+  echo "usage: tools/serve_web_editor.sh [path/to/workspace-or-game.puzzle] [--port 8891] [--no-open]"
 }
 
 while (($#)); do

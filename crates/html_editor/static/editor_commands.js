@@ -131,6 +131,13 @@ function toggleVisualFillCommand(context) {
   return false;
 }
 
+function toggleVisualGridCommand(context) {
+  const dimension = visualCommandDimension(context);
+  if (dimension === "3d") return (toggleVisual3dGrid(), true);
+  if (dimension === "2d") return (toggleVisualGrid(), true);
+  return false;
+}
+
 function toggleVisualMoveCommand(context) {
   const dimension = visualCommandDimension(context);
   if (dimension === "3d") return (toggleVisual3dTranslateMode(), true);
@@ -569,6 +576,15 @@ const editorCommandDatabase = [
     run: toggleVisualFillCommand,
   },
   {
+    id: "visual.grid",
+    group: "visual",
+    label: "Grid",
+    shortcuts: [{ key: "g" }],
+    elements: editorCommandElements("#visualGridButton"),
+    available: visualCommandActive,
+    run: toggleVisualGridCommand,
+  },
+  {
     id: "visual.move",
     group: "visual",
     label: "Move",
@@ -644,6 +660,7 @@ const editorCommandDatabase = [
     group: "visual",
     label: "Previous slice",
     shortcuts: [{ key: "ArrowUp" }],
+    repeatable: true,
     elements: editorCommandElements("#visual3dPreviousSliceButton"),
     available: (context) => visual3dCommandActive(context) && visualNavigationCommandAvailable(context),
     run: () => (moveVisual3dSlice(-1), true),
@@ -653,6 +670,7 @@ const editorCommandDatabase = [
     group: "visual",
     label: "Next slice",
     shortcuts: [{ key: "ArrowDown" }],
+    repeatable: true,
     elements: editorCommandElements("#visual3dNextSliceButton"),
     available: (context) => visual3dCommandActive(context) && visualNavigationCommandAvailable(context),
     run: () => (moveVisual3dSlice(1), true),
@@ -927,10 +945,11 @@ function invokeEditorCommand(id, context) {
 }
 
 function dispatchEditorCommandEvent(event, options = {}) {
-  if (event.defaultPrevented || event.repeat) return false;
+  if (event.defaultPrevented) return false;
   const context = editorCommandContext(event);
   const matches = editorCommandDatabase.filter((command) => {
     if (typeof command.run !== "function") return false;
+    if (event.repeat && !command.repeatable) return false;
     if (options.group && command.group !== options.group) return false;
     if (!editorCommandShortcuts(command.id).some((shortcut) => editorShortcutMatches(event, shortcut))) return false;
     if (!command.allowTextEntry && editorCommandTextEntryTarget(event.target)) return false;

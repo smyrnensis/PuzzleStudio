@@ -1,5 +1,5 @@
-title = "Wide Floor 3D"
-author = "PuzzleStudio"
+const title = "Wide Floor 3D"
+const author = "PuzzleStudio"
 
 puzzle wide_floor {
 dimension = 3

@@ -9,14 +9,14 @@ pub struct SourceOutlineItem {
     pub parent: Option<String>,
 }
 
-/// Builds a profile-aware canonical analysis and projects its cached outline product.
-pub fn source_outline(source: &str, profile: crate::PuzzleSourceProfile) -> Vec<SourceOutlineItem> {
-    crate::analyze_source_for_profile(source, profile).outline_items()
+/// Builds one canonical analysis and projects its cached outline product.
+pub fn source_outline(source: &str) -> Vec<SourceOutlineItem> {
+    crate::analyze_source(source).outline_items()
 }
 
-/// Serializes the profile-aware cached outline projection.
-pub fn source_outline_json(source: &str, profile: crate::PuzzleSourceProfile) -> String {
-    let items = source_outline(source, profile);
+/// Serializes the cached outline projection.
+pub fn source_outline_json(source: &str) -> String {
+    let items = source_outline(source);
     let mut out = String::from("{\"items\":[");
     for (index, item) in items.iter().enumerate() {
         if index > 0 {
@@ -79,21 +79,19 @@ fn push_json_string_value(out: &mut String, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        PuzzleSourceProfile, authoring_grammar::AuthoringKind, parse_surface_structure_document,
-    };
+    use crate::{authoring_grammar::AuthoringKind, parse_surface_structure_document};
 
     use super::{
-        SourceOutlineItem, source_outline as source_outline_for_profile,
-        source_outline_json as source_outline_json_for_profile,
+        SourceOutlineItem, source_outline as project_source_outline,
+        source_outline_json as project_source_outline_json,
     };
 
     fn source_outline(source: &str) -> Vec<SourceOutlineItem> {
-        source_outline_for_profile(source, PuzzleSourceProfile::Puzzle2d)
+        project_source_outline(source)
     }
 
     fn source_outline_json(source: &str) -> String {
-        source_outline_json_for_profile(source, PuzzleSourceProfile::Puzzle2d)
+        project_source_outline_json(source)
     }
 
     #[test]
@@ -228,15 +226,13 @@ shapes {
     }
 
     #[test]
-    fn source_outline_names_explicit_visual_entries_by_selector() {
+    fn source_outline_names_visual_entries_from_full_headers() {
         let source = r#"
 visuals {
-  visual {
-    selector = Sugar:flavor
+  visual Sugar:flavor {
     colors = #f5f5f5
   }
-  visual {
-    selector Honey
+  visual Honey {
     colors = #e3a018
   }
 }
@@ -459,13 +455,7 @@ puzzle board {
             .split("#[cfg(test)]")
             .next()
             .expect("outline production source");
-        assert_eq!(
-            production
-                .matches("profile: crate::PuzzleSourceProfile")
-                .count(),
-            2,
-            "public outline entrypoints must require an explicit source profile"
-        );
+        assert!(!production.contains("PuzzleSourceProfile"));
         for forbidden in [
             "SurfaceDocument",
             "structural_blocks",

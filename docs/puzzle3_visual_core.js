@@ -1,4 +1,10 @@
 (function attachPuzzle3VisualCore(root) {
+  const MIN_ZOOM = 0.1;
+
+  function normalizeZoom(value) {
+    return Math.max(MIN_ZOOM, Number(value ?? 1));
+  }
+
   function cameraModelFrame(camera = {}) {
     const yaw = degreesToRadians(camera.yawDegrees ?? 0);
     const pitch = degreesToRadians(camera.pitchDegrees ?? 35);
@@ -37,7 +43,7 @@
 
   function projectOrthographic(position, view) {
     const frame = cameraModelFrame(view.camera);
-    const zoom = view.camera?.zoom ?? 1;
+    const zoom = normalizeZoom(view.camera?.zoom);
     const center = view.center || { x: 0, y: 0, z: 0 };
     const x = position.x - center.x;
     const y = position.y - center.y;
@@ -237,10 +243,6 @@
       plane: signed.x + signed.y + signed.z,
       axes: basis.axes,
     };
-  }
-
-  function cameraGridSigns(view) {
-    return cameraOrderBasis(view).signs;
   }
 
   function cameraOrderKey(view) {
@@ -467,53 +469,6 @@
     return faces;
   }
 
-  function averageMergedVoxels(voxels, parseColor, formatColor) {
-    const colors = voxels
-      .map((voxel) => voxel.color || parseColor(voxel.fill))
-      .filter((color) => color && color.a > 0);
-    if (!colors.length) {
-      return voxels[0];
-    }
-    const divisor = colors.length;
-    const color = colors.reduce((sum, candidate) => ({
-      r: sum.r + candidate.r,
-      g: sum.g + candidate.g,
-      b: sum.b + candidate.b,
-      a: sum.a + candidate.a,
-    }), { r: 0, g: 0, b: 0, a: 0 });
-    color.r /= divisor;
-    color.g /= divisor;
-    color.b /= divisor;
-    color.a /= divisor;
-    return {
-      ...voxels[0],
-      color,
-      fill: formatColor(color),
-      sourceKeys: voxels.flatMap((voxel) =>
-        voxel.sourceKey ? [voxel.sourceKey] : (voxel.sourceKeys || [])
-      ),
-    };
-  }
-
-  function objectPriority(order, object, fallbackIndex = 0) {
-    const name = String(object?.name || "");
-    const priority = order?.priorities?.findIndex((entry) =>
-      Array.isArray(entry.objects) && entry.objects.includes(name)
-    );
-    if (priority >= 0) {
-      return priority;
-    }
-    throw new Error(`compiled visual order does not cover object: ${name || fallbackIndex}`);
-  }
-
-  function priorityDefinition(order, encodedPriority) {
-    const priorities = order?.priorities;
-    if (!Array.isArray(priorities) || priorities.length === 0) {
-      throw new Error("compiled visual order contract is missing");
-    }
-    return priorities[encodedPriority % priorities.length];
-  }
-
   function rectsFromCells(cells) {
     const remaining = new Set(cells);
     const rects = [];
@@ -550,7 +505,6 @@
   }
 
   root.Puzzle3VisualCore = {
-    averageMergedVoxels,
     cameraModelFrame,
     cameraOrderKey,
     compareGridOrder,
@@ -560,8 +514,7 @@
     faceGridOrder,
     gridOrder,
     mergeVoxelFaces,
-    objectPriority,
-    priorityDefinition,
+    normalizeZoom,
     projectOrthographic,
     rectsFromCells,
     stageFrameEdges,

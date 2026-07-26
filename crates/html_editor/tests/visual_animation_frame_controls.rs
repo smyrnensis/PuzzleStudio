@@ -76,3 +76,24 @@ fn frame_action_buttons_expose_command_semantics() {
     assert!(!insert_button.contains("aria-pressed"));
     assert!(!remove_button.contains("aria-pressed"));
 }
+
+#[test]
+fn frame_bar_owns_duration_and_frame_count_controls() {
+    let frame_bar = EDITOR_HTML
+        .split_once(r#"class="visual-animation-toolbar "#)
+        .and_then(|(_, tail)| tail.split_once(r#"class="visual-animation-workspace"#))
+        .map(|(toolbar, _)| toolbar)
+        .expect("visual animation frame bar");
+
+    assert!(frame_bar.contains(r#"id="visualAnimationFrameTotal""#));
+    assert!(frame_bar.contains(r#"id="visualAnimationDurationInput""#));
+    assert!(frame_bar.contains(r#"id="visual3dAnimationDurationInput""#));
+    assert!(!EDITOR_HTML.contains(r#"id="visualAnimationFrameCountInput""#));
+    assert!(!EDITOR_HTML.contains(r#"id="visual3dAnimationFrameCountInput""#));
+    assert!(!EDITOR_VISUAL_SOURCE.contains("visual-editor-animation-group"));
+    assert!(
+        EDITOR_VISUAL3D_SOURCE.contains(
+            r#"visual3dAnimationDurationInput?.addEventListener("keydown", (event) => {"#
+        )
+    );
+}

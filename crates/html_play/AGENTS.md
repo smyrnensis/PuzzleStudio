@@ -8,7 +8,7 @@ screenshots, themes, audio presentation, and browser-side runtime surfaces.
 ```bash
 cargo run -p html-play -- games/spec_2d.puzzle --serve
 cargo run -p html-play -- games/spec_2d.puzzle -o /tmp/game.html
-cargo run -p html-play -- games/spec_3d.puzzle3 --screenshot /tmp/spec_3d.png
+cargo run -p html-play -- games/spec_3d.puzzle --screenshot /tmp/spec_3d.png
 ```
 
 Screenshot commands require Chrome or Chromium on the host. Pass a browser path

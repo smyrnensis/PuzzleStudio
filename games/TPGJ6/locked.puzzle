@@ -1,4 +1,4 @@
-title = "Stuck Room"
+const title = "Stuck Room"
 
 default_wait_time = 100ms
 

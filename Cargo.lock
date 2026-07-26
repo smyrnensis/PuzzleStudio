@@ -1224,6 +1224,7 @@ dependencies = [
  "html-play",
  "puzzle-authoring",
  "puzzle-lang",
+ "puzzle-workspace",
 ]
 
 [[package]]
@@ -1237,6 +1238,7 @@ dependencies = [
  "puzzle-runtime-contract",
  "puzzle-scene",
  "puzzle-solver-runtime",
+ "puzzle-workspace",
  "serde_json",
 ]
 
@@ -2353,8 +2355,11 @@ dependencies = [
  "puzzle-core",
  "puzzle-lang",
  "puzzle-play",
+ "puzzle-presentation",
+ "puzzle-presentation-json",
  "puzzle-runtime-contract",
  "puzzle-scene",
+ "puzzle-session-contract",
  "serde_json",
 ]
 
@@ -2372,6 +2377,7 @@ dependencies = [
  "puzzle-authoring",
  "puzzle-core",
  "puzzle-kernel",
+ "puzzle-presentation",
  "puzzle-runtime-contract",
  "puzzle-scene",
  "serde",
@@ -2384,8 +2390,29 @@ version = "0.1.0"
 dependencies = [
  "puzzle-core",
  "puzzle-lang",
+ "puzzle-presentation",
  "puzzle-runtime-contract",
+ "puzzle-scene",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "puzzle-presentation"
+version = "0.1.0"
+dependencies = [
+ "puzzle-runtime-contract",
+ "serde_json",
+]
+
+[[package]]
+name = "puzzle-presentation-json"
+version = "0.1.0"
+dependencies = [
+ "puzzle-lang",
+ "puzzle-runtime-contract",
+ "puzzle-scene",
+ "puzzle-session-contract",
  "serde_json",
 ]
 
@@ -2409,6 +2436,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "puzzle-session-contract"
+version = "0.1.0"
+dependencies = [
+ "puzzle-lang",
+ "puzzle-runtime-contract",
+ "puzzle-scene",
+ "serde",
+]
+
+[[package]]
 name = "puzzle-solver"
 version = "0.1.0"
 dependencies = [
@@ -2427,6 +2464,7 @@ dependencies = [
  "puzzle-play",
  "puzzle-runtime-contract",
  "puzzle-solver",
+ "puzzle-workspace",
  "serde",
  "serde_json",
 ]
@@ -2459,7 +2497,17 @@ version = "0.1.0"
 dependencies = [
  "puzzle-core",
  "puzzle-game-runtime",
+ "puzzle-presentation",
+ "puzzle-runtime-contract",
+ "serde_json",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "puzzle-workspace"
+version = "0.1.0"
+dependencies = [
+ "puzzle-lang",
 ]
 
 [[package]]
@@ -2470,6 +2518,7 @@ dependencies = [
  "html-play",
  "puzzle-agent-runtime",
  "puzzle-lang",
+ "puzzle-workspace",
 ]
 
 [[package]]

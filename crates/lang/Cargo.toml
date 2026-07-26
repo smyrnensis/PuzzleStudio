@@ -8,6 +8,7 @@ license.workspace = true
 puzzle-authoring = { path = "../authoring" }
 puzzle-core = { path = "../core" }
 puzzle-kernel = { path = "../kernel" }
+puzzle-presentation = { path = "../presentation" }
 puzzle-runtime-contract = { path = "../runtime_contract" }
 puzzle-scene = { path = "../scene" }
 serde = { version = "1", features = ["derive"] }

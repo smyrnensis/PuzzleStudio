@@ -132,17 +132,14 @@ impl SourceHighlightKind {
     }
 }
 
-/// Builds a profile-aware canonical analysis and returns its parser-owned highlight product.
-pub fn highlight_source(source: &str, profile: crate::PuzzleSourceProfile) -> HighlightedSource {
-    crate::analyze_source_for_profile(source, profile).highlight()
+/// Builds one canonical analysis and returns its parser-owned highlight product.
+pub fn highlight_source(source: &str) -> HighlightedSource {
+    crate::analyze_source(source).highlight()
 }
 
 /// Builds one canonical surface document and projects highlighting and outline from it.
-pub fn highlight_source_with_outline(
-    source: &str,
-    profile: crate::PuzzleSourceProfile,
-) -> HighlightedSourceWithOutline {
-    crate::analyze_source_for_profile(source, profile).highlighted()
+pub fn highlight_source_with_outline(source: &str) -> HighlightedSourceWithOutline {
+    crate::analyze_source(source).highlighted()
 }
 
 pub(crate) fn highlight_source_with_document(document: &SurfaceDocument) -> HighlightedSource {
@@ -233,13 +230,7 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .expect("highlight production source");
-        assert_eq!(
-            production
-                .matches("profile: crate::PuzzleSourceProfile")
-                .count(),
-            2,
-            "public highlight entrypoints must require an explicit source profile"
-        );
+        assert!(!production.contains("PuzzleSourceProfile"));
         for forbidden in [
             ".chars(",
             ".char_indices(",

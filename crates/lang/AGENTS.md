@@ -34,8 +34,8 @@ effects, or explicit scene commands. The semantic input concept remains, but
 `inputs { <input> <- <key...> }` is not canonical syntax.
 
 Scene text syntax lowers `heading`, `subheading`, `text`, and `caption` through
-one text-component path. Top-scope `title`, `subtitle`, `author`, and `homepage`
-remain content values and must not select a component kind. Scene layout syntax
+one text-component path. Top-scope constants used as content, including an
+author-chosen `title`, must not select a component kind. Scene layout syntax
 lowers allocation, ratio, cross-axis alignment, and main-axis distribution into
 the typed `puzzle-scene` contract; it must not encode CSS or adapter sizing.
 
@@ -68,12 +68,12 @@ fallback to `highlight.rs`, `source_lexical_product.rs`, a surface scanner, or a
 parser-named highlight lexer. New disposition or semantic variants must make the
 display mapping fail to compile until mapping is explicit.
 
-Public and host highlighting entrypoints require an explicit `.puzzle` or
-`.puzzle3` profile. Do not restore a profile-free overload or infer a default
-dimension from source text.
+Public and host highlighting entrypoints analyze `.puzzle` source without a
+file-level dimension profile. Dimension-specific facts must come from the
+owning `puzzle` declaration; do not infer a dimension from a path or extension.
 
 `source_outline.rs` is likewise a projection and wire-format boundary. It may
-create a profile-aware `SourceAnalysis`, clone the revision-local cached outline
+create a `SourceAnalysis`, clone the revision-local cached outline
 items, and serialize them. It must not inspect `SurfaceDocument` blocks, headers,
 lines, source characters, authoring grammar, scope names, or fixed syntax-word
 lists. Canonical block construction must attach typed outline kind, label, and
@@ -84,8 +84,8 @@ must not inspect headers or line content either. Keep its builder call confined
 to the lazy `SourceAnalysis` outline cache. This laziness is required: viewport
 highlighting and other queries that do not request outline must not construct the
 outline product or walk the whole structural tree. Public and host outline
-entrypoints require an explicit source profile, and the editor must query the
-already-active analysis revision rather than parse a second source snapshot.
+entrypoints must use the source's owner-declared dimensions, and the editor must
+query the already-active analysis revision rather than parse a second source snapshot.
 
 `SurfaceDocument`, `SurfaceSourceScan`, and `SurfaceSink` are projections, not
 grammar authorities. Establish the lossless `ParseProduct<T>` contract before

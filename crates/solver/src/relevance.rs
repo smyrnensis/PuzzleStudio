@@ -392,6 +392,13 @@ impl SolverRelevance<ObjectId> {
                 }
                 changed
             }
+            ProgramCondition::RuleMatches { guards, pattern } => {
+                let mut changed = self.insert_pattern_objects(pattern);
+                for guard in guards {
+                    changed |= self.insert_guard_objects(game, guard);
+                }
+                changed
+            }
         }
     }
 
@@ -581,7 +588,7 @@ mod tests {
     #[test]
     fn relevance_back_propagates_from_root_writes_to_rule_reads() {
         let source = r#"
-title = relevance_backprop
+const title = relevance_backprop
 
 puzzle default {
 layers {
@@ -618,7 +625,7 @@ S
     #[test]
     fn relevance_does_not_keep_self_maintaining_projection_without_root() {
         let source = r#"
-title = relevance_projection
+const title = relevance_projection
 
 puzzle default {
 layers {
@@ -909,5 +916,49 @@ P
         assert_relevant(&relevance, DOOR);
         assert_relevant(&relevance, SWITCH);
         assert_relevant(&relevance, FLOOR);
+    }
+
+    #[test]
+    fn rule_match_condition_keeps_pattern_and_guard_objects_relevant() {
+        const KEY: ObjectId = ObjectId(1);
+        const BATTERY: ObjectId = ObjectId(2);
+        const SWITCH: ObjectId = ObjectId(3);
+        const DOOR: ObjectId = ObjectId(4);
+
+        let condition_defs = vec![ConditionDef {
+            id: ConditionId(0),
+            kind: ConditionValueKind::ExistsObjects(vec![BATTERY]),
+        }];
+        let open_door = rule(
+            1,
+            pattern(vec![cell(vec![SWITCH], Vec::new())]),
+            Vec::new(),
+            vec![add(DOOR)],
+            Vec::new(),
+        );
+        let game = CompiledGame::new_with_condition_defs_and_program(
+            2,
+            vec![
+                object(1, ITEM),
+                object(2, ITEM),
+                object(3, ACTOR),
+                object(4, ITEM),
+            ],
+            condition_defs,
+            vec![RuleStep::ConditionalBlock {
+                condition: RuleCondition::RuleMatches {
+                    guards: vec![Guard::ConditionNonZero(ConditionId(0))],
+                    pattern: pattern(vec![cell(vec![KEY], Vec::new())]),
+                },
+                steps: vec![RuleStep::Rule(open_door)],
+            }],
+        );
+
+        let relevance = SolverRelevance::from_root_objects(&game, [DOOR]);
+
+        assert_relevant(&relevance, DOOR);
+        assert_relevant(&relevance, SWITCH);
+        assert_relevant(&relevance, KEY);
+        assert_relevant(&relevance, BATTERY);
     }
 }

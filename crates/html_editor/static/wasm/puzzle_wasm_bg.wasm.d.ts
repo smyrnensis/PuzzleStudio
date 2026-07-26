@@ -2,8 +2,8 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __wbg_wasmsolverservice_free: (a: number, b: number) => void;
+export const __wbg_wasmworkspacesession_free: (a: number, b: number) => void;
 export const activate_source_analysis: (a: number, b: number) => number;
-export const activate_source_analysis_with_profile: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const active_source_analysis_entries_json: (a: number) => [number, number, number, number];
 export const active_source_analysis_highlight_range_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const active_source_analysis_import_at_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
@@ -17,9 +17,7 @@ export const active_source_analysis_resolve_source_target: (a: number, b: number
 export const active_source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];
 export const apply_source_analysis_edit: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
-export const compile_workspace_preview: (a: number, b: number, c: any, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
-export const export_workspace_html: (a: number, b: number, c: any, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
 export const generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
 export const wasmsolverservice_advance: (a: number, b: number, c: number, d: number) => [number, number, number];
@@ -30,7 +28,14 @@ export const wasmsolverservice_pin_artifact: (a: number, b: number, c: number, d
 export const wasmsolverservice_prepare_source: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const wasmsolverservice_prepare_workspace: (a: number, b: number, c: number, d: any, e: number) => [number, number, number];
 export const wasmsolverservice_start: (a: number, b: number, c: number, d: any, e: number) => [number, number, number];
-export const workspace_presentation_manifest: (a: number, b: number, c: any) => [number, number, number];
+export const wasmworkspacesession_compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+export const wasmworkspacesession_export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
+export const wasmworkspacesession_index_json: (a: number) => [number, number, number, number];
+export const wasmworkspacesession_new: (a: any) => [number, number, number];
+export const wasmworkspacesession_presentation_manifest: (a: number, b: number, c: number) => [number, number, number];
+export const wasmworkspacesession_replace_documents: (a: number, b: any) => [number, number];
+export const wasmworkspacesession_revision: (a: number) => number;
+export const wasmworkspacesession_source_analysis_json: (a: number, b: number, c: number) => [number, number, number, number];
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
 export const __wbindgen_exn_store: (a: number) => void;

@@ -1,25 +1,4 @@
 #[cfg(not(target_arch = "wasm32"))]
-fn discover_default_puzzle_path() -> Result<PathBuf, AppError> {
-    let candidates =
-        discover_game_entries("games").map_err(|error| AppError::Config(error.to_string()))?;
-    match candidates.len() {
-        0 => Err(AppError::Config(
-            "no games/*/game.puzzle or games/*/game.puzzle3 entries found. Pass a path: html-play <path/to/game-folder-or-game.puzzle-or-game.puzzle3>"
-                .to_string(),
-        )),
-        1 => Ok(candidates[0].clone()),
-        _ => Err(AppError::Config(format!(
-            "multiple game entries found. Pass one explicitly: {}",
-            candidates
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))),
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn load_game_css(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, AppError> {
     load_asset_css(puzzle_path, &loaded.assets)
 }
@@ -77,7 +56,7 @@ fn resolve_asset_path(base_dir: &Path, asset_path: &str) -> Result<PathBuf, AppE
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
         return Err(AppError::Config(format!(
-            "asset path must be game-folder relative: {asset_path}"
+            "asset path must be workspace-relative: {asset_path}"
         )));
     }
     let resolved = base_dir.join(path);
@@ -163,7 +142,7 @@ fn push_asset_resolver_entry(
 ) -> Result<(), AppError> {
     let relative = path.strip_prefix(root).map_err(|_| {
         AppError::Config(format!(
-            "asset file is outside game folder: {}",
+            "asset file is outside workspace: {}",
             path.display()
         ))
     })?;
@@ -416,11 +395,7 @@ fn push_visual(out: &mut String, visual: &VisualDef) {
     }
 }
 
-fn push_visual_loop(
-    out: &mut String,
-    duration_ms: u64,
-    frames: &[puzzle_lang::VisualFrameDef],
-) {
+fn push_visual_loop(out: &mut String, duration_ms: u64, frames: &[puzzle_lang::VisualFrameDef]) {
     out.push_str(",\"durationMs\":");
     out.push_str(&duration_ms.to_string());
     out.push_str(",\"frames\":[");

@@ -42,7 +42,7 @@ actor = A
 }}
 "#
     );
-    let document = parse_game_for_path(&source, "implicit_3d_rule_orientation.puzzle3")
+    let document = parse_game_for_path(&source, "implicit_3d_rule_orientation.puzzle")
         .expect("3D rule source should compile");
     let model = document
         .models

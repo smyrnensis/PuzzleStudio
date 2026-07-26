@@ -417,7 +417,7 @@ mod tests {
     };
 
     fn highlight_source(source: &str) -> HighlightedSource {
-        crate::highlight::highlight_source(source, crate::PuzzleSourceProfile::Puzzle2d)
+        crate::highlight::highlight_source(source)
     }
 
     fn has_span(
@@ -435,11 +435,12 @@ mod tests {
     #[test]
     fn typed_parser_facts_drive_core_highlights() {
         let source =
-            "title = \"Demo\"\npuzzle board {\nrules {\n[ Box ] -> [ Box ]\n}\n}\n// note\n";
+            "const title = \"Demo\"\npuzzle board {\nrules {\n[ Box ] -> [ Box ]\n}\n}\n// note\n";
         let highlighted = highlight_source(source);
         for (kind, text) in [
-            (SourceHighlightKind::Keyword, "title"),
-            (SourceHighlightKind::String, "\"Demo\""),
+            (SourceHighlightKind::Keyword, "const"),
+            (SourceHighlightKind::State, "title"),
+            (SourceHighlightKind::Literal, "\"Demo\""),
             (SourceHighlightKind::Arrow, "->"),
             (SourceHighlightKind::Comment, "// note"),
             (SourceHighlightKind::Brace0, "{"),
@@ -578,8 +579,7 @@ Enter -> goto playing
 
     #[test]
     fn range_projection_matches_intersecting_full_parser_facts() {
-        let source =
-            "title = \"Demo\"\npuzzle board {\nrules {\n[ Box ] -> [ Box ]\n}\n}\n// 注釈😀\n";
+        let source = "const title = \"Demo\"\npuzzle board {\nrules {\n[ Box ] -> [ Box ]\n}\n}\n// 注釈😀\n";
         let document = crate::parse_surface_document(source);
         let full = highlight_source_with_document(&document);
         let start = source.find("board").expect("range start");

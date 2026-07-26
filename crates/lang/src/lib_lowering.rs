@@ -79,6 +79,7 @@ impl LoweredEffects {
 }
 
 fn lower_programs(
+    model_source: &source::LogicalLine,
     definitions: Vec<RuleDefinitionAst>,
     main_statements: Option<Vec<StatementAst>>,
     main_local_frame: Option<LocalFrame<ObjectId>>,
@@ -116,7 +117,11 @@ fn lower_programs(
         }
     }
     let Some(main_statements) = main_statements else {
-        return Err(DiagnosticReport::error("missing puzzle rules".to_string()));
+        return Err(DiagnosticReport::error_at_source_line_number(
+            "missing puzzle rules",
+            model_source.text.clone(),
+            model_source.line,
+        ));
     };
     let mut diagnostics = collect_program_reference_diagnostics(
         &definitions_by_name,
@@ -2581,19 +2586,13 @@ impl<'a> ProgramLowerer<'a> {
                         offset: puzzle_runtime_contract::RuntimeAnimationOffset { x: 0, y: 0 },
                     });
                 }
-                EffectAst::PresentComponent { text, literal } => {
-                    lowered.ordered.push(RuleEffect::PresentComponent {
-                        definition: "standard.message".to_string(),
-                        properties: vec![
-                            puzzle_runtime_contract::RuntimeComponentProperty {
-                                name: "text".to_string(),
-                                value: text.clone(),
-                                literal: *literal,
-                            },
-                        ],
-                        placement: puzzle_runtime_contract::ComponentPlacement::Overlay,
-                        await_event: Some("dismiss".to_string()),
-                    });
+                EffectAst::Message { text, literal } => {
+                    lowered
+                        .ordered
+                        .push(puzzle_runtime_contract::standard_message_effect(
+                            text.clone(),
+                            *literal,
+                        ));
                 }
                 EffectAst::Scene(effect) => {
                     lowered.ordered.push(RuleEffect::Scene {

@@ -1034,10 +1034,6 @@ function updateSoundRangeFill(input) {
   input.style.setProperty("--sounds-range-progress", `${(progress * 100).toFixed(2)}%`);
 }
 
-soundsSfxPlayButton.addEventListener("click", () => {
-  playSoundSfx().catch((error) => setStatus(`Sounds failed: ${error?.message || error}`, "is-error"));
-});
-soundsSfxRandomButton.addEventListener("click", randomizeSoundSfx);
 soundsSfxTitleInput.addEventListener("input", renderSoundSfx);
 soundsSfxSeedInput.addEventListener("input", renderSoundSfx);
 soundsSfxTypeSelect.addEventListener("change", renderSoundSfx);
@@ -1046,11 +1042,6 @@ soundsSfxCopyButton.addEventListener("click", () => {
   copySoundLine("sfx").catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
 });
 soundsSfxInsertButton.addEventListener("click", () => insertSoundsDefinition("sfx"));
-soundsSfxUpdateButton.addEventListener("click", () => updateSoundsDefinition("sfx"));
-soundsMusicPlayButton.addEventListener("click", () => {
-  toggleSoundMusic().catch((error) => setStatus(`Sounds failed: ${error?.message || error}`, "is-error"));
-});
-soundsMusicRandomButton.addEventListener("click", randomizeSoundMusic);
 soundsMusicTitleInput.addEventListener("input", updateSoundMusic);
 soundsMusicSeedInput.addEventListener("input", updateSoundMusic);
 soundsMusicHeightInput.addEventListener("input", updateSoundMusic);
@@ -1061,7 +1052,6 @@ soundsMusicCopyButton.addEventListener("click", () => {
   copySoundLine("music").catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
 });
 soundsMusicInsertButton.addEventListener("click", () => insertSoundsDefinition("music"));
-soundsMusicUpdateButton.addEventListener("click", () => updateSoundsDefinition("music"));
 soundsMusicProgress.addEventListener("input", () => seekSoundMusic(Number(soundsMusicProgress.value)));
 soundsMusicProgress.addEventListener("keydown", (event) => {
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {

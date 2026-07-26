@@ -369,7 +369,7 @@
             <span id="levelSolveStatus" class="level-solve-status tool-feedback-bar" aria-live="polite">Ready to solve</span>
           </div>
           <div id="visualBuilder" class="visual-builder" hidden>
-            <div id="visualPaneHeaderActions" class="source-action-group source-preview-actions visual-pane-header-actions" role="group" aria-label="Visual pane actions">
+            <div id="visualPaneModeControls" class="visual-pane-mode-controls" role="group" aria-label="Visual mode">
               <span class="visual-dimension-toggle" role="group" aria-label="Visual dimension">
                 <button id="visualDimension2dButton" class="icon-button source-action-button is-active" type="button" data-visual-dimension="2d" aria-label="Edit as 2D visual" aria-pressed="true" title="2D visual">2D</button>
                 <button id="visualDimension3dButton" class="icon-button source-action-button" type="button" data-visual-dimension="3d" aria-label="Edit as 3D visual" aria-pressed="false" title="3D visual">3D</button>
@@ -377,6 +377,8 @@
               <button id="visualAnimateModeButton" class="icon-button source-action-button" type="button" aria-label="Animate visual" aria-pressed="false" title="Animate visual">
                 <svg data-editor-icon="film" aria-hidden="true"></svg>
               </button>
+            </div>
+            <div id="visualPaneHeaderActions" class="source-action-group source-preview-actions visual-pane-header-actions" role="group" aria-label="Visual source actions">
               <span id="visualSourceActionBank" class="visual-pane-source-actions" role="group" aria-label="2D visual source actions">
                 <button id="newVisualButton" class="icon-button source-action-button" type="button" aria-label="New visual" title="New visual"><svg data-editor-icon="image-plus" aria-hidden="true"></svg></button>
                 <button id="visualInsertButton" class="icon-button source-action-button" type="button" aria-label="Add visual" title="Add visual"><svg data-editor-icon="file-plus-corner" aria-hidden="true"></svg></button>
@@ -408,25 +410,14 @@
                   <div class="visual-scale-group">
                     <span class="visual-scale-prefix" aria-hidden="true">×</span>
                     <input id="visualScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="Scale multiplier">
-                    <button id="visualScaleDownButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
-                      <svg data-editor-icon="minimize-2" aria-hidden="true"></svg>
-                    </button>
                     <button id="visualScaleUpButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
                       <svg data-editor-icon="maximize-2" aria-hidden="true"></svg>
                     </button>
+                    <button id="visualScaleDownButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
+                      <svg data-editor-icon="minimize-2" aria-hidden="true"></svg>
+                    </button>
                   </div>
                 </div>
-                <label class="visual-duration-control visual-compact-control">
-                  <span>Duration</span>
-                  <span class="visual-duration-input">
-                    <input id="visualAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="Animation loop duration in milliseconds">
-                    <span class="visual-duration-unit" aria-hidden="true">ms</span>
-                  </span>
-                </label>
-                <label class="visual-frame-count-control visual-compact-control">
-                  <span>Frames</span>
-                  <input id="visualAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="Animation frame count">
-                </label>
                 </div>
                 <div id="visualShapeField" class="visual-source-field visual-shape-field"></div>
               </div>
@@ -478,6 +469,20 @@
                   <button id="visualAnimationRemoveFrameButton" class="icon-button visual-animation-remove-frame-button visual-icon-button compact-control-strip__button" type="button" aria-label="Remove current animation frame" title="Remove current frame" data-tooltip="Remove current frame">
                     <svg data-editor-icon="square-minus" aria-hidden="true"></svg>
                   </button>
+                  <label class="visual-animation-duration-control" data-visual-animation-dimension="2d">
+                    <span class="visual-animation-duration-label">Duration</span>
+                    <span class="visual-animation-duration-input">
+                      <input id="visualAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="Animation loop duration in milliseconds">
+                      <span class="visual-animation-duration-unit" aria-hidden="true">ms</span>
+                    </span>
+                  </label>
+                  <label class="visual-animation-duration-control" data-visual-animation-dimension="3d" hidden>
+                    <span class="visual-animation-duration-label">Duration</span>
+                    <span class="visual-animation-duration-input">
+                      <input id="visual3dAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="3D visual animation loop duration in milliseconds">
+                      <span class="visual-animation-duration-unit" aria-hidden="true">ms</span>
+                    </span>
+                  </label>
                 </div>
                 <div class="visual-animation-workspace">
                   <div id="visualBoard" class="visual-board" aria-label="Editable visual puzzle"></div>
@@ -518,25 +523,14 @@
                   <div class="visual-scale-group">
                     <span class="visual-scale-prefix" aria-hidden="true">×</span>
                     <input id="visual3dScaleInput" type="number" min="2" max="64" value="2" inputmode="numeric" aria-label="3D visual scale multiplier">
-                    <button id="visual3dScaleDownButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
-                      <svg data-editor-icon="minimize-2" aria-hidden="true"></svg>
-                    </button>
                     <button id="visual3dScaleUpButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale up" title="Scale up">
                       <svg data-editor-icon="maximize-2" aria-hidden="true"></svg>
                     </button>
+                    <button id="visual3dScaleDownButton" class="icon-button visual-scale-step-button" type="button" aria-label="Scale down" title="Scale down">
+                      <svg data-editor-icon="minimize-2" aria-hidden="true"></svg>
+                    </button>
                   </div>
                 </div>
-                <label class="visual-duration-control visual-compact-control visual3d-animation-control">
-                  <span>Duration</span>
-                  <span class="visual-duration-input">
-                    <input id="visual3dAnimationDurationInput" type="number" min="20" max="5000" step="10" value="120" inputmode="numeric" aria-label="3D visual animation loop duration in milliseconds">
-                    <span class="visual-duration-unit" aria-hidden="true">ms</span>
-                  </span>
-                </label>
-                <label class="visual-frame-count-control visual-compact-control visual3d-animation-control">
-                  <span>Frames</span>
-                  <input id="visual3dAnimationFrameCountInput" type="number" min="1" max="24" value="1" inputmode="numeric" aria-label="3D visual animation frame count">
-                </label>
               </div>
               <div id="visual3dShapeField" class="visual-source-field visual-shape-field"></div>
               </div>
@@ -888,7 +882,9 @@
 
     <script src="editor_icons.js"></script>
     <script src="visual_tween_core.js"></script>
-    <script src="renderer.js?v=board-canvas-visuals"></script>
+    <script src="render_asset_decoder.js"></script>
+    <script src="renderer.js?v=typed-render-scene"></script>
+    <script src="editor_authoring_renderer.js"></script>
     <script src="sound-generator.js"></script>
     <script src="editor_codemirror.js"></script>
     <script src="editor_dom.js"></script>

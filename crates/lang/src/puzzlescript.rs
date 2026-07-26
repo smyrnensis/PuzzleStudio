@@ -185,12 +185,15 @@ pub fn translate_puzzlescript_to_canonical(source: &str) -> Result<String, Diagn
         case_sensitive,
     );
     let mut out = Vec::new();
-    out.push(format!("title = {}", canonical_metadata_text(&title)));
+    out.push(format!("const title = {}", canonical_const_text(&title)));
     if let Some(author) = &author {
-        out.push(format!("author = {}", canonical_metadata_text(author)));
+        out.push(format!("const author = {}", canonical_const_text(author)));
     }
     if let Some(homepage) = &homepage {
-        out.push(format!("homepage = {}", canonical_metadata_text(homepage)));
+        out.push(format!(
+            "const homepage = {}",
+            canonical_const_text(homepage)
+        ));
     }
     out.push(String::new());
     push_section_comments(&mut out, &sections.comments, PsSection::Prelude);
@@ -3144,7 +3147,7 @@ fn is_parenthetical_comment(line: &str) -> bool {
     line.starts_with('(') && line.ends_with(')')
 }
 
-fn canonical_metadata_text(value: &str) -> String {
+fn canonical_const_text(value: &str) -> String {
     format!("\"{}\"", escape_scene_text(value))
 }
 

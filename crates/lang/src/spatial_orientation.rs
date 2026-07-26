@@ -328,12 +328,12 @@ impl SpatialDomain {
             (ModelDimension::Two, "down") => Some(SpatialVector::new([0, 1, 0])),
             (ModelDimension::Two, "left") => Some(SpatialVector::new([-1, 0, 0])),
             (ModelDimension::Two, "right") => Some(SpatialVector::new([1, 0, 0])),
-            (ModelDimension::Three, "up") => Some(SpatialVector::new([0, 0, 1])),
-            (ModelDimension::Three, "down") => Some(SpatialVector::new([0, 0, -1])),
+            (ModelDimension::Three, "up") => Some(SpatialVector::new([0, 0, -1])),
+            (ModelDimension::Three, "down") => Some(SpatialVector::new([0, 0, 1])),
             (ModelDimension::Three, "left") => Some(SpatialVector::new([-1, 0, 0])),
             (ModelDimension::Three, "right") => Some(SpatialVector::new([1, 0, 0])),
-            (ModelDimension::Three, "front") => Some(SpatialVector::new([0, 1, 0])),
-            (ModelDimension::Three, "back") => Some(SpatialVector::new([0, -1, 0])),
+            (ModelDimension::Three, "front") => Some(SpatialVector::new([0, -1, 0])),
+            (ModelDimension::Three, "back") => Some(SpatialVector::new([0, 1, 0])),
             _ => None,
         }
     }
@@ -350,8 +350,8 @@ impl SpatialDomain {
             ModelDimension::Three => SpatialFrame {
                 axes: [
                     SpatialVector::new([1, 0, 0]),
-                    SpatialVector::new([0, -1, 0]),
-                    SpatialVector::new([0, 0, -1]),
+                    SpatialVector::new([0, 1, 0]),
+                    SpatialVector::new([0, 0, 1]),
                 ],
             },
         }
@@ -389,6 +389,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn three_dimensional_directions_use_right_back_down_positive_axes() {
+        let domain = SpatialDomain::new(ModelDimension::Three);
+
+        assert_eq!(
+            domain.direction_vector("right"),
+            Some(SpatialVector::new([1, 0, 0]))
+        );
+        assert_eq!(
+            domain.direction_vector("back"),
+            Some(SpatialVector::new([0, 1, 0]))
+        );
+        assert_eq!(
+            domain.direction_vector("down"),
+            Some(SpatialVector::new([0, 0, 1]))
+        );
+    }
+
+    #[test]
     fn two_dimensional_direction_has_one_canonical_frame() {
         let frames = SpatialDomain::new(ModelDimension::Two)
             .expand_frame_selector("up", InputId(1))
@@ -407,7 +425,7 @@ mod tests {
         assert!(
             frames
                 .iter()
-                .all(|env| { env.frame.axis(0) == SpatialVector::new([0, 0, 1]) })
+                .all(|env| { env.frame.axis(0) == SpatialVector::new([0, 0, -1]) })
         );
     }
 
@@ -417,6 +435,6 @@ mod tests {
             .expand_frame_selector("right, up", InputId(1))
             .unwrap();
         assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].frame.axis(2), SpatialVector::new([0, -1, 0]));
+        assert_eq!(frames[0].frame.axis(2), SpatialVector::new([0, 1, 0]));
     }
 }

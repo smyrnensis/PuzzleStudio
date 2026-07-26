@@ -106,20 +106,6 @@ function setVisual3dAnimationFrame(index) {
   selectSharedVisualAnimationFrame("visual3d", index);
 }
 
-function setVisual3dAnimationFrameCount(value) {
-  const before = visualEditSnapshot("visual3d");
-  commitVisual3dActiveFrame();
-  visual3d.animationFrameCount = Math.max(1, Math.min(
-    VISUAL3D_ANIMATION_MAX_FRAMES,
-    Math.trunc(Number(value) || 1),
-  ));
-  ensureVisual3dAnimationState();
-  visual3d.animationFrameIndex = Math.min(visual3d.animationFrameIndex, visual3d.animationFrameCount - 1);
-  visual3d.cells = visual3d.frames[visual3d.animationFrameIndex];
-  renderVisual3dBuilder();
-  pushVisualEditUndoSnapshot("visual3d", before);
-}
-
 function moveVisual3dAnimationFrame(delta) {
   moveSharedVisualAnimationFrame("visual3d", delta);
 }
@@ -266,9 +252,6 @@ function renderVisual3dControls() {
     }
     if (visual3dAnimationDurationInput) {
       visual3dAnimationDurationInput.value = String(normalizedVisual3dAnimationDuration());
-    }
-    if (visual3dAnimationFrameCountInput) {
-      visual3dAnimationFrameCountInput.value = String(visual3d.animationFrameCount || 1);
     }
     if (visual3dAnimationFrameInput) {
       visual3dAnimationFrameInput.value = String((visual3d.animationFrameIndex || 0) + 1);
@@ -1085,7 +1068,6 @@ function setVisual3dEditScope(scope) {
 
 function toggleVisual3dBucketMode() {
   if (!visual3dBucketActive) {
-    deactivateVisual3dClipMode({ render: false });
     visual3dTranslateActive = false;
   }
   visual3dBucketActive = !visual3dBucketActive;
@@ -1093,8 +1075,10 @@ function toggleVisual3dBucketMode() {
   const scope = visual3dEditScope();
   setVisual3dActionStatus(
     visual3dBucketActive
-      ? scope === "all" ? "Bucket: click a voxel to fill its 3D component" : "Bucket: click a slice area to fill its component"
-      : "Brush: paint individual voxels",
+      ? visual3dClipActive
+        ? scope === "all" ? "Bucket: click inside the clip region to fill its 3D component" : "Bucket: click inside the clip region to fill its slice component"
+        : scope === "all" ? "Bucket: click a voxel to fill its 3D component" : "Bucket: click a slice area to fill its component"
+      : visual3dClipActive ? "Clip: drag selection to move it" : "Brush: paint individual voxels",
     "is-ok",
   );
 }
@@ -2954,6 +2938,18 @@ function startVisual3dPaint(event) {
   if (event.button !== 0) {
     return;
   }
+  if (visual3dBucketActive) {
+    const index = visual3dSliceCellIndexFromElement(document.elementFromPoint(event.clientX, event.clientY));
+    if (!Number.isInteger(index) || index < 0) {
+      return;
+    }
+    event.preventDefault();
+    const before = visualEditSnapshot("visual3d");
+    if (bucketFillVisual3dFromSliceIndex(index)) {
+      pushVisualEditUndoSnapshot("visual3d", before);
+    }
+    return;
+  }
   if (visual3dClipActive) {
     startVisual3dClip(event);
     return;
@@ -2967,13 +2963,6 @@ function startVisual3dPaint(event) {
     return;
   }
   event.preventDefault();
-  if (visual3dBucketActive) {
-    const before = visualEditSnapshot("visual3d");
-    if (bucketFillVisual3dFromSliceIndex(index)) {
-      pushVisualEditUndoSnapshot("visual3d", before);
-    }
-    return;
-  }
   visual3dPaintDrag = {
     pointerId: event.pointerId,
     colorIndex: visual3d.selectedColorIndex,
@@ -3335,34 +3324,30 @@ function transformVisual3dCells(mapper, message) {
 }
 
 function visual3dPlaneCoordinates(axis, x, y, z) {
-  const maxY = visual3d.height - 1;
-  const maxZ = visual3d.depth - 1;
   if (axis === "x") {
-    return { stack: x, u: maxY - y, v: maxZ - z };
+    return { stack: x, u: y, v: z };
   }
   if (axis === "y") {
-    return { stack: maxY - y, u: x, v: maxZ - z };
+    return { stack: y, u: x, v: z };
   }
-  return { stack: maxZ - z, u: x, v: maxY - y };
+  return { stack: z, u: x, v: y };
 }
 
 function visual3dCoordsFromPlane(axis, stack, u, v) {
-  const maxY = visual3d.height - 1;
-  const maxZ = visual3d.depth - 1;
   const fixed = visual3dPlaneWorldSlice(axis, stack);
   if (axis === "x") {
-    return { x: fixed, y: maxY - u, z: maxZ - v };
+    return { x: fixed, y: u, z: v };
   }
   if (axis === "y") {
-    return { x: u, y: fixed, z: maxZ - v };
+    return { x: u, y: fixed, z: v };
   }
-  return { x: u, y: maxY - v, z: fixed };
+  return { x: u, y: v, z: fixed };
 }
 
 function visual3dPlaneWorldSlice(axis, stack) {
   const axisSize = visual3dAxisSize(axis);
   const normalized = Math.max(0, Math.min(axisSize - 1, Math.trunc(Number(stack) || 0)));
-  return axis === "x" ? normalized : axisSize - 1 - normalized;
+  return normalized;
 }
 
 function visual3dCurrentSliceDescriptor() {
@@ -3600,11 +3585,10 @@ function visual3dEditFrames() {
     ? visual3d.frames.map((frame) => Array.isArray(frame) ? frame.slice() : [])
     : [[]];
   frames[visual3d.animationMode ? visual3d.animationFrameIndex : 0] = visual3d.cells.slice();
-  return frames.map((frame) => Array.from({ length: visual3d.depth }, (_, sourceZ) =>
+  return frames.map((frame) => Array.from({ length: visual3d.depth }, (_, z) =>
     Array.from({ length: visual3d.height }, (_, y) =>
       Array.from({ length: visual3d.width }, (_, x) => {
-        const worldZ = visual3d.depth - 1 - sourceZ;
-        const cell = frame[visual3dCellIndex(x, y, worldZ)];
+        const cell = frame[visual3dCellIndex(x, y, z)];
         return Number.isInteger(cell) ? cell : null;
       }))));
 }
@@ -4312,7 +4296,6 @@ for (const input of [
   visual3dScaleInput,
   visual3dSliceValue,
   visual3dAnimationDurationInput,
-  visual3dAnimationFrameCountInput,
   visual3dAnimationFrameInput,
 ]) {
   installSelectAllOnFocus(input);
@@ -4360,7 +4343,13 @@ visual3dSliceValue?.addEventListener("keydown", (event) => {
   applyVisual3dSliceInput();
 });
 visual3dAnimationDurationInput?.addEventListener("change", () => setVisual3dAnimationDuration(visual3dAnimationDurationInput.value));
-visual3dAnimationFrameCountInput?.addEventListener("change", () => setVisual3dAnimationFrameCount(visual3dAnimationFrameCountInput.value));
+visual3dAnimationDurationInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  setVisual3dAnimationDuration(visual3dAnimationDurationInput.value);
+});
 const visual3dSliceScrub = document.querySelector("[data-visual3d-slice-scrub]");
 visual3dSliceScrub?.addEventListener("pointerdown", startVisual3dSliceScrub);
 visual3dSliceScrub?.addEventListener("pointermove", continueVisual3dSliceScrub);

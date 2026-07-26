@@ -611,14 +611,10 @@ async function convertPuzzleScriptImport(generation = ++puzzleScriptImportConver
   return canonical;
 }
 
-function puzzleScriptImportTitle(source, canonical) {
+function puzzleScriptImportTitle(source) {
   const explicitTitle = puzzleScriptSourceTitle(source);
   if (explicitTitle) {
     return explicitTitle;
-  }
-  const canonicalTitle = puzzleStudioMetadataTitle(canonical);
-  if (canonicalTitle) {
-    return canonicalTitle;
   }
   return "PuzzleScript import";
 }
@@ -632,21 +628,6 @@ function puzzleScriptSourceTitle(source) {
     .trim()
     .replace(/^"|"$/g, "") || "";
   return title.startsWith("=") ? "" : title;
-}
-
-function puzzleStudioMetadataTitle(canonical) {
-  const value = String(canonical || "")
-    .split("\n")
-    .map((line) => line.trim().match(/^title\s*=\s*(.+)$/)?.[1]?.trim())
-    .find((value) => value);
-  if (value) {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return value.replace(/^"|"$/g, "");
-    }
-  }
-  return "";
 }
 
 async function copyPuzzleScriptImportOutput() {
@@ -675,7 +656,7 @@ async function addPuzzleScriptImportFile() {
   persistCurrentDocument();
   const targetFolder = activeFolder();
   targetFolder.expanded = true;
-  const title = puzzleScriptImportTitle(psImportSourceInput?.value || "", output);
+  const title = puzzleScriptImportTitle(psImportSourceInput?.value || "");
   const fileNameValue = uniqueChildName(targetFolder, ensurePuzzleExtension(title || "PuzzleScript import"));
   const parentPath = folderPath(targetFolder);
   const editorPath = joinPath(parentPath, fileNameValue);

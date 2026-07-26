@@ -1,0 +1,11 @@
+[package]
+name = "puzzle-session-contract"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+puzzle-lang = { path = "../lang" }
+puzzle-runtime-contract = { path = "../runtime_contract" }
+puzzle-scene = { path = "../scene" }
+serde = { version = "1", features = ["derive"] }

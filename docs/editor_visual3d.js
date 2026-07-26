@@ -106,20 +106,6 @@ function setVisual3dAnimationFrame(index) {
   selectSharedVisualAnimationFrame("visual3d", index);
 }
 
-function setVisual3dAnimationFrameCount(value) {
-  const before = visualEditSnapshot("visual3d");
-  commitVisual3dActiveFrame();
-  visual3d.animationFrameCount = Math.max(1, Math.min(
-    VISUAL3D_ANIMATION_MAX_FRAMES,
-    Math.trunc(Number(value) || 1),
-  ));
-  ensureVisual3dAnimationState();
-  visual3d.animationFrameIndex = Math.min(visual3d.animationFrameIndex, visual3d.animationFrameCount - 1);
-  visual3d.cells = visual3d.frames[visual3d.animationFrameIndex];
-  renderVisual3dBuilder();
-  pushVisualEditUndoSnapshot("visual3d", before);
-}
-
 function moveVisual3dAnimationFrame(delta) {
   moveSharedVisualAnimationFrame("visual3d", delta);
 }
@@ -156,6 +142,7 @@ function resetVisual3dBuilder(
   visual3d.animationFrameIndex = 0;
   visual3d.animationFrameCount = 1;
   visual3d.animationPlaybackIndex = 0;
+  visual3d.sourcePreludeRows = [];
   visual3d.sourceSpatialOps = [];
   if (!validVisual3dColorIndex(visual3d.selectedColorIndex)) {
     visual3d.selectedColorIndex = 0;
@@ -206,20 +193,14 @@ function renderVisual3dAnimationFrameStrip() {
   }
   ensureVisual3dAnimationState();
   const plane = visual3dPlaneSize();
-  const showInsertTargets = visualAnimationInsertMode && visual3d.animationFrameCount < VISUAL3D_ANIMATION_MAX_FRAMES;
-  const showRemoveTargets = visualAnimationRemoveMode && visual3d.animationFrameCount > 1;
   renderVisualAnimationFrameStripView({
     target: visual3dAnimationFrameStrip,
     frameCount: visual3d.animationFrameCount,
     activeIndex: visual3d.animationFrameIndex,
     playingIndex: visual3d.animationPlaybackIndex,
     size: Math.max(plane.width, plane.height),
-    showInsertTargets,
-    showRemoveTargets,
     renderCells: (index) => visual3dAnimationFramePreview(visual3d.frames[index]),
     onSelect: setVisual3dAnimationFrame,
-    onRemove: removeVisual3dAnimationFrameAt,
-    renderInsertTarget: (index) => visualAnimationInsertTargetButton(index, insertVisual3dAnimationFrameAt, "3D visual animation"),
     noun: "3D visual animation",
   });
 }
@@ -272,9 +253,6 @@ function renderVisual3dControls() {
     if (visual3dAnimationDurationInput) {
       visual3dAnimationDurationInput.value = String(normalizedVisual3dAnimationDuration());
     }
-    if (visual3dAnimationFrameCountInput) {
-      visual3dAnimationFrameCountInput.value = String(visual3d.animationFrameCount || 1);
-    }
     if (visual3dAnimationFrameInput) {
       visual3dAnimationFrameInput.value = String((visual3d.animationFrameIndex || 0) + 1);
       visual3dAnimationFrameInput.max = String(visual3d.animationFrameCount || 1);
@@ -290,19 +268,16 @@ function renderVisual3dControls() {
     if (visual3dPreviousSliceButton) {
       visual3dPreviousSliceButton.disabled = visual3d.slice <= 0;
       visual3dPreviousSliceButton.dataset.tooltip = "Previous slice";
-      setEditorShortcutHint(visual3dPreviousSliceButton, { key: "[" });
     }
     if (visual3dNextSliceButton) {
       visual3dNextSliceButton.disabled = visual3d.slice >= visual3dAxisSize() - 1;
       visual3dNextSliceButton.dataset.tooltip = "Next slice";
-      setEditorShortcutHint(visual3dNextSliceButton, { key: "]" });
     }
     for (const button of visual3dAxisButtons) {
       const active = button.dataset.visual3dAxis === visual3d.axis;
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", String(active));
       button.dataset.tooltip = `${button.dataset.visual3dAxis.toUpperCase()} axis`;
-      setEditorShortcutHint(button, { key: button.dataset.visual3dAxis });
     }
   });
 }
@@ -384,7 +359,6 @@ function updateVisual3dScopedActionLabels() {
   setVisual3dButtonLabel(visual3dFlipPlaneVerticalButton, `Flip ${target} vertically`);
   setVisual3dButtonLabel(visual3dFillButton, "Fill");
   visual3dFillButton.dataset.tooltip = "Fill";
-  setEditorShortcutHint(visual3dFillButton, { key: "f" });
   syncVisualEditCommandLabels("3d");
   renderVisual3dClipActions();
   syncVisual3dTranslateButton();
@@ -399,7 +373,6 @@ function syncVisual3dTranslateButton() {
   visual3dTranslateButton.setAttribute("aria-label", "Move");
   visual3dTranslateButton.title = "Move";
   visual3dTranslateButton.dataset.tooltip = "Move";
-  setEditorShortcutHint(visual3dTranslateButton, { key: "m" });
 }
 
 function renderVisual3dClipActions() {
@@ -412,11 +385,9 @@ function renderVisual3dClipActions() {
     title: "Clip",
     ariaLabel: "Clip",
     active: visual3dClipActive,
-    onClick: toggleVisual3dClipMode,
     icon: visualLucideIconSvg("mouse-pointer-2"),
   });
   button.dataset.tooltip = "Clip";
-  setEditorShortcutHint(button, { key: "c" });
   actions.append(button);
   visual3dClipActions.replaceChildren(actions);
 }
@@ -1097,7 +1068,6 @@ function setVisual3dEditScope(scope) {
 
 function toggleVisual3dBucketMode() {
   if (!visual3dBucketActive) {
-    deactivateVisual3dClipMode({ render: false });
     visual3dTranslateActive = false;
   }
   visual3dBucketActive = !visual3dBucketActive;
@@ -1105,8 +1075,10 @@ function toggleVisual3dBucketMode() {
   const scope = visual3dEditScope();
   setVisual3dActionStatus(
     visual3dBucketActive
-      ? scope === "all" ? "Bucket: click a voxel to fill its 3D component" : "Bucket: click a slice area to fill its component"
-      : "Brush: paint individual voxels",
+      ? visual3dClipActive
+        ? scope === "all" ? "Bucket: click inside the clip region to fill its 3D component" : "Bucket: click inside the clip region to fill its slice component"
+        : scope === "all" ? "Bucket: click a voxel to fill its 3D component" : "Bucket: click a slice area to fill its component"
+      : visual3dClipActive ? "Clip: drag selection to move it" : "Brush: paint individual voxels",
     "is-ok",
   );
 }
@@ -1158,12 +1130,12 @@ function renderVisual3dPaletteContent() {
     currentButton.style.setProperty("--visual-current-color", normalizeVisualColor(selected.color));
     currentButton.title = selectedIsTransparent
       ? "Transparent eraser cannot be edited"
-      : selectedDisplayName ? `Pick selected color ${selectedDisplayName}` : "Pick selected color";
+      : "Edit selected color";
     currentButton.setAttribute(
       "aria-label",
       selectedIsTransparent
         ? "Selected transparent eraser color #00000000, not editable"
-        : selectedDisplayName ? `Pick selected color ${selectedDisplayName}` : `Pick selected color ${selected.color}`,
+        : selectedDisplayName ? `Edit selected color ${selectedDisplayName}` : `Edit selected color ${selected.color}`,
     );
     currentButton.setAttribute("aria-disabled", String(selectedIsTransparent));
     currentButton.setAttribute("aria-expanded", String(!selectedIsTransparent && visual3d.editPaletteOpen));
@@ -1283,7 +1255,6 @@ function renderVisual3dPaletteContent() {
       const editMenu = renderVisualColorMenu({
         mode: "edit",
         customValue: selected.color,
-        customOnly: true,
         onChange: updateSelectedVisual3dColor,
         onPreset: updateSelectedVisual3dColor,
         renderPalette: renderVisual3dPalette,
@@ -1493,7 +1464,9 @@ function renderVisual3dPreviewCanvas(canvas, cells, options = {}) {
   ctx.fillStyle = visual3dCssVar("--visual3d-preview-bg", "#1d2023");
   ctx.fillRect(0, 0, width, height);
 
-  const view = visual3dPreviewView(width, height);
+  const view = visual3dPreviewView(width, height, {
+    reserveOverlaySpace: options.overlays !== false,
+  });
   drawVisual3dBounds(ctx, view);
 
   const occupied = visual3dOccupancyMap(cells);
@@ -1521,14 +1494,16 @@ function renderVisual3dPreviewCanvas(canvas, cells, options = {}) {
   }
 }
 
-function visual3dPreviewView(width, height) {
+function visual3dPreviewView(width, height, options = {}) {
+  const reserveOverlaySpace = options.reserveOverlaySpace !== false;
   const padding = 0;
+  const contentPadding = reserveOverlaySpace ? padding : 3;
   const overlayControlHeight = Number.parseFloat(
     visual3dCssVar("--visual3d-overlay-control-height", "22"),
   );
   const overlaySafeInset = 8 + overlayControlHeight + 4;
-  const safeTop = overlaySafeInset;
-  const safeBottom = overlaySafeInset;
+  const safeTop = reserveOverlaySpace ? overlaySafeInset : 0;
+  const safeBottom = reserveOverlaySpace ? overlaySafeInset : 0;
   const boundsView = {
     cellScale: 1,
     originX: 0,
@@ -1541,9 +1516,9 @@ function visual3dPreviewView(width, height) {
   const maxY = Math.max(...points.map((point) => point.y));
   const projectedWidth = Math.max(1, maxX - minX);
   const projectedHeight = Math.max(1, maxY - minY);
-  const availableWidth = Math.max(1, width - padding * 2);
+  const availableWidth = Math.max(1, width - contentPadding * 2);
   const safeHeight = Math.max(1, height - safeTop - safeBottom);
-  const availableHeight = Math.max(1, safeHeight - padding * 2);
+  const availableHeight = Math.max(1, safeHeight - contentPadding * 2);
   const scale = Math.max(4, Math.min(availableWidth / projectedWidth, availableHeight / projectedHeight) * VISUAL3D_PREVIEW_BASE_ZOOM)
     * visual3dCamera().zoom;
   return {
@@ -1643,6 +1618,9 @@ function visual3dOccupancyMap(cells = visual3d.cells) {
         const colorIndex = cells?.[visual3dCellIndex(x, y, z)];
         if (validVisual3dColorIndex(colorIndex)) {
           occupied.set(visual3dVoxelKey(x, y, z), {
+            x,
+            y,
+            z,
             colorIndex,
             opaque: visual3dColorIsOpaque(visual3dColorForColorIndex(colorIndex)),
           });
@@ -2075,17 +2053,12 @@ function visual3dProject(position, view) {
 }
 
 function visual3dMergedVoxelFaces(occupied, view) {
-  const voxels = [];
-  for (let z = 0; z < visual3d.depth; z += 1) {
-    for (let y = 0; y < visual3d.height; y += 1) {
-      for (let x = 0; x < visual3d.width; x += 1) {
-        const colorIndex = visual3d.cells[visual3dCellIndex(x, y, z)];
-        if (validVisual3dColorIndex(colorIndex)) {
-          voxels.push({ x, y, z, colorIndex });
-        }
-      }
-    }
-  }
+  const voxels = [...occupied.values()].map(({ x, y, z, colorIndex }) => ({
+    x,
+    y,
+    z,
+    colorIndex,
+  }));
   return Puzzle3VisualCore.mergeVoxelFaces(voxels, {
     faces: visual3dVoxelFaceSpecs,
     isFaceVisible: (voxel, face) => visual3dFaceIsOpen(occupied, face.neighborKey, visual3dColorForColorIndex(voxel.colorIndex)),
@@ -2592,7 +2565,7 @@ function syncVisual3dPaletteSwatches() {
   if (currentButton && selected) {
     const normalized = normalizeVisualColor(selected.color);
     currentButton.style.setProperty("--visual-current-color", normalized);
-    currentButton.setAttribute("aria-label", `Pick selected color ${normalized}`);
+    currentButton.setAttribute("aria-label", `Edit selected color ${normalized}`);
     const currentHexInput = visual3dPalette.querySelector(".visual-current-hex-input");
     if (currentHexInput && document.activeElement !== currentHexInput) {
       currentHexInput.value = normalized;
@@ -2932,26 +2905,14 @@ function stopVisual3dClip(event) {
 }
 
 function handleVisual3dClipKeyboard(event) {
-  if (currentPreviewMode !== "visual3d" || visual3dBuilder.hidden
+  if (currentPreviewMode !== "visual3d" || visual3dBuilder.hidden || !visual3dClipActive
     || visualClipShortcutTargetIsText(event.target)) {
     return false;
   }
   const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
   const modifier = (event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey);
   let handled = false;
-  if (modifier && !event.altKey && !event.shiftKey && key === "c") {
-    handled = runVisual3dEditCommand("copy");
-  } else if (modifier && !event.altKey && !event.shiftKey && key === "x") {
-    handled = runVisual3dEditCommand("cut");
-  } else if (modifier && !event.altKey && !event.shiftKey && key === "v") {
-    handled = runVisual3dEditCommand("paste");
-  } else if (!modifier && !event.altKey && (key === "Backspace" || key === "Delete")) {
-    handled = runVisual3dEditCommand("delete");
-  } else if (visual3dClipActive && !modifier && !event.altKey && key === "Escape") {
-    deactivateVisual3dClipMode();
-    setVisual3dActionStatus("Brush: paint individual voxels", "is-ok");
-    handled = true;
-  } else if (visual3dClipActive && !modifier && !event.altKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
+  if (!modifier && !event.altKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(key)) {
     const du = key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1 : 0;
     const dv = key === "ArrowUp" ? -1 : key === "ArrowDown" ? 1 : 0;
     const next = visual3dClipBoxShiftedInPlane(visual3dClipSelection, du, dv);
@@ -2977,6 +2938,18 @@ function startVisual3dPaint(event) {
   if (event.button !== 0) {
     return;
   }
+  if (visual3dBucketActive) {
+    const index = visual3dSliceCellIndexFromElement(document.elementFromPoint(event.clientX, event.clientY));
+    if (!Number.isInteger(index) || index < 0) {
+      return;
+    }
+    event.preventDefault();
+    const before = visualEditSnapshot("visual3d");
+    if (bucketFillVisual3dFromSliceIndex(index)) {
+      pushVisualEditUndoSnapshot("visual3d", before);
+    }
+    return;
+  }
   if (visual3dClipActive) {
     startVisual3dClip(event);
     return;
@@ -2990,13 +2963,6 @@ function startVisual3dPaint(event) {
     return;
   }
   event.preventDefault();
-  if (visual3dBucketActive) {
-    const before = visualEditSnapshot("visual3d");
-    if (bucketFillVisual3dFromSliceIndex(index)) {
-      pushVisualEditUndoSnapshot("visual3d", before);
-    }
-    return;
-  }
   visual3dPaintDrag = {
     pointerId: event.pointerId,
     colorIndex: visual3d.selectedColorIndex,
@@ -3358,34 +3324,30 @@ function transformVisual3dCells(mapper, message) {
 }
 
 function visual3dPlaneCoordinates(axis, x, y, z) {
-  const maxY = visual3d.height - 1;
-  const maxZ = visual3d.depth - 1;
   if (axis === "x") {
-    return { stack: x, u: maxY - y, v: maxZ - z };
+    return { stack: x, u: y, v: z };
   }
   if (axis === "y") {
-    return { stack: maxY - y, u: x, v: maxZ - z };
+    return { stack: y, u: x, v: z };
   }
-  return { stack: maxZ - z, u: x, v: maxY - y };
+  return { stack: z, u: x, v: y };
 }
 
 function visual3dCoordsFromPlane(axis, stack, u, v) {
-  const maxY = visual3d.height - 1;
-  const maxZ = visual3d.depth - 1;
   const fixed = visual3dPlaneWorldSlice(axis, stack);
   if (axis === "x") {
-    return { x: fixed, y: maxY - u, z: maxZ - v };
+    return { x: fixed, y: u, z: v };
   }
   if (axis === "y") {
-    return { x: u, y: fixed, z: maxZ - v };
+    return { x: u, y: fixed, z: v };
   }
-  return { x: u, y: maxY - v, z: fixed };
+  return { x: u, y: v, z: fixed };
 }
 
 function visual3dPlaneWorldSlice(axis, stack) {
   const axisSize = visual3dAxisSize(axis);
   const normalized = Math.max(0, Math.min(axisSize - 1, Math.trunc(Number(stack) || 0)));
-  return axis === "x" ? normalized : axisSize - 1 - normalized;
+  return normalized;
 }
 
 function visual3dCurrentSliceDescriptor() {
@@ -3623,11 +3585,10 @@ function visual3dEditFrames() {
     ? visual3d.frames.map((frame) => Array.isArray(frame) ? frame.slice() : [])
     : [[]];
   frames[visual3d.animationMode ? visual3d.animationFrameIndex : 0] = visual3d.cells.slice();
-  return frames.map((frame) => Array.from({ length: visual3d.depth }, (_, sourceZ) =>
+  return frames.map((frame) => Array.from({ length: visual3d.depth }, (_, z) =>
     Array.from({ length: visual3d.height }, (_, y) =>
       Array.from({ length: visual3d.width }, (_, x) => {
-        const worldZ = visual3d.depth - 1 - sourceZ;
-        const cell = frame[visual3dCellIndex(x, y, worldZ)];
+        const cell = frame[visual3dCellIndex(x, y, z)];
         return Number.isInteger(cell) ? cell : null;
       }))));
 }
@@ -3649,6 +3610,7 @@ function visual3dEditMutationRequest(operation, options = {}) {
     durationMs: visual3d.animationMode ? normalizedVisual3dAnimationDuration() : null,
     frameDurationMs: visual3d.animationMode ? visual3d.frameDurationMs : null,
     shapeRef: shape.linked ? shape.name : null,
+    preludeRows: visual3d.sourcePreludeRows || [],
     spatialOps: visual3d.sourceSpatialOps || [],
     colorBindings,
   };
@@ -3740,25 +3702,29 @@ function loadVisual3dSourceTarget(target, options = {}) {
   if (!Number.isInteger(target?.bodyStart) || !Number.isInteger(target?.bodyEnd)) {
     return null;
   }
+  if (options.recordHistory && typeof pushSourceNavigationHistory === "function") {
+    pushSourceNavigationHistory();
+  }
+  if (options.switchMode && currentPreviewMode !== "visual3d") {
+    setPreviewMode("visual3d");
+  }
   const loaded = visual3dTargetPayload(target);
   if (!loaded) {
-    if (target?.sourceVisual?.dimension === "3d" && target.sourceVisual.status === "incomplete") {
+    if (target?.sourceVisual?.dimension === "3d") {
       applyIncompleteVisual3dSourceTarget(target.name || "", target);
       if (!options.silent) {
-        setVisual3dActionStatus(`Loaded unfinished ${visual3dNameInput.value || "3D visual"}`, "is-ok");
-        setStatus(`Loaded unfinished 3D visual ${visual3dNameInput.value || ""}`.trim(), "is-ok");
+        const message = target.sourceVisual.status === "invalid"
+          ? `Cannot edit invalid 3D visual ${visual3dNameInput.value || ""}`.trim()
+          : `Loaded unfinished 3D visual ${visual3dNameInput.value || ""}`.trim();
+        const status = target.sourceVisual.status === "invalid" ? "is-error" : "is-ok";
+        setVisual3dActionStatus(message, status);
+        setStatus(message, status);
       }
       return `visual3d:${target.name}:${target.start ?? target.bodyStart}`;
     } else if (!options.silent) {
       setVisual3dActionStatus("No editable 3D visual here", "is-error");
     }
     return null;
-  }
-  if (options.recordHistory && typeof pushSourceNavigationHistory === "function") {
-    pushSourceNavigationHistory();
-  }
-  if (options.switchMode && currentPreviewMode !== "visual3d") {
-    setPreviewMode("visual3d");
   }
   setVisual3dEditSource(target, activeDocument());
   applyLoadedVisual3d(target.name || "VoxelVisual", loaded);
@@ -3801,6 +3767,7 @@ function visual3dTargetPayload(target) {
     shapeBind: documentContract.shapeRef
       ? { type: "shape", name: documentContract.shapeRef, linked: true }
       : null,
+    sourcePreludeRows: documentContract.preludeRows,
     sourceSpatialOps: documentContract.spatialOps,
   };
 }
@@ -3861,13 +3828,19 @@ function applyIncompleteVisual3dSourceTarget(name, target) {
   visual3d.animationDurationMs = null;
   visual3d.frameDurationMs = null;
   visual3d.shapeBind = null;
-  visual3d.sourceSpatialOps = [];
+  visual3d.sourcePreludeRows = Array.isArray(target?.sourceVisual?.preludeRows)
+    ? target.sourceVisual.preludeRows.slice()
+    : [];
+  visual3d.sourceSpatialOps = Array.isArray(target?.sourceVisual?.spatialOps)
+    ? target.sourceVisual.spatialOps.slice()
+    : [];
   visual3d.selectedColorIndex = null;
   visual3d.addPaletteOpen = false;
   visual3d.editPaletteOpen = false;
   visual3d.customColorOpen = false;
   visual3d.addDraftColorIndex = null;
   renderVisual3dBuilder();
+  syncPreviewModeButtonState();
 }
 
 function applyLoadedVisual3d(name, loaded) {
@@ -3889,6 +3862,7 @@ function applyLoadedVisual3d(name, loaded) {
   visual3d.animationDurationMs = loaded.animationDurationMs;
   visual3d.frameDurationMs = loaded.frameDurationMs;
   visual3d.shapeBind = loaded.shapeBind;
+  visual3d.sourcePreludeRows = loaded.sourcePreludeRows;
   visual3d.sourceSpatialOps = loaded.sourceSpatialOps;
   visual3d.selectedColorIndex = visual3d.palette.length ? 0 : null;
   visual3d.addPaletteOpen = false;
@@ -3896,22 +3870,7 @@ function applyLoadedVisual3d(name, loaded) {
   visual3d.customColorOpen = false;
   visual3d.addDraftColorIndex = null;
   renderVisual3dBuilder();
-}
-
-function handleVisual3dSliceBoardShortcut(event) {
-  if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) {
-    return;
-  }
-  const key = event.key.toLowerCase();
-  if (key === "c") {
-    event.preventDefault();
-    event.stopPropagation();
-    runVisual3dEditCommand("copy");
-  } else if (key === "v") {
-    event.preventDefault();
-    event.stopPropagation();
-    runVisual3dEditCommand("paste");
-  }
+  syncPreviewModeButtonState();
 }
 
 function resetVisual3dCamera() {
@@ -4337,7 +4296,6 @@ for (const input of [
   visual3dScaleInput,
   visual3dSliceValue,
   visual3dAnimationDurationInput,
-  visual3dAnimationFrameCountInput,
   visual3dAnimationFrameInput,
 ]) {
   installSelectAllOnFocus(input);
@@ -4385,7 +4343,13 @@ visual3dSliceValue?.addEventListener("keydown", (event) => {
   applyVisual3dSliceInput();
 });
 visual3dAnimationDurationInput?.addEventListener("change", () => setVisual3dAnimationDuration(visual3dAnimationDurationInput.value));
-visual3dAnimationFrameCountInput?.addEventListener("change", () => setVisual3dAnimationFrameCount(visual3dAnimationFrameCountInput.value));
+visual3dAnimationDurationInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  setVisual3dAnimationDuration(visual3dAnimationDurationInput.value);
+});
 const visual3dSliceScrub = document.querySelector("[data-visual3d-slice-scrub]");
 visual3dSliceScrub?.addEventListener("pointerdown", startVisual3dSliceScrub);
 visual3dSliceScrub?.addEventListener("pointermove", continueVisual3dSliceScrub);
@@ -4406,9 +4370,6 @@ window.addEventListener("blur", () => {
   finishVisual3dCameraScrub();
   finishVisual3dSliceScrub();
 });
-for (const button of visual3dAxisButtons) {
-  button.addEventListener("click", () => setVisual3dAxis(button.dataset.visual3dAxis));
-}
 visual3dPalette?.addEventListener("keydown", (event) => {
   const token = event.target.closest(".visual-token");
   if (!token || (event.key !== "Enter" && event.key !== " ")) {
@@ -4430,10 +4391,6 @@ visual3dSliceBoard?.addEventListener("keydown", (event) => {
     event.preventDefault();
     return;
   }
-  handleVisual3dSliceBoardShortcut(event);
-  if (event.defaultPrevented) {
-    return;
-  }
   if (event.key === "Enter" || event.key === " ") {
     const mutate = visual3dBucketActive ? bucketFillVisual3dFromElement : paintVisual3dCellFromElement;
     if (withVisualEditHistory("visual3d", () => mutate(event.target))) {
@@ -4442,30 +4399,12 @@ visual3dSliceBoard?.addEventListener("keydown", (event) => {
     }
   }
 });
-visual3dPreviousSliceButton?.addEventListener("click", () => moveVisual3dSlice(-1));
-visual3dNextSliceButton?.addEventListener("click", () => moveVisual3dSlice(1));
 visual3dScaleDownButton?.addEventListener("click", scaleDownVisual3d);
 visual3dScaleUpButton?.addEventListener("click", scaleUpVisual3d);
 visual3dRotatePlaneLeftButton?.addEventListener("click", rotateVisual3dPlaneLeft);
 visual3dRotatePlaneRightButton?.addEventListener("click", rotateVisual3dPlaneRight);
 visual3dFlipPlaneHorizontalButton?.addEventListener("click", flipVisual3dPlaneHorizontal);
 visual3dFlipPlaneVerticalButton?.addEventListener("click", flipVisual3dPlaneVertical);
-visual3dTranslateButton?.addEventListener("click", toggleVisual3dTranslateMode);
-visual3dScopeSliceButton?.addEventListener("click", () => setVisual3dEditScope("slice"));
-visual3dScopeAllButton?.addEventListener("click", () => setVisual3dEditScope("all"));
-visual3dFillButton?.addEventListener("click", toggleVisual3dBucketMode);
-visual3dUpdateButton?.addEventListener("click", () => {
-  updateVisual3dInSource().catch((error) => {
-    console.error(error);
-    setVisual3dActionStatus("3D visual source update failed", "is-error");
-    setStatus("3D visual source update failed", "is-error");
-  });
-});
-newVisual3dButton?.addEventListener("click", newVisual3dDraft);
-visual3dInsertButton?.addEventListener("click", () => addVisual3dToSource().catch((error) => {
-  console.error(error);
-  setVisual3dActionStatus("Could not add 3D visual", "is-error");
-}));
 visual3dResetCameraButton?.addEventListener("click", resetVisual3dCamera);
 visual3dPreviewCanvas?.addEventListener("pointerdown", startVisual3dPreviewDrag);
 visual3dPreviewCanvas?.addEventListener("pointermove", continueVisual3dPreviewDrag);
@@ -4482,13 +4421,7 @@ document.addEventListener("click", (event) => {
   deactivateVisual3dTranslateMode();
 });
 document.addEventListener("keydown", (event) => {
-  if (handleVisual3dClipKeyboard(event)) {
-    return;
-  }
-  if (visual3dTranslateActive && event.key === "Escape") {
-    event.preventDefault();
-    deactivateVisual3dTranslateMode();
-  }
+  handleVisual3dClipKeyboard(event);
 });
 window.addEventListener("resize", () => {
   if (!visual3dBuilder?.hidden) {

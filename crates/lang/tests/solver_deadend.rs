@@ -5,7 +5,7 @@ use puzzle_lang::{
 #[test]
 fn deadend_queries_lower_from_the_solver_block() {
     let source = r#"
-title = solver_deadend
+const title = solver_deadend
 
 puzzle default {
 layers {

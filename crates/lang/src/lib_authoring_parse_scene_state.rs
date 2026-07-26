@@ -67,7 +67,7 @@ fn parse_typed_scene_puzzle_declaration<'a>(
         ["puzzle3", ..] => {
             return Err(parse_error(
                 line,
-                "`puzzle3` was removed; use `puzzle <slot> = <model>` in both .puzzle and .puzzle3 files",
+                "`puzzle3` was removed; use `puzzle <slot> = <model>` in .puzzle files",
             ));
         }
         _ => return Ok(None),
@@ -97,7 +97,7 @@ fn parse_scene_puzzle_initializer_rhs<'a>(
         )),
         ["puzzle3", ..] => Err(parse_error(
             line,
-            "`puzzle3` was removed; use `puzzle <slot> = <model>` in both .puzzle and .puzzle3 files",
+            "`puzzle3` was removed; use `puzzle <slot> = <model>` in .puzzle files",
         )),
         ["current_level", ..] => Err(parse_error(
             line,
@@ -135,7 +135,7 @@ fn reject_old_scene_puzzle_initializer(
         )),
         ["puzzle3", ..] => Err(parse_error(
             line,
-            "`puzzle3` was removed; use `puzzle <slot> = <model>` in both .puzzle and .puzzle3 files",
+            "`puzzle3` was removed; use `puzzle <slot> = <model>` in .puzzle files",
         )),
         _ => Ok(()),
     }

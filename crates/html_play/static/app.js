@@ -24,19 +24,6 @@ let clientPendingWaits = 0;
 let activeThemeClass = "";
 const activeThemeVariables = new Set();
 const activationConfirmDelayMs = 160;
-const STANDARD_COMPONENT_DEFINITIONS = Object.freeze([Object.freeze({
-  name: "standard.message",
-  layout: {},
-  events: Object.freeze({
-    dismiss: Object.freeze({ pointer: true, keys: "input" }),
-  }),
-  components: Object.freeze([Object.freeze({
-    kind: "text",
-    role: "body",
-    source: "path",
-    path: Object.freeze(["text"]),
-  })]),
-})]);
 
 class PuzzleSoundRuntime {
   constructor() {
@@ -260,6 +247,39 @@ const standaloneRuntime = window.PuzzleStandaloneRuntime
   ? new window.PuzzleStandaloneRuntime(puzzleBoot, window.PuzzleRuntimeExportJson)
   : null;
 const soundRuntime = new PuzzleSoundRuntime();
+let renderWasmModulePromise = null;
+
+async function renderWasmModule() {
+  if (standaloneRuntime) {
+    await standaloneRuntime.ensureInitialized();
+    return standaloneRuntime.wasmModule;
+  }
+  renderWasmModulePromise ||= import("./wasm_player/puzzle_wasm_player.js")
+    .then(async (module) => {
+      await module.default();
+      return module;
+    });
+  return renderWasmModulePromise;
+}
+
+async function prepareResolvedRenderScene(renderScene) {
+  const module = await renderWasmModule();
+  if (!window.PuzzleRenderAssetDecoder?.hydrateRenderSceneImages) {
+    throw new Error("Render asset decoder is unavailable.");
+  }
+  return window.PuzzleRenderAssetDecoder.hydrateRenderSceneImages(module, renderScene);
+}
+
+async function resolveRenderMoment(renderScene, moment) {
+  const module = await renderWasmModule();
+  if (typeof module.resolve_render_moment !== "function") {
+    throw new Error("Rust render-moment resolver is unavailable.");
+  }
+  return JSON.parse(module.resolve_render_moment(
+    JSON.stringify(renderScene),
+    JSON.stringify(moment),
+  ));
+}
 
 document.addEventListener("keydown", () => soundRuntime.primePlayback(), { capture: true });
 document.addEventListener("pointerdown", () => soundRuntime.primePlayback(), { capture: true });
@@ -275,10 +295,8 @@ let puzzle3PreviewSurface = initialPuzzle3PreviewSurface;
 const activeSolveRequests = new Map();
 let wasmSolverServicePromise = null;
 /* puzzle-host:optional:solver:end */
-const standardChoiceCursors = new Map();
 let screenScaleSyncFrame = 0;
 let screenScaleSyncPasses = 0;
-let pendingModelInput = null;
 const activeWaitTimers = new Set();
 const pendingPresentationEvents = [];
 let presentationAnimationBatchId = 0;
@@ -286,12 +304,15 @@ let dispatchingPresentationEvents = false;
 let pendingSessionResume = false;
 let resumingSession = false;
 let sessionWaiting = false;
-let drainingQueuedModelInput = false;
 let sceneEditorPreview = null;
 
 function sendHostModelInput(_input) {
   return false;
 }
+
+window.addEventListener("PuzzleProgressSaveError", (event) => {
+  showError(new Error(event.detail?.message || "Progress save failed."));
+});
 
 async function requestJson(url, options = {}) {
   if (standaloneRuntime) {
@@ -358,7 +379,7 @@ async function solveStandaloneCurrentState(options = {}, control = null) {
     state: state.solverState,
     materializeLevelStart: options.materializeLevelStart !== false,
     maxDepth: Number(options.maxDepth ?? 512),
-    maxNodes: Number(options.maxNodes ?? 5_000_000),
+    maxStoredNodes: Number(options.maxStoredNodes ?? 5_000_000),
   }, Date.now());
   if (control) {
     control.searchId = searchId;
@@ -379,7 +400,7 @@ async function solveStandaloneCurrentState(options = {}, control = null) {
 /* puzzle-host:optional:solver:end */
 
 async function loadState() {
-  render(await requestJson("/api/state"));
+  render(await requestSessionAction({ kind: "initialize" }));
 }
 
 async function post(url, options = {}) {
@@ -392,10 +413,19 @@ async function post(url, options = {}) {
 }
 
 function postSessionAction(action) {
-  return post("/api/action", {
+  return post("/api/action", sessionActionRequestOptions(action));
+}
+
+function requestSessionAction(action) {
+  return requestJson("/api/action", sessionActionRequestOptions(action));
+}
+
+function sessionActionRequestOptions(action) {
+  return {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(action),
-  });
+  };
 }
 
 function render(state) {
@@ -498,7 +528,7 @@ function installScreenScaleResizeHooks() {
 }
 
 function syncScreenScale() {
-  if (componentEmbedMode || !screenFrame || !screenView || !playSurface) {
+  if (componentEmbedMode || !currentState || !screenFrame || !screenView || !playSurface) {
     return;
   }
   if (screenView.getClientRects().length === 0 || playSurface.getClientRects().length === 0) {
@@ -525,9 +555,9 @@ function currentSceneAspectRatio() {
   if (sceneEditorPreview?.layout?.aspectRatio) {
     return normalizedAspectRatio(sceneEditorPreview.layout.aspectRatio);
   }
-  const layers = sceneLayers(currentState);
+  const layers = surfaceComponents(currentState);
   const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
-  const sceneDef = sceneDefByName(layer?.name) || currentSceneDef();
+  const sceneDef = componentDefinitionByName(layer?.name) || focusedComponentDefinition();
   return normalizedAspectRatio(sceneDef?.layout?.aspectRatio);
 }
 
@@ -674,7 +704,7 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
     return;
   }
   const sceneName = sceneEditorPreview.sceneName || focusedComponentName(currentState);
-  const sceneDef = sceneDefByName(sceneName);
+  const sceneDef = sceneEditorPreview.definition || null;
   const layout = mergedScenePreviewLayout(sceneDef, sceneEditorPreview.layout);
   window.parent.postMessage({
     type: "PuzzleStudioScenePreview",
@@ -692,9 +722,8 @@ function notifySceneEditorPreview(requestId = sceneEditorPreview?.requestId || "
   }, "*");
 }
 
-function renderSceneEditorPreview(config = {}) {
+async function renderSceneEditorPreview(config = {}) {
   const sceneName = String(config.scene?.name || config.sceneName || focusedComponentName(currentState)).trim();
-  const sceneDef = sceneDefByName(sceneName);
   sceneEditorPreview = {
     requestId: String(config.requestId || ""),
     sceneName,
@@ -703,12 +732,18 @@ function renderSceneEditorPreview(config = {}) {
     state: normalizeScenePreviewState(config.state),
     inspect: config.inspect || {},
   };
-  if (!sceneDef) {
-    notifySceneEditorPreview(sceneEditorPreview.requestId);
-    return;
+  if (!standaloneRuntime) {
+    throw new Error("Scene editor preview requires the WASM scene presentation resolver.");
   }
+  const sceneDef = await standaloneRuntime.resolveScenePresentation(
+    sceneName,
+    sceneEditorPreview.state || {},
+  );
+  sceneEditorPreview.definition = sceneDef;
   const baseState = currentState || puzzleBoot || {};
-  const existingLayer = sceneLayers(baseState).find((layer) => layer.name === sceneName);
+  const existingLayer = surfaceComponents(baseState).find((layer) => (
+    layer.id === sceneName || layer.name === sceneName || layer.definition === sceneName
+  ));
   const previewState = {
     ...baseState,
     theme: sceneEditorPreview.theme,
@@ -727,6 +762,7 @@ function renderSceneEditorPreview(config = {}) {
         scene: existingLayer?.scene || baseState.scene || null,
         sceneState: sceneEditorPreview.state || existingLayer?.sceneState || existingLayer?.state || baseState.sceneState || {},
         scenePuzzles: existingLayer?.scenePuzzles || baseState.scenePuzzles || [],
+        presentation: sceneDef,
       }],
     },
   };
@@ -740,7 +776,7 @@ function renderSceneEditorPreview(config = {}) {
 
 function renderSceneEditorLayer(sceneDef, state) {
   screenView.replaceChildren();
-  const layer = sceneLayers(state)[0];
+  const layer = surfaceComponents(state)[0];
   const components = sceneDef?.components || [];
   const scope = {
     __sceneLayer: layer,
@@ -862,10 +898,10 @@ function sceneEditorComponentMeta(component, path, scope = {}) {
     layout: component.layout || null,
   };
   if (component.kind === "button" || component.kind === "choice") {
-    meta.label = resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect));
+    meta.label = String(component.label || "") || sceneTitle(effectLabel(component.effect));
     meta.effect = component.effect || null;
   } else if (component.kind === "text") {
-    meta.label = resolveLabel(component.content || component, scope);
+    meta.label = String(component.value || "");
   } else if (component.source) {
     meta.source = component.source;
   }
@@ -876,7 +912,7 @@ function sceneEditorComponentMeta(component, path, scope = {}) {
 function renderSurface(state) {
   screenView.replaceChildren();
 
-  const layers = sceneLayers(state);
+  const layers = surfaceComponents(state);
   syncVisualThemeForSceneStack(layers);
   if (componentEmbedMode && renderEmbeddedPuzzleComponent(layers)) {
     return;
@@ -891,7 +927,7 @@ function renderSurface(state) {
     if (layer.visibility === "hidden") {
       continue;
     }
-    const sceneDef = componentDefinitionByName(layer.definition || layer.name);
+    const sceneDef = presentationDefinitionForLayer(layer);
     if (!sceneDef) {
       throw new Error(`Unsupported presented component definition: ${String(layer.definition || layer.name || "")}`);
     }
@@ -1043,7 +1079,7 @@ function renderEmbeddedPuzzleComponent(layers) {
   }
   /* puzzle-host:optional:puzzle3:end */
   const layer = layers.find((candidate) => candidate.focused === true) || layers[0];
-  const sceneDef = sceneDefByName(layer?.name);
+  const sceneDef = componentDefinitionByName(layer?.name);
   const component = findComponentByKind(sceneDef?.components || [], "puzzle");
   if (!layer || !sceneDef || !component) {
     return false;
@@ -1065,7 +1101,7 @@ function syncVisualThemeForSceneStack(layers) {
     return;
   }
   const hasPuzzleLayer = layers.some((layer) => {
-    const scene = sceneDefByName(layer.name);
+    const scene = componentDefinitionByName(layer.name);
     return sceneHasComponent(scene, "puzzle") || sceneHasComponent(scene, "frame");
   });
   if (!hasPuzzleLayer) {
@@ -1073,11 +1109,22 @@ function syncVisualThemeForSceneStack(layers) {
   }
 }
 
-function sceneLayers(state) {
+function surfaceComponents(state) {
   if (!state?.surface || !Array.isArray(state.surface.components)) {
     throw new Error("Runtime snapshot is missing the required surface component contract");
   }
   return state.surface.components;
+}
+
+function presentationDefinitionForLayer(layer) {
+  const presentation = layer?.presentation;
+  if (!presentation || typeof presentation !== "object") {
+    throw new Error(`Surface component ${String(layer?.id || layer?.definition || "unknown")} is missing its resolved presentation contract`);
+  }
+  if (presentation.error) {
+    throw new Error(String(presentation.error));
+  }
+  return presentation;
 }
 
 function focusedComponentName(state = currentState) {
@@ -1184,17 +1231,19 @@ function isControlPointerTarget(target) {
   return Boolean(target?.closest?.("button, a, input, select, textarea, [role='button'], [role='option']"));
 }
 
-function sceneInteractionProfile(scene = currentSceneDef(), options = {}) {
+function sceneInteractionProfile(scene = focusedComponentDefinition(), options = {}) {
   const state = options.state || currentState || {};
-  const standardChoices = scene ? standardChoiceFocusCells(scene) : [];
+  const layer = scene
+    ? surfaceComponents(state).find((candidate) => candidate?.focused === true) || null
+    : null;
   return {
     acceptsModelInput: stateAcceptsModelInput(state),
-    standardChoices,
+    hasStandardChoice: Number.isInteger(layer?.choiceCursor),
   };
 }
 
-function currentSceneLayer(state = currentState, scene = currentSceneDef()) {
-  const layers = sceneLayers(state || {});
+function currentSceneLayer(state = currentState, scene = focusedComponentDefinition()) {
+  const layers = surfaceComponents(state || {});
   return layers.find((layer) => scene?.name && layer.name === scene.name)
     || layers.find((layer) => layer.focused === true)
     || layers[0]
@@ -1263,6 +1312,9 @@ function renderPuzzle(component, scope = {}) {
   const key = `${root.dataset.scene}:${root.dataset.source}`;
   const renderer = new window.PuzzleRenderer(root, {
     renderMode: "canvas",
+    prepareRenderScene: prepareResolvedRenderScene,
+    resolveRenderMoment,
+    onError: showError,
   });
   renderer.viewport = puzzleViewports.get(key);
   renderer.render(scene);
@@ -1272,7 +1324,7 @@ function renderPuzzle(component, scope = {}) {
 
 /* puzzle-host:optional:puzzle3:start */
 function renderPuzzle3Frame(component, scope = {}) {
-  if (!window.Puzzle3DFrameFixture || !window.Puzzle3DFrameAssets || !window.Puzzle3Component) {
+  if (!window.Puzzle3Component) {
     throw new Error("Puzzle3 component assets are unavailable.");
   }
   const sceneName = scope.__sceneDef?.name || scope.__sceneLayer?.name || focusedComponentName(currentState);
@@ -1291,12 +1343,14 @@ function renderPuzzle3Frame(component, scope = {}) {
     canvas.height = 640;
     canvas.setAttribute("aria-label", `${sceneTitle(sceneName)} ${source}`);
     root.append(canvas);
-    const fixture = puzzle3FrameFixture(sceneName, source);
+    const snapshot = puzzle3FrameSnapshot(sceneName, source);
     const controller = window.Puzzle3Component.attach(canvas, {
       screenView: root,
-      snapshot: fixture,
+      snapshot,
       scene: sceneName,
       component,
+      prepareRenderScene: prepareResolvedRenderScene,
+      resolveRenderMoment,
       onError(failure) {
         reportPuzzle3ComponentError(failure);
       },
@@ -1350,43 +1404,23 @@ function reportPuzzle3ComponentError(failure = {}) {
   }
 }
 
-function puzzle3FrameFixture(sceneName, source = "board") {
+function puzzle3FrameSnapshot(sceneName, source = "board") {
   const sessionSnapshot = currentState?.scenePuzzleState?.[source];
   if (sessionSnapshot && typeof sessionSnapshot === "object") {
-    return mergePuzzle3SessionSnapshot(window.Puzzle3DFrameFixture, sessionSnapshot);
+    return sessionSnapshot;
   }
-  const fixture = JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture));
   if (puzzle3PreviewSurface) {
-    return puzzle3PreviewSurfaceFixture(fixture, sceneName);
+    return puzzle3PreviewSurfaceFixture(puzzle3PreviewTemplate(), sceneName);
   }
   throw new Error(`Puzzle3 session snapshot is missing for component source: ${source}`);
 }
 
-function mergePuzzle3SessionSnapshot(fixture, sessionSnapshot) {
+function puzzle3PreviewTemplate() {
+  const fixture = window.Puzzle3DFrameFixture;
   if (!fixture || typeof fixture !== "object") {
-    throw new Error("Puzzle3 frame fixture is unavailable.");
+    throw new Error("Puzzle3 visual preview template is unavailable.");
   }
-  const objectById = new Map(
-    Object.values(fixture.objects || {}).map((object) => [Number(object.id), object]),
-  );
-  const cells = (sessionSnapshot.cells || []).map((cell) => ({
-    ...cell,
-    objects: (cell.objects || []).map((reference) => {
-      const object = objectById.get(Number(reference.id));
-      if (!object) {
-        throw new Error(`Puzzle3 session references unknown object id: ${reference.id}`);
-      }
-      return {
-        ...object,
-        layer: Number.isInteger(Number(reference.layer)) ? Number(reference.layer) : object.layer,
-      };
-    }),
-  }));
-  return {
-    ...fixture,
-    ...sessionSnapshot,
-    cells,
-  };
+  return JSON.parse(JSON.stringify(fixture));
 }
 
 function normalizePuzzle3PreviewSurface(update = null) {
@@ -1440,7 +1474,7 @@ function applyPuzzleStudioPreviewSurfaceUpdate(update = null) {
   }
   setPuzzle3PreviewSurface(update);
   const snapshot = puzzle3PreviewSurfaceFixture(
-    JSON.parse(JSON.stringify(window.Puzzle3DFrameFixture)),
+    puzzle3PreviewTemplate(),
     surface.sceneName,
   );
   for (const entry of puzzle3Controllers.values()) {
@@ -1561,7 +1595,7 @@ function syncPuzzle3ComponentLevel(entry) {
   }
   const sceneName = entry.root.dataset.scene;
   const source = entry.root.dataset.source || "board";
-  const snapshot = puzzle3FrameFixture(sceneName, source);
+  const snapshot = puzzle3FrameSnapshot(sceneName, source);
   entry.controller.replaceSnapshot(snapshot);
 }
 
@@ -1590,13 +1624,7 @@ function renderText(component, scope = {}) {
   const text = document.createElement("p");
   text.className = "view-text";
   text.dataset.textRole = component.role || "body";
-  if (component.source === "expr") {
-    text.textContent = resolveLabel(component.content, scope);
-  } else if (component.source === "path") {
-    text.textContent = String(resolveViewPath(component.path, scope) ?? "");
-  } else {
-    text.textContent = component.value || "";
-  }
+  text.textContent = String(component.value || "");
   if (component.textAlign) {
     text.style.textAlign = sceneTextAlignCss(component.textAlign);
   }
@@ -1610,7 +1638,7 @@ function renderButton(component, scope = {}) {
   button.type = "button";
   setControlLabel(
     button,
-    resolveLabel(component.label, scope) || sceneTitle(effectLabel(component.effect)),
+    String(component.label || "") || sceneTitle(effectLabel(component.effect)),
   );
   annotateSceneEditorComponent(button, component, scope);
   button.addEventListener("click", () => {
@@ -1629,7 +1657,7 @@ function renderChoice(component, scope = {}) {
   choice.type = "button";
   setControlLabel(
     choice,
-    resolveLabel(component.label, scope),
+    String(component.label || ""),
   );
   choice.classList.add("standard-choice");
   annotateSceneEditorComponent(choice, component, scope);
@@ -1638,26 +1666,19 @@ function renderChoice(component, scope = {}) {
   const index = counter.value;
   counter.value += 1;
   choice.dataset.standardChoiceIndex = String(index);
-  choice.classList.toggle("is-selected", index === standardChoiceCursor(scope.__sceneDef));
+  choice.classList.toggle(
+    "is-selected",
+    scope.__sceneLayer?.focused === true && index === Number(scope.__sceneLayer?.choiceCursor),
+  );
   choice.addEventListener("click", () => {
     if (selectSceneEditorComponent(component, scope)) {
       return;
     }
-    standardChoiceCursors.set(scope.__sceneDef.name, index);
-    syncStandardChoiceSelection(choice, index);
-    runEffectActivationConfirm(choice, component.effect);
+    runActivationConfirm(choice, () => sendChoiceActivate(index));
   });
   applySizingKind(choice, component);
   applySceneLayout(choice, component.layout);
   return choice;
-}
-
-function syncStandardChoiceSelection(choice, selectedIndex) {
-  const root = choice.closest(".scene-layer") || choice.parentElement || document;
-  root.querySelectorAll(".standard-choice").forEach((item) => {
-    item.classList.toggle("is-selected", Number(item.dataset.standardChoiceIndex) === selectedIndex);
-  });
-  scrollSelectedChoiceIntoView(root);
 }
 
 function scrollSelectedChoiceIntoView(root = screenView) {
@@ -1727,7 +1748,7 @@ function selectSceneEditorComponent(component, scope = {}) {
       __componentPath: path,
     }),
   }, "*");
-  renderSceneEditorPreview(sceneEditorPreview);
+  void renderSceneEditorPreview(sceneEditorPreview).catch((error) => showError(error));
   return true;
 }
 
@@ -1829,7 +1850,10 @@ function renderContainer(component, scope = {}) {
 
 function renderConditional(component, scope = {}) {
   const fragment = document.createDocumentFragment();
-  const conditionTrue = isSceneConditionTrue(component.condition, scope);
+  if (typeof component.condition !== "boolean") {
+    throw new Error("Resolved scene conditional is missing its boolean condition");
+  }
+  const conditionTrue = component.condition;
   const children = conditionTrue
     ? component.children || []
     : component.elseChildren || [];
@@ -1900,122 +1924,6 @@ function findComponent(components, predicate) {
   return null;
 }
 
-function resolveViewPath(path, scope = {}) {
-  const parts = Array.isArray(path)
-    ? path.map(String).filter(Boolean)
-    : String(path || "").split(".").filter(Boolean);
-  if (parts.length === 0) {
-    return "";
-  }
-  if (parts.length === 1) {
-    if (Object.prototype.hasOwnProperty.call(scope, parts[0])) {
-      return scope[parts[0]];
-    }
-    if (currentState && Object.prototype.hasOwnProperty.call(currentState, parts[0])) {
-      return currentState[parts[0]];
-    }
-    return (scope.__sceneState || currentState?.sceneState)?.[parts[0]]
-      ?? currentState?.gameState?.[parts[0]];
-  }
-  let value = Object.prototype.hasOwnProperty.call(scope, parts[0])
-    ? scope[parts[0]]
-    : currentState?.[parts[0]];
-  if (value === undefined) {
-    value = scope.__componentProperties?.[parts[0]];
-  }
-  if (value === undefined) {
-    value = (scope.__sceneState || currentState?.sceneState)?.[parts[0]];
-  }
-  if (value === undefined) {
-    value = currentState?.gameState?.[parts[0]];
-  }
-  for (const part of parts.slice(1)) {
-    value = value?.[part];
-  }
-  return value;
-}
-
-function resolveLabel(label, scope = {}) {
-  if (!label) {
-    return "";
-  }
-  if (typeof label === "string") {
-    return label;
-  }
-  if (label.kind === "text") {
-    return label.value || "";
-  }
-  if (label.kind === "int" || label.kind === "bool") {
-    return String(label.value);
-  }
-  if (label.kind === "path") {
-    return String(resolveViewPath(label.path, scope) ?? "");
-  }
-  if (label.kind === "call") {
-    if (label.name === "join") {
-      return (label.args || []).map((arg) => resolveLabel(arg, scope)).join("");
-    }
-    return displayExprText(label, scope);
-  }
-  if (label.kind === "binary") {
-    const value = resolveExprValue(label, scope);
-    return value === undefined || value === null ? "" : String(value);
-  }
-  if (label.kind === "if") {
-    return resolveLabel(resolveBoolExpr(label.condition, scope) ? label.then : label.else, scope);
-  }
-  throw new Error(`Unsupported scene label expression: ${String(label.kind || "unknown")}`);
-}
-
-function resolveBoolExpr(expr, scope = {}) {
-  const value = resolveExprValue(expr, scope);
-  if (typeof value !== "boolean") {
-    throw new Error(`Scene boolean expression resolved to ${value === undefined ? "undefined" : typeof value}`);
-  }
-  return value;
-}
-
-function resolveExprValue(expr, scope = {}) {
-  if (!expr) {
-    throw new Error(`Unsupported scene expression call: ${String(expr.name || "unknown")}`);
-  }
-  if (typeof expr === "string") {
-    return expr;
-  }
-  if (expr.kind === "bool" || expr.kind === "int" || expr.kind === "text") {
-    return expr.value;
-  }
-  if (expr.kind === "path") {
-    return resolveViewPath(expr.path, scope);
-  }
-  if (expr.kind === "call") {
-    if (expr.name === "join") {
-      return (expr.args || []).map((arg) => resolveLabel(arg, scope)).join("");
-    }
-    return undefined;
-  }
-  if (expr.kind === "binary") {
-    if (expr.op === "and") {
-      return resolveBoolExpr(expr.left, scope) && resolveBoolExpr(expr.right, scope);
-    }
-    const left = resolveExprValue(expr.left, scope);
-    const right = resolveExprValue(expr.right, scope);
-    if (left === undefined || right === undefined) {
-      return undefined;
-    }
-    if (expr.op === "eq") {
-      return left === right;
-    }
-    if (expr.op === "neq") {
-      return left !== right;
-    }
-  }
-  if (expr.kind === "if") {
-    return resolveExprValue(resolveBoolExpr(expr.condition, scope) ? expr.then : expr.else, scope);
-  }
-  throw new Error(`Unsupported scene expression: ${String(expr.kind || "unknown")}`);
-}
-
 function focusShell() {
   if (!shell || document.activeElement === shell || shell.contains(document.activeElement)) {
     return;
@@ -2072,7 +1980,7 @@ function effectsForKey(event) {
     return [{ kind: "session_action", action: sessionAction }];
   }
   const keyTokens = logicalKeyTokens(rawKey);
-  const scene = currentSceneDef();
+  const scene = focusedComponentDefinition();
   const profile = sceneInteractionProfile(scene);
   const binding = scene?.keys?.find((binding) => binding.keys.some((candidate) => keyTokens.includes(candidate)));
   if (binding) {
@@ -2085,7 +1993,7 @@ function effectsForKey(event) {
     || (input.keys || []).some((candidate) => keyTokens.includes(candidate))
   );
   const standardInput = standardChoiceInputForKey(key);
-  if (standardInput && profile.standardChoices.length > 0) {
+  if (standardInput && profile.hasStandardChoice) {
     return [{ kind: "standard_choice", input: standardInput }];
   }
   if (input && profile.acceptsModelInput) {
@@ -2140,40 +2048,34 @@ function inputByName(name) {
   return currentState.inputs.find((input) => input.name === name);
 }
 
-function currentSceneDef() {
+function focusedComponentDefinition() {
   const source = currentState || puzzleBoot || {};
   const name = focusedComponentName(source);
   return componentDefinitionByName(name, source);
 }
 
 function componentDefinitionByName(name, source = currentState || puzzleBoot || {}) {
-  const definitions = componentDefinitionsForSource(source);
-  return definitions.find((definition) => definition.name === name) || null;
-}
-
-function sceneDefByName(name) {
-  const source = currentState || puzzleBoot || {};
-  return componentDefinitionByName(name, source);
-}
-
-function componentDefinitionsForSource(source) {
-  return [...(nonEmptyArray(source?.scenes) || []), ...STANDARD_COMPONENT_DEFINITIONS];
-}
-
-function nonEmptyArray(value) {
-  return Array.isArray(value) && value.length > 0 ? value : null;
-}
-
-function isSceneConditionTrue(condition, scope = {}) {
-  if (!condition || typeof condition !== "object") {
-    throw new Error("Scene condition must be an expression object");
+  const layer = Array.isArray(source?.surface?.components)
+    ? source.surface.components.find((candidate) => (
+      candidate.id === name
+      || candidate.name === name
+      || candidate.definition === name
+    ))
+    : null;
+  if (layer) {
+    return presentationDefinitionForLayer(layer);
   }
-  return resolveBoolExpr(condition, scope);
+  return null;
 }
 
 async function sendResolvedInput(input) {
   if (input?.kind === "standard_choice") {
-    handleStandardChoiceInput(input.input);
+    if (input.input === "enter") {
+      const selectedChoice = document.querySelector(".scene-layer.is-focused .standard-choice.is-selected");
+      runActivationConfirm(selectedChoice, () => sendChoiceActivate());
+    } else {
+      await postSessionAction({ kind: "choice_move", direction: input.input });
+    }
     return;
   }
   if (input?.kind === "model_input") {
@@ -2200,6 +2102,14 @@ async function sendSceneEffect(effect) {
 
 async function sendComponentEvent(instance, event) {
   await postSessionAction({ kind: "component_event", instance, event });
+}
+
+async function sendChoiceActivate(index = null) {
+  const action = { kind: "choice_activate" };
+  if (Number.isInteger(index)) {
+    action.index = index;
+  }
+  await postSessionAction(action);
 }
 
 function applyPresentationEvents(events) {
@@ -2241,7 +2151,6 @@ function dispatchNextPresentationEvent() {
     resumePendingSessionTurn();
     return;
   }
-  drainQueuedModelInput();
 }
 
 async function resumePendingSessionTurn() {
@@ -2254,7 +2163,7 @@ async function resumePendingSessionTurn() {
     currentState.busy = true;
   }
   try {
-    render(await requestJson("/api/resume", { method: "POST" }));
+    render(await requestSessionAction({ kind: "resume" }));
   } catch (error) {
     if (currentState) {
       currentState.busy = false;
@@ -2262,7 +2171,6 @@ async function resumePendingSessionTurn() {
     showError(error);
   } finally {
     resumingSession = false;
-    drainQueuedModelInput();
   }
 }
 
@@ -2285,7 +2193,7 @@ function applyPresentationAnimations(event, animations) {
     currentState.scene.animationEvents = animations;
     currentState.scene.animationBatchId = batchId;
   }
-  const layer = sceneLayers(currentState).find((candidate) =>
+  const layer = surfaceComponents(currentState).find((candidate) =>
     (candidate?.name === event.scene || candidate?.scene?.name === event.scene)
       && (candidate?.scenePuzzles || []).includes(event.puzzle)
   );
@@ -2304,9 +2212,7 @@ function startPresentationWait(event) {
     timeoutId: 0,
     done: false,
     resumesSession: sessionWaiting,
-    fastForwardRequested: Boolean(
-      pendingModelInput && config.queueDuringWait && config.fastForwardWait
-    ),
+    fastForwardRequested: false,
     config,
   };
   waitTimer.complete = () => {
@@ -2378,12 +2284,11 @@ function fastForwardWaitTimer(waitTimer) {
 function sendModelInput(input) {
   if (currentState?.busy || clientPendingWaits > 0) {
     const config = inputBufferConfig();
-    if (!config.queueDuringWait) {
-      return undefined;
+    const queued = sendModelInputNow(input);
+    if (config.queueDuringWait) {
+      fastForwardActiveWaitsForQueuedInput(config);
     }
-    pendingModelInput = input;
-    fastForwardActiveWaitsForQueuedInput(config);
-    return undefined;
+    return queued;
   }
   return sendModelInputNow(input);
 }
@@ -2395,198 +2300,7 @@ function sendModelInputNow(input) {
   if (sendHostModelInput(input)) {
     return undefined;
   }
-  return post(`/api/input/${encodeURIComponent(input)}`);
-}
-
-async function drainQueuedModelInput() {
-  if (drainingQueuedModelInput || clientPendingWaits > 0 || currentState?.busy || !pendingModelInput) {
-    return;
-  }
-  drainingQueuedModelInput = true;
-  const input = pendingModelInput;
-  pendingModelInput = null;
-  try {
-    await sendModelInputNow(input);
-  } finally {
-    drainingQueuedModelInput = false;
-  }
-}
-
-function standardChoiceFocusCells(scene = currentSceneDef()) {
-  if (!scene) {
-    return [];
-  }
-  const footprint = componentColumnFootprint(scene.components || [], {
-    focusKind: "choice",
-    scope: {
-      __sceneDef: scene,
-      __sceneState: currentState?.sceneState || {},
-    },
-  });
-  return footprint.cells.map((cell, index) => ({ ...cell, index }));
-}
-
-function componentFootprint(component, context = {}) {
-  if (!component) {
-    return emptyFootprint();
-  }
-  const focusKind = context.focusKind || "choice";
-  if (focusKind === "choice" && component.kind === "choice") {
-    return {
-      width: 1,
-      height: 1,
-      cells: [{ x: 0, y: 0, kind: "component", component, scope: context.scope || {} }],
-    };
-  }
-  if (["text", "frame", "puzzle", "puzzle3"].includes(component.kind)) {
-    return emptyCellFootprint();
-  }
-  if (component.kind === "row") {
-    return componentRowFootprint(component.children || [], context);
-  }
-  if (component.kind === "column" || component.kind === "box") {
-    return componentColumnFootprint(component.children || [], context);
-  }
-  if (component.kind === "conditional") {
-    return componentColumnFootprint(
-      isSceneConditionTrue(component.condition, context.scope || {})
-        ? component.children || []
-        : component.elseChildren || [],
-      context,
-    );
-  }
-  return emptyCellFootprint();
-}
-
-function stackColumnFootprints(footprints) {
-  let width = 0;
-  let height = 0;
-  const cells = [];
-  for (const child of footprints || []) {
-    for (const cell of child.cells) {
-      cells.push({ ...cell, y: cell.y + height });
-    }
-    width = Math.max(width, child.width);
-    height += child.height;
-  }
-  return {
-    width: Math.max(1, width),
-    height: Math.max(1, height),
-    cells,
-  };
-}
-
-function componentRowFootprint(components, context = {}) {
-  let width = 0;
-  let height = 0;
-  const cells = [];
-  for (const component of components || []) {
-    const child = componentFootprint(component, context);
-    for (const cell of child.cells) {
-      cells.push({ ...cell, x: cell.x + width });
-    }
-    width += child.width;
-    height = Math.max(height, child.height);
-  }
-  return {
-    width: Math.max(1, width),
-    height: Math.max(1, height),
-    cells,
-  };
-}
-
-function componentColumnFootprint(components, context = {}) {
-  let width = 0;
-  let height = 0;
-  const cells = [];
-  for (const component of components || []) {
-    const child = componentFootprint(component, context);
-    for (const cell of child.cells) {
-      cells.push({ ...cell, y: cell.y + height });
-    }
-    width = Math.max(width, child.width);
-    height += child.height;
-  }
-  return {
-    width: Math.max(1, width),
-    height: Math.max(1, height),
-    cells,
-  };
-}
-
-function emptyFootprint() {
-  return { width: 0, height: 0, cells: [] };
-}
-
-function emptyCellFootprint() {
-  return { width: 1, height: 1, cells: [] };
-}
-
-function standardChoiceCursor(scene = currentSceneDef()) {
-  const cells = standardChoiceFocusCells(scene);
-  const max = Math.max(0, cells.length - 1);
-  const cursor = Number(standardChoiceCursors.get(scene?.name) || 0);
-  return Math.max(0, Math.min(max, cursor));
-}
-
-function handleStandardChoiceInput(input) {
-  const scene = currentSceneDef();
-  const cells = standardChoiceFocusCells(scene);
-  if (!scene || cells.length === 0) {
-    return;
-  }
-  const cursor = standardChoiceCursor(scene);
-  if (["up", "down", "left", "right"].includes(input)) {
-    const next = standardChoiceDirectionalTarget(cells, cursor, input);
-    if (next !== null) {
-      standardChoiceCursors.set(scene.name, next);
-      render(currentState);
-    }
-    return;
-  }
-  if (input === "enter") {
-    const selectedChoice = document.querySelector(".standard-choice.is-selected");
-    const cell = cells[cursor];
-    runEffectActivationConfirm(selectedChoice, cell?.component?.effect || null);
-  }
-}
-
-function standardChoiceDirectionalTarget(cells, cursor, direction) {
-  const current = cells[cursor];
-  if (!current) {
-    return null;
-  }
-  const candidates = cells.filter((cell) => {
-    if (direction === "left") {
-      return cell.y === current.y && cell.x < current.x;
-    }
-    if (direction === "right") {
-      return cell.y === current.y && cell.x > current.x;
-    }
-    if (direction === "up") {
-      return cell.x === current.x && cell.y < current.y;
-    }
-    if (direction === "down") {
-      return cell.x === current.x && cell.y > current.y;
-    }
-    return false;
-  });
-  if (candidates.length === 0) {
-    return null;
-  }
-  candidates.sort((left, right) => {
-    if (direction === "left") {
-      return right.x - left.x;
-    }
-    if (direction === "right") {
-      return left.x - right.x;
-    }
-    if (direction === "up") {
-      return right.y - left.y;
-    }
-    return left.y - right.y;
-  });
-  return candidates[0].index;
+  return postSessionAction({ kind: "input", name: input });
 }
 
 function effectLabel(effect) {
@@ -2656,8 +2370,7 @@ function displayExprText(expr, scope = {}) {
     return String(expr.value);
   }
   if (expr.kind === "path") {
-    const resolved = resolveViewPath(expr.path, scope);
-    return resolved === undefined || resolved === null ? expr.path : displayExprValueText(resolved);
+    return Array.isArray(expr.path) ? expr.path.join(".") : String(expr.path || "");
   }
   if (expr.kind === "call") {
     return `${expr.name}(${(expr.args || []).map((arg) => displayExprText(arg, scope)).join(", ")})`;
@@ -2670,28 +2383,6 @@ function displayExprText(expr, scope = {}) {
     return `if ${displayExprText(expr.condition, scope)} { ${displayExprText(expr.then, scope)} } else { ${displayExprText(expr.else, scope)} }`;
   }
   return "";
-}
-
-function displayExprValueText(value) {
-  if (typeof value === "object" && value?.kind === "level" && value.name !== undefined) {
-    return JSON.stringify(String(value.name));
-  }
-  return commandPayload(value);
-}
-
-function commandPayload(value) {
-  if (typeof value === "object") {
-    if (value.index !== undefined) {
-      return String(value.index);
-    }
-    if (value.name !== undefined) {
-      return String(value.name);
-    }
-    if (value.label !== undefined) {
-      return String(value.label);
-    }
-  }
-  return String(value);
 }
 
 function dispatchKeyboardInput(event) {
@@ -2748,14 +2439,6 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-if (standaloneRuntime) {
-  window.addEventListener("PuzzleStandaloneStateChanged", () => {
-    loadState().catch((error) => {
-      showError(error);
-    });
-  });
-}
-
 /* puzzle-host:optional:studio-bridge:start */
 let studioPreviewDebugMode = false;
 
@@ -2804,7 +2487,7 @@ window.addEventListener("message", async (event) => {
   }
 
   if (event.data?.type === "PuzzleStudioSetScenePreview") {
-    renderSceneEditorPreview(event.data || {});
+    await renderSceneEditorPreview(event.data || {});
     return;
   }
 

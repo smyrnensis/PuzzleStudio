@@ -14,21 +14,14 @@ pub fn run_cli_with_args(args: impl IntoIterator<Item = String>) -> Result<(), S
 #[cfg(not(target_arch = "wasm32"))]
 fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     let config = Config::from_args(args)?;
-    let source = fs::read_to_string(&config.puzzle_path)?;
-    puzzle_lang::validate_source_profile_for_path(&source, &config.puzzle_path)?;
-    let profile = puzzle_lang::puzzle_source_profile_for_path(&config.puzzle_path)
-        .ok_or_else(|| AppError::Config("game entry must be .puzzle or .puzzle3".to_string()))?;
-    let source = match profile {
-        puzzle_lang::PuzzleSourceProfile::Puzzle3d => source,
-        puzzle_lang::PuzzleSourceProfile::Puzzle2d => {
-            let expanded = expand_game_imports_for_file(&source, &config.puzzle_path)?;
-            puzzle_lang::validate_source_profile_for_path(&expanded, &config.puzzle_path)?;
-            expanded
-        }
-    };
-
-    let document =
-        puzzle_lang::parse_game_for_path(&source, &config.puzzle_path).map_err(AppError::Lang)?;
+    let root = config
+        .puzzle_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let workspace = puzzle_workspace::FileWorkspace::load(&config.puzzle_path, root)
+        .map_err(AppError::Config)?;
+    let source = workspace.entry_source().to_string();
+    let document = workspace.compile().map_err(AppError::Lang)?;
     if matches!(
         document.single_model(),
         Some(LoadedDocumentModel::Puzzle3d { .. })
@@ -324,8 +317,8 @@ impl Config {
                 "--solver-depth" => {
                     parse_solver_depth_arg(&mut solver, &mut args)?;
                 }
-                "--solver-nodes" => {
-                    parse_solver_nodes_arg(&mut solver, &mut args)?;
+                "--solver-stored-nodes" => {
+                    parse_solver_stored_nodes_arg(&mut solver, &mut args)?;
                 }
                 "--solver-ms" => {
                     parse_solver_ms_arg(&mut solver, &mut args)?;
@@ -372,7 +365,7 @@ impl Config {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
-                        "usage: html-play [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--scene name] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms N]".to_string(),
+                        "usage: html-play <path/to/game.puzzle> [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--scene name] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-stored-nodes 1000000] [--solver-ms N]".to_string(),
                     ));
                 }
                 value => puzzle_path = Some(PathBuf::from(value)),
@@ -406,7 +399,11 @@ impl Config {
             Some(path) => {
                 resolve_game_entry(path).map_err(|error| AppError::Config(error.to_string()))?
             }
-            None => discover_default_puzzle_path()?,
+            None => {
+                return Err(AppError::Config(
+                    "html-play requires an explicit .puzzle file path".to_string(),
+                ));
+            }
         };
 
         Ok(Self {

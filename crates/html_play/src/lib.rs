@@ -25,12 +25,14 @@ use std::time::Instant;
 use std::time::SystemTime;
 
 use puzzle_core::{
-    ComparisonOp, CompiledGame, ConditionValueKind, InputId, LayerId, MarkPattern, MarkValueMatch,
-    ObjectId, Offset, PatchOp, Pattern, RuleFiring, State, TransitionCommand,
+    ComparisonOp, CompiledGame, ConditionValueKind, InputId, MarkPattern, MarkValueMatch, ObjectId,
+    Offset, PatchOp, Pattern, RuleFiring, State, TransitionCommand,
 };
-pub use puzzle_game_runtime::StandaloneSessionBridge;
+pub use puzzle_game_runtime::RuntimeSession;
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::AssetsDef;
+#[cfg(not(target_arch = "wasm32"))]
+use puzzle_lang::resolve_game_entry;
 use puzzle_lang::{
     ArrowKey, GoalCondition, GoalExpr, GoalValue, KeyTrigger, Level, LoadedDocumentModel,
     LoadedGame, ResourceSelection, RuleAnimation, RuleAnimationTrigger, RuleEffect, SceneComponent,
@@ -39,11 +41,9 @@ use puzzle_lang::{
     VisualTransform, parse_game2d as parse_game,
 };
 use puzzle_lang::{AssetKind, DiagnosticReport};
-#[cfg(not(target_arch = "wasm32"))]
-use puzzle_lang::{discover_game_entries, expand_game_imports_for_file, resolve_game_entry};
 use puzzle_play::{
-    GameSession, PresentationEvent, animation_events_contract_2d, animation_events_for_trace,
-    loaded_document_scene_host_loaded_game, presentation_events_contract, runtime_sounds_def,
+    animation_events_contract_2d, animation_events_for_trace,
+    loaded_document_scene_host_loaded_game, runtime_sounds_def,
 };
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use puzzle_runtime_contract::SessionAction;
@@ -60,6 +60,7 @@ const VISUALS_JS: &str = include_str!("../static/visuals.js");
 const APP_JS: &str = include_str!("../static/app.js");
 const RENDERER_JS: &str = include_str!("../static/renderer.js");
 const VISUAL_TWEEN_CORE_JS: &str = include_str!("../static/visual_tween_core.js");
+const RENDER_ASSET_DECODER_JS: &str = include_str!("../static/render_asset_decoder.js");
 const STANDALONE_JS: &str = include_str!("../static/standalone.js");
 #[cfg(not(target_arch = "wasm32"))]
 const PUZZLE_PLAYER_WASM_JS: &str = include_str!("../static/wasm_player/puzzle_wasm_player.js");
@@ -240,30 +241,6 @@ process.stdout.write(JSON.stringify(value));
         serde_json::from_slice(&output.stdout).expect("Puzzle3 render math result is JSON")
     }
 
-    fn evaluate_renderer(expression: &str) -> Value {
-        let script = format!(
-            r#"
-globalThis.window = globalThis;
-{}
-{}
-const value = (() => {{ {} }})();
-process.stdout.write(JSON.stringify(value));
-"#,
-            VISUAL_TWEEN_CORE_JS, RENDERER_JS, expression
-        );
-        let output = Command::new("node")
-            .arg("-e")
-            .arg(script)
-            .output()
-            .expect("Node.js is required for the 2D renderer contract test");
-        assert!(
-            output.status.success(),
-            "2D renderer evaluation failed:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).expect("2D renderer result is JSON")
-    }
-
     fn embedded_puzzle_json_assignment(
         html: &str,
         marker: &str,
@@ -310,7 +287,7 @@ process.stdout.write(JSON.stringify(value));
         std::fs::write(dir.join("secret.pdf"), b"not declared").expect("write undeclared asset");
 
         let source = r#"
-title = Manifest Assets
+const title = "Manifest Assets"
 
 assets {
 "visuals/player.svg"
@@ -343,7 +320,7 @@ step default
 }
 "#;
 
-        let game_path = dir.join("game.puzzle");
+        let game_path = dir.join("entry.puzzle");
         std::fs::write(&game_path, source).expect("write game source");
         let html = export_html_file(&game_path).expect("export with manifest asset");
 
@@ -446,454 +423,23 @@ levels default of board {
 
     #[test]
     fn puzzle3_runtime_advances_animated_visual_frames() {
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("function currentRuntimeVisualLayers(visual, now = performance.now())")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("Math.floor(now / frameDuration) % frames.length"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function hasRuntimeVisualAnimation()"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains(
-                "if (hasRuntimeVisualAnimation()) {\n    scheduleViewportAnimation();\n  }"
-            )
-        );
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("throw new Error(\"Puzzle3 runtime visual frames are missing.\")")
-        );
+        assert!(PUZZLE3_COMPONENT_JS.contains("controllerOptions.resolveRenderMoment"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("clipElapsedMs"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("animationElapsedMs"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("resolvedFrame.continueAnimation === true"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("currentVisualLayers"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("frameDurationMs"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("durationMs"));
     }
 
     #[test]
-    fn renderer_tween_keeps_compiled_visual_order() {
-        let display_list = evaluate_renderer(
-            r#"
-const renderer = Object.create(window.PuzzleRenderer.prototype);
-renderer.activeTriggerAnimations = [];
-renderer.visuals = () => ({
-  order: {
-    direction_priority: ["down", "right"],
-    priorities: [
-      { objects: ["Low"] },
-      { objects: ["High"] },
-    ],
-  },
-});
-const scene = {
-  width: 1,
-  height: 1,
-  cells: [{
-    x: 0,
-    y: 0,
-    layers: [
-      { object: "High", objectId: 2, layer: 1 },
-      { object: "Low", objectId: 1, layer: 0 },
-    ],
-  }],
-};
-const animations = [{
-  kind: "move",
-  name: "tween",
-  occurrenceId: 1,
-  objectId: 1,
-  from: { x: -1, y: 0 },
-  to: { x: 0, y: 0 },
-}];
-return renderer.canvasDisplayList(scene, { x: 0, y: 0, width: 1, height: 1 }, 1, animations, 0.5)
-  .map((item) => ({ object: item.layer.object, animated: Boolean(item.animation) }));
-"#,
-        );
-        assert_eq!(
-            display_list,
-            json!([
-                { "object": "Low", "animated": true },
-                { "object": "High", "animated": false },
-            ])
-        );
-
-        assert!(RENDERER_JS.contains("let startedAt = null;"));
-        assert!(RENDERER_JS.contains("let animationFrameIndex = 0;"));
-        assert!(RENDERER_JS.contains("if (!this.root.isConnected)"));
-        assert!(RENDERER_JS.contains("startedAt ??= performance.now();"));
-        assert!(RENDERER_JS.contains(
-            "this.animationProgressForFrame(performance.now() - startedAt, duration, animationFrameIndex)"
-        ));
-        assert!(RENDERER_JS.contains("animationFrameIndex += 1;"));
-        assert!(
-            RENDERER_JS.contains("animationProgressForFrame(elapsedMs, durationMs, frameIndex)")
-        );
-        assert!(
-            RENDERER_JS.contains("const finalFrameIndex = this.minimumAnimationFrameCount() - 1;")
-        );
-        assert!(RENDERER_JS.contains("if (frameIndex < finalFrameIndex && timeProgress >= 1)"));
-        assert!(RENDERER_JS.contains("return frameIndex / finalFrameIndex;"));
-        assert!(RENDERER_JS.contains("minimumAnimationFrameCount()"));
-        assert!(RENDERER_JS.contains("return 3;"));
-        assert!(RENDERER_JS.contains("requestAnimationFrame(draw);"));
-        assert!(
-            RENDERER_JS.contains(
-                "canvasDisplayList(scene, frame, unit, animations = [], progress = 1, now = performance.now())"
-            )
-        );
-        assert!(!RENDERER_JS.contains("const staticSurfaces = new Map();"));
-        assert!(RENDERER_JS.contains("const items = [];"));
-        assert!(RENDERER_JS.contains("let order = 0;"));
-        assert!(RENDERER_JS.contains("layerOrder: this.visualRenderPriority(layer),"));
-        assert!(!RENDERER_JS.contains("canvasSurfaceItemForLayer("));
-        assert!(RENDERER_JS.contains(
-            "const compare = (a, b) => a.cellOrder - b.cellOrder\n      || a.layerOrder - b.layerOrder\n      || a.sourceCellOrder - b.sourceCellOrder\n      || a.order - b.order;"
-        ));
-        assert!(RENDERER_JS.contains("return items.sort(compare);"));
-        assert!(!RENDERER_JS.contains("paintCanvasSurface("));
-        assert!(!RENDERER_JS.contains("paintCanvasPatternSurface("));
-        assert!(!RENDERER_JS.contains("mergedCanvasRects("));
-        assert!(RENDERER_JS.contains("animation: animation && progress < 1 ? animation : null"));
-        assert!(RENDERER_JS.contains(
-            "for (const item of this.canvasDisplayList(scene, frame, unit, animations, progress, now))"
-        ));
-        assert!(RENDERER_JS.contains(
-            "paintCanvasItem(context, item, unit, progress = 1, now = performance.now())"
-        ));
-        assert!(RENDERER_JS.contains(
-            "this.paintCanvasLayer(context, item.layer, item.x, item.y, unit, item.animation, progress, now);"
-        ));
-        assert_eq!(RENDERER_JS.matches("context.clip();").count(), 1);
-        assert!(!RENDERER_JS.contains("visualBox("));
-        assert!(RENDERER_JS.contains("canvasMetrics(canvas, scene, frame)"));
-        assert!(RENDERER_JS.contains("canvasPresentationCellUnit()"));
-        assert!(
-            RENDERER_JS
-                .contains("context.setTransform(metrics.scaleX, 0, 0, metrics.scaleY, 0, 0);")
-        );
-        assert!(RENDERER_JS.contains("context.__puzzleCanvasScaleX = metrics.scaleX;"));
-        assert!(RENDERER_JS.contains("fillCanvasRect(context, x, y, width, height)"));
-        assert!(RENDERER_JS.contains("canvasPixelEdge(context, value, axis)"));
-        assert!(RENDERER_JS.contains("scaleX: pixelWidth / cssWidth,"));
-        assert!(RENDERER_JS.contains("scaleY: pixelHeight / cssHeight,"));
-        assert!(RENDERER_JS.contains("const rect = canvas.getBoundingClientRect();"));
-        assert!(!RENDERER_JS.contains("canvasCellUnit(scene, frame)"));
-        assert!(!RENDERER_JS.contains("visualPatternSize(frameDef)"));
-        assert!(!RENDERER_JS.contains("return hasImage ? Math.max(unit, 32) : unit;"));
-        assert!(!RENDERER_JS.contains("leastCommonMultiple("));
-        assert!(!RENDERER_JS.contains("maximumCanvasCellUnit()"));
-        assert!(!RENDERER_JS.contains("scaledPixelEdge(index, sourceUnits, targetPixels)"));
-        assert!(!RENDERER_JS.contains("animationForVisualCompanion"));
-        assert!(RENDERER_JS.contains("requiresCanvasTransformStack(transform)"));
-        assert!(RENDERER_JS.contains("x += transform.x;"));
-        assert!(RENDERER_JS.contains("y += transform.y;"));
-        assert!(!RENDERER_JS.contains("x = Math.round(x + transform.x);"));
-        assert!(!RENDERER_JS.contains("y = Math.round(y + transform.y);"));
-    }
-
-    #[test]
-    fn renderer_places_transient_animations_in_the_compiled_display_list_priority() {
-        let display_list = evaluate_renderer(
-            r#"
-const renderer = Object.create(window.PuzzleRenderer.prototype);
-renderer.activeTriggerAnimations = [{
-  id: "flash:0",
-  name: "Flash",
-  x: 0,
-  y: 0,
-  startedAtMs: 0,
-  durationMs: 100,
-}];
-renderer.visuals = () => ({
-  order: {
-    direction_priority: ["down", "right"],
-    priorities: [
-      { objects: ["Floor"], animations: [], merge: false },
-      { objects: [], animations: ["Flash"], merge: false },
-      { objects: ["Foreground"], animations: [], merge: false },
-    ],
-  },
-});
-const scene = {
-  width: 1,
-  height: 1,
-  cells: [{
-    x: 0,
-    y: 0,
-    layers: [
-      { object: "Foreground", objectId: 2, layer: 1 },
-      { object: "Floor", objectId: 1, layer: 0 },
-    ],
-  }],
-};
-return renderer.canvasDisplayList(
-  scene,
-  { x: 0, y: 0, width: 1, height: 1 },
-  1,
-  [],
-  1,
-  50,
-).map((item) => item.kind === "trigger" ? `!${item.instance.name}` : item.layer.object);
-"#,
-        );
-
-        assert_eq!(display_list, json!(["Floor", "!Flash", "Foreground"]));
-        assert!(!RENDERER_JS.contains("paintTriggerAnimations("));
-    }
-
-    #[test]
-    fn renderer_tween_composites_every_swept_cell_by_visual_priority() {
-        let display_orders = evaluate_renderer(
-            r#"
-const renderer = Object.create(window.PuzzleRenderer.prototype);
-renderer.activeTriggerAnimations = [];
-renderer.visuals = () => ({
-  order: {
-    direction_priority: ["down", "right"],
-    priorities: [
-      { objects: ["Floor"] },
-      { objects: ["Player"] },
-      { objects: ["Foreground"] },
-    ],
-  },
-});
-function displayOrder(from, to) {
-  const width = from.x === to.x ? 1 : 2;
-  const height = from.y === to.y ? 1 : 2;
-  const cells = [];
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const layers = [
-        { object: "Floor", objectId: 1, layer: 0 },
-        { object: "Foreground", objectId: 3, layer: 2 },
-      ];
-      if (x === to.x && y === to.y) {
-        layers.push({ object: "Player", objectId: 2, layer: 1 });
-      }
-      cells.push({ x, y, layers });
-    }
-  }
-  const scene = { width, height, cells };
-  const animations = [{
-    kind: "move", name: "tween", occurrenceId: 1, objectId: 2, from, to,
-  }];
-  return renderer.canvasDisplayList(
-    scene,
-    { x: 0, y: 0, width, height },
-    1,
-    animations,
-    0.5,
-  ).map((item) => item.layer.object);
-}
-return {
-  left: displayOrder({ x: 1, y: 0 }, { x: 0, y: 0 }),
-  right: displayOrder({ x: 0, y: 0 }, { x: 1, y: 0 }),
-  up: displayOrder({ x: 0, y: 1 }, { x: 0, y: 0 }),
-  down: displayOrder({ x: 0, y: 0 }, { x: 0, y: 1 }),
-};
-"#,
-        );
-
-        let expected = json!(["Floor", "Floor", "Player", "Foreground", "Foreground"]);
-        assert_eq!(display_orders["left"], expected);
-        assert_eq!(display_orders["right"], expected);
-        assert_eq!(display_orders["up"], expected);
-        assert_eq!(display_orders["down"], expected);
-    }
-
-    #[test]
-    fn renderer_consumes_canonical_visual_tween_state() {
-        let state = evaluate_renderer(
-            r#"
-const renderer = Object.create(window.PuzzleRenderer.prototype);
-return renderer.tweenedVisualState({}, {
-  visualTween: {
-    from: { transforms: [{ kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 350 }] },
-    to: { transforms: [{ kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 10 }] },
-  },
-}, 0.5);
-"#,
-        );
-
-        assert_eq!(state["transforms"][0]["degrees"].as_f64(), Some(360.0));
-    }
-
-    #[test]
-    fn renderer_interpolates_rotation_and_translation_with_one_progress_value() {
-        let state = evaluate_renderer(
-            r#"
-const renderer = Object.create(window.PuzzleRenderer.prototype);
-return renderer.tweenedVisualState({}, {
-  visualTween: {
-    from: { transforms: [
-      { kind: "translate", space: "world", value: [0, 0, 0] },
-      { kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 0 },
-    ] },
-    to: { transforms: [
-      { kind: "translate", space: "world", value: [2, 4, 0] },
-      { kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 90 },
-    ] },
-  },
-}, 0.5);
-"#,
-        );
-
-        assert_eq!(state["transforms"][0]["x"].as_f64(), Some(1.0));
-        assert_eq!(state["transforms"][0]["y"].as_f64(), Some(2.0));
-        assert_eq!(state["transforms"][1]["degrees"].as_f64(), Some(45.0));
-    }
-
-    #[test]
-    fn renderer_resolves_independent_visual_and_position_channels_for_one_occurrence() {
-        let state = evaluate_renderer(
-            r#"
-const visual = {
-  kind: "move", name: "tween", occurrenceId: 1, objectId: 7,
-  from: { x: 2, y: 3 }, to: { x: 2, y: 3 },
-  visualTween: {
-    from: { transforms: [{ kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 0 }] },
-    to: { transforms: [{ kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 90 }] },
-  },
-};
-const position = {
-  kind: "move", name: "tween", occurrenceId: 1, objectId: 7,
-  from: { x: 2, y: 3 }, to: { x: 3, y: 3 },
-};
-const source = [visual, position];
-const renderer = Object.create(window.PuzzleRenderer.prototype);
-const resolved = renderer.prepareAnimations(source, { x: 0, y: 0, width: 8, height: 8 });
-return {
-  sourceCount: source.length,
-  sourcePositionHasVisualTween: Boolean(source[1].visualTween),
-  resolvedCount: resolved.length,
-  resolvedFrom: resolved[0].from,
-  resolvedTo: resolved[0].to,
-  resolvedHasVisualTween: Boolean(resolved[0].visualTween),
-};
-"#,
-        );
-
-        assert_eq!(state["sourceCount"], json!(2));
-        assert_eq!(state["sourcePositionHasVisualTween"], json!(false));
-        assert_eq!(state["resolvedCount"], json!(1));
-        assert_eq!(state["resolvedFrom"], json!({"x": 2, "y": 3}));
-        assert_eq!(state["resolvedTo"], json!({"x": 3, "y": 3}));
-        assert_eq!(state["resolvedHasVisualTween"], json!(true));
-    }
-
-    #[test]
-    fn renderer_composes_chained_channels_by_occurrence_identity() {
-        let state = evaluate_renderer(
-            r#"
-const events = [
-  { kind: "move", name: "tween", occurrenceId: 1, objectId: 7,
-    from: { x: 0, y: 0 }, to: { x: 1, y: 0 } },
-  { kind: "move", name: "tween", occurrenceId: 2, objectId: 7,
-    from: { x: 1, y: 0 }, to: { x: 2, y: 0 } },
-  { kind: "move", name: "tween", occurrenceId: 2, objectId: 8,
-    from: { x: 2, y: 0 }, to: { x: 2, y: 0 },
-    visualTween: {
-      from: { transforms: [{ kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 0 }] },
-      to: { transforms: [{ kind: "rotate", space: "world", axis: [0, 0, 1], degrees: 90 }] },
-    } },
-];
-return window.PuzzleVisualTweenCore.resolveAnimationChannels(events);
-"#,
-        );
-
-        assert_eq!(state.as_array().unwrap().len(), 2);
-        assert!(state[0].get("visualTween").is_none());
-        assert_eq!(state[1]["occurrenceId"], json!(2));
-        assert_eq!(state[1]["from"], json!({"x": 1, "y": 0}));
-        assert_eq!(state[1]["to"], json!({"x": 2, "y": 0}));
-        assert!(state[1].get("visualTween").is_some());
-    }
-
-    #[test]
-    fn renderer_does_not_draw_fallback_visuals() {
-        assert!(RENDERER_JS.contains("return null;"));
-        assert!(RENDERER_JS.contains("const visual = this.renderLayerVisual(layer);"));
-        assert!(!RENDERER_JS.contains("visual.className = `visual ${layer.visual}`;"));
-        assert!(!RENDERER_JS.contains("this.paintFallbackLayer("));
-        assert!(!RENDERER_JS.contains("function paintFallbackLayer("));
-        assert!(!RENDERER_JS.contains("function hashString("));
-        assert!(RENDERER_CSS.contains(".visual {"));
-        assert!(RENDERER_CSS.contains("position: absolute;"));
-        assert!(!RENDERER_CSS.contains(".visual.unknown"));
-    }
-
-    #[test]
-    fn generated_visuals_include_ordered_visual_transforms() {
-        let source = r#"
-title = visual_translate
-puzzle default {
-layers {
-actor = Player
-}
-visuals {
-Player {
-translate (0.5, -0.25)
-rotate 90deg
-flip true
-#fff
-00000
-00000
-00000
-00000
-00000
-}
-}
-rules {
-
-}
-levels {
-legend {
-. = empty
-P = Player
-}
-level "start" {
-P
-}
-}
-}
-"#;
-        let loaded = parse_game(source).unwrap();
-        let visuals = generated_visuals_js(&loaded);
-
-        assert!(visuals.contains("\"transforms\":[{\"kind\":\"translate\",\"x\":0.5,\"y\":-0.25,\"space\":\"world\"},{\"kind\":\"rotate\",\"degrees\":90,\"space\":\"world\"},{\"kind\":\"flip\",\"enabled\":true}]"));
-        assert!(!visuals.contains("\"pixelsPerCell\""));
-        assert!(RENDERER_JS.contains(
-            "applyCanvasVisualTransforms(context, definition, unit, animation = null, progress = 1"
-        ));
-        assert!(RENDERER_JS.contains("for (const transform of [...transforms].reverse())"));
-        assert!(RENDERER_JS.contains("tweenedVisualState(definition, animation, progress)"));
-        assert!(RENDERER_JS.contains("if (!animation?.visualTween || progress >= 1)"));
-        assert!(RENDERER_JS.contains("PuzzleVisualTweenCore.interpolate("));
-        assert!(VISUAL_TWEEN_CORE_JS.contains("function interpolateTransform("));
-        assert!(
-            VISUAL_TWEEN_CORE_JS
-                .contains("source.kind === \"translate\" || source.kind === \"scale\"")
-        );
-        assert!(VISUAL_TWEEN_CORE_JS.contains("interpolateOptionalNumber(from.opacity"));
-        assert!(RENDERER_JS.contains("scale(-1, -1)"));
-        assert!(RENDERER_JS.contains("visualCanvasFit(definition, unit, sourceSize = null)"));
-        assert!(RENDERER_JS.contains("visualDrawBox(definition)"));
-        assert!(RENDERER_JS.contains("solidColor && this.canPaintAsFullCellSolid(definition)"));
-        assert!(!RENDERER_JS.contains("unit = Math.max(unit, cellCols, cellRows);"));
-        assert!(
-            RENDERER_JS.contains("const presentationUnit = this.canvasPresentationCellUnit();")
-        );
-        assert!(
-            RENDERER_JS.contains(
-                "mode === \"cover\" ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY)"
-            )
-        );
-        assert!(RENDERER_JS.contains("context.drawImage(\n          image,"));
-        assert!(RENDERER_CSS.contains("--visual-box-cols"));
-        assert!(RENDERER_CSS.contains("background-size: contain;"));
-        assert!(!RENDERER_JS.contains("leastCommonMultiple("));
-        assert!(
-            RENDERER_JS.contains(
-                "const { cols: width, rows: height } = this.visualPatternSize(definition);"
-            )
-        );
-        assert!(!RENDERER_JS.contains("domPatternCellUnit()"));
-        assert!(!RENDERER_JS.contains("scaledPixelEdge(index, sourceUnits, targetPixels)"));
-        assert!(!RENDERER_JS.contains("boundedLeastCommonMultiple"));
-        assert!(RENDERER_CSS.contains("overflow: visible;"));
+    fn renderer_only_samples_rust_resolved_animation_channels() {
+        assert!(!VISUAL_TWEEN_CORE_JS.contains("resolveAnimationChannels"));
+        assert!(!VISUAL_TWEEN_CORE_JS.contains("interpolateAngle"));
+        assert!(!VISUAL_TWEEN_CORE_JS.contains("tween.from"));
+        assert!(!VISUAL_TWEEN_CORE_JS.contains("tween.to"));
+        assert!(VISUAL_TWEEN_CORE_JS.contains("channel.startDegrees"));
+        assert!(VISUAL_TWEEN_CORE_JS.contains("channel.deltaDegrees"));
     }
 
     #[test]
@@ -936,37 +482,9 @@ P
     }
 
     #[test]
-    fn canvas_patterns_do_not_cross_a_per_visual_raster_boundary() {
-        assert!(!RENDERER_JS.contains("cachedPatternBitmap"));
-        assert!(!RENDERER_JS.contains("cachedDomPatternBitmap"));
-        assert!(RENDERER_JS.contains("domPatternDataUrl(definition)"));
-        assert_eq!(RENDERER_JS.matches("this.domPatternDataUrl(").count(), 2);
-        assert!(RENDERER_JS.contains("bitmapContext.fillRect(colIndex, rowIndex, 1, 1)"));
-        assert!(RENDERER_JS.contains("const url = bitmap.toDataURL(\"image/png\");"));
-        assert!(RENDERER_JS.contains("cache.set(key, url);\n    return url;"));
-
-        assert!(!RENDERER_JS.contains("context.drawImage(bitmap,"));
-        assert!(RENDERER_JS.contains(
-            "this.paintLogicalPatternToCanvas(context, frame, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight)"
-        ));
-        assert!(RENDERER_JS.contains(
-            "this.paintLogicalPatternToCanvas(context, definition, x + fit.x, y + fit.y, fit.pixelWidth, fit.pixelHeight)"
-        ));
-        assert!(RENDERER_JS.contains(
-            "paintLogicalPatternToCanvas(context, definition, x, y, pixelWidth, pixelHeight = pixelWidth)"
-        ));
-        assert!(RENDERER_JS.contains("const left = x + colIndex * pixelWidth;"));
-        assert!(
-            RENDERER_JS
-                .contains("this.fillCanvasRect(context, left, top, right - left, bottom - top);")
-        );
-        assert!(!RENDERER_JS.contains("Math.round(x + colIndex * pixelWidth)"));
-    }
-
-    #[test]
     fn renderer_consumes_2d_render_grid_settings() {
         let source = r#"
-title = grid_render
+const title = grid_render
 puzzle default {
 layers {
 actor = Player
@@ -990,19 +508,18 @@ P
 }
 }
 "#;
-        let loaded = puzzle_lang::parse_game2d(source).expect("parse 2D grid render settings");
-        let mut scene = String::new();
-        push_scene_object(
-            &mut scene,
-            &loaded,
-            &loaded.levels[0].initial_state,
-            Some(&loaded.levels[0]),
-            None,
+        let runtime = RuntimeSession::from_source(source, "grid_render_settings.puzzle")
+            .expect("parse 2D grid render settings");
+        let snapshot: Value = serde_json::from_str(&runtime.snapshot_json()).unwrap();
+        assert_eq!(snapshot["scene"]["settings"]["grid"]["visibility"], true);
+        assert_eq!(
+            snapshot["scene"]["settings"]["grid"]["occupied_cells"],
+            false
         );
-
-        assert!(scene.contains(
-            r#""settings":{"render":{},"grid":{"visibility":1,"occupied_cells":false,"all_cells":true},"inputBuffer":{"queueDuringWait":true,"fastForwardWait":true,"minWaitMs":50},"animation":{"tween":{"enabled":false,"intervalMs":250}}}"#
-        ));
+        assert_eq!(snapshot["scene"]["settings"]["grid"]["all_cells"], true);
+        assert_eq!(snapshot["inputBuffer"]["queueDuringWait"], true);
+        assert_eq!(snapshot["inputBuffer"]["fastForwardWait"], true);
+        assert_eq!(snapshot["inputBuffer"]["minWaitMs"], 50);
         assert!(RENDERER_JS.contains("gridSettings(scene)"));
         assert!(RENDERER_JS.contains("scene.settings?.grid"));
         assert!(RENDERER_JS.contains("has-occupied-cell-grid"));
@@ -1103,7 +620,7 @@ P
         assert!(RENDERER_JS.contains("this.root.style.setProperty(\"--rows\", viewport.height);"));
         assert!(!RENDERER_JS.contains("renderCellSize(scene)"));
         assert!(!RENDERER_JS.contains("this.root.dataset.cellSize"));
-        assert!(RENDERER_JS.contains("this.root.classList.toggle(\"is-canvas-renderer\""));
+        assert!(RENDERER_JS.contains("this.root.classList.add(\"is-canvas-renderer\");"));
         assert!(RENDERER_JS.contains("scene.screen?.viewportFocusObjects"));
         assert!(RENDERER_JS.contains("focusObjects.has(Number(layer.objectId))"));
         assert!(RENDERER_CSS.contains(".scene-layer > .board.is-canvas-renderer:only-child"));
@@ -1111,6 +628,16 @@ P
         assert!(RENDERER_CSS.contains("object-fit: contain;"));
         assert!(!APP_CSS.contains("grid-auto-flow: row;"));
         assert!(!RENDERER_CSS.contains("minmax(24px, 1fr)"));
+    }
+
+    #[test]
+    fn screen_scale_waits_for_the_initial_runtime_snapshot() {
+        assert!(APP_JS.contains(
+            "if (componentEmbedMode || !currentState || !screenFrame || !screenView || !playSurface)"
+        ));
+        assert!(APP_JS.contains(
+            "throw new Error(\"Runtime snapshot is missing the required surface component contract\");"
+        ));
     }
 
     #[test]
@@ -1141,22 +668,15 @@ P
         assert!(APP_JS.contains("soundRuntime.applyEvents([event]);"));
         assert!(APP_JS.contains("currentState.levelIndex !== event.levelIndex"));
         assert!(APP_JS.contains("!currentPuzzles.includes(event.puzzle)"));
-        assert_eq!(
-            session_action_from_http("POST", "/api/resume").unwrap(),
-            SessionAction::Resume
-        );
-        assert!(STANDALONE_JS.contains("return { kind: \"resume\" };"));
-        assert!(APP_JS.contains("requestJson(\"/api/resume\", { method: \"POST\" })"));
+        assert!(APP_JS.contains("requestSessionAction({ kind: \"resume\" })"));
+        assert!(!STANDALONE_JS.contains("/api/resume"));
         assert!(APP_JS.contains("resumesSession: sessionWaiting"));
         assert!(
             APP_JS.contains(
                 "pendingSessionResume = pendingSessionResume || waitTimer.resumesSession;"
             )
         );
-        assert!(
-            APP_JS
-                .contains("pendingModelInput && config.queueDuringWait && config.fastForwardWait")
-        );
+        assert!(APP_JS.contains("fastForwardRequested: false"));
     }
 
     #[test]
@@ -1201,21 +721,28 @@ P
             + start;
         let body = &APP_JS[start..end];
         assert!(body.contains("const config = inputBufferConfig();"));
-        assert!(
-            body.contains("pendingModelInput && config.queueDuringWait && config.fastForwardWait")
-        );
+        assert!(body.contains("fastForwardRequested: false"));
         assert!(body.contains("config,"));
         assert!(APP_JS.contains("if (!config.fastForwardWait) {\n    return;"));
         assert!(APP_JS.contains("Math.max(0, waitTimer.config.minWaitMs - elapsed)"));
     }
 
     #[test]
-    fn html_play_standard_choice_focus_uses_logical_grid() {
-        assert!(APP_JS.contains("function standardChoiceFocusCells(scene = currentSceneDef())"));
-        assert!(APP_JS.contains("if (focusKind === \"choice\" && component.kind === \"choice\")"));
-        assert!(APP_JS.contains("function componentRowFootprint(components, context = {})"));
-        assert!(APP_JS.contains("function componentColumnFootprint(components, context = {})"));
+    fn html_play_standard_choice_uses_runtime_owned_cursor() {
+        assert!(APP_JS.contains("hasStandardChoice: Number.isInteger(layer?.choiceCursor)"));
+        assert!(APP_JS.contains("scope.__sceneLayer?.focused === true"));
+        assert!(
+            APP_JS.contains("postSessionAction({ kind: \"choice_move\", direction: input.input })")
+        );
+        assert!(APP_JS.contains("const action = { kind: \"choice_activate\" };"));
         assert!(APP_JS.contains("return [{ kind: \"standard_choice\", input: standardInput }];"));
+        assert!(!APP_JS.contains("standardChoiceCursors"));
+        assert!(!APP_JS.contains("standardChoiceFocusCells"));
+        assert!(!APP_JS.contains("componentRowFootprint"));
+        assert!(!APP_JS.contains("componentColumnFootprint"));
+        assert!(!APP_JS.contains("standardChoiceDirectionalTarget"));
+        assert!(!APP_JS.contains("handleStandardChoiceInput"));
+        assert!(!APP_JS.contains("syncStandardChoiceSelection"));
         assert!(!APP_JS.contains("level_menu"));
         assert!(!APP_JS.contains("level_selector"));
         assert!(!APP_JS.contains("level-clear-mark"));
@@ -1251,10 +778,15 @@ P
     }
 
     #[test]
-    fn scene_boolean_paths_fail_visibly_when_the_runtime_record_is_missing() {
-        assert!(APP_JS.contains("if (typeof value !== \"boolean\")"));
-        assert!(APP_JS.contains("Scene boolean expression resolved to"));
-        assert!(!APP_JS.contains("typeof value === \"boolean\" ? value : false"));
+    fn html_play_rejects_a_missing_resolved_scene_condition() {
+        assert!(APP_JS.contains("if (typeof component.condition !== \"boolean\")"));
+        assert!(APP_JS.contains("Resolved scene conditional is missing its boolean condition"));
+        assert!(APP_JS.contains("if (presentation.error)"));
+        assert!(
+            !APP_JS.contains(
+                "typeof component.condition === \"boolean\" ? component.condition : false"
+            )
+        );
     }
 
     #[test]
@@ -1303,8 +835,7 @@ P
         assert!(APP_JS.contains("function setControlLabel(control, label)"));
         assert!(APP_JS.contains("function controlLabelNodes(label)"));
         assert!(APP_JS.contains("choice.dataset.standardChoiceIndex = String(index);"));
-        assert!(APP_JS.contains("function syncStandardChoiceSelection(choice, selectedIndex)"));
-        assert!(APP_JS.contains("syncStandardChoiceSelection(choice, index);"));
+        assert!(APP_JS.contains("runActivationConfirm(choice, () => sendChoiceActivate(index));"));
         assert!(APP_JS.contains("left.className = \"ps-control-edge is-left\";"));
         assert!(APP_JS.contains("text.className = \"ps-control-label\";"));
         assert!(APP_JS.contains("right.className = \"ps-control-edge is-right\";"));
@@ -1382,12 +913,12 @@ P
     }
 
     #[test]
-    fn html_play_buffers_one_busy_model_input_without_a_string_command_path() {
-        assert!(APP_JS.contains("let pendingModelInput = null;"));
-        assert!(APP_JS.contains("let drainingQueuedModelInput = false;"));
+    fn html_play_delegates_busy_input_queueing_to_the_runtime_session() {
+        assert!(!APP_JS.contains("let pendingModelInput = null;"));
+        assert!(!APP_JS.contains("let drainingQueuedModelInput = false;"));
         assert!(!APP_JS.contains("pendingCommandQueue"));
-        assert!(APP_JS.contains("pendingModelInput = input;"));
-        assert!(APP_JS.contains("function drainQueuedModelInput()"));
+        assert!(!APP_JS.contains("pendingModelInput = input;"));
+        assert!(!APP_JS.contains("function drainQueuedModelInput()"));
         assert!(!APP_JS.contains("function sendCommand("));
         assert!(!APP_JS.contains("function sendCommandNow("));
         assert!(APP_JS.contains(
@@ -1396,7 +927,7 @@ P
         assert!(APP_JS.contains("effects.filter((effect) => effect?.kind !== \"model_input\")"));
         assert!(APP_JS.contains("currentState?.busy || clientPendingWaits > 0"));
         assert!(APP_JS.contains("function inputBufferConfig()"));
-        assert!(APP_JS.contains("if (!config.queueDuringWait)"));
+        assert!(APP_JS.contains("return postSessionAction({ kind: \"input\", name: input });"));
         assert!(APP_JS.contains("function fastForwardActiveWaitsForQueuedInput"));
         assert!(APP_JS.contains("source.fastForwardWait !== false"));
         assert!(APP_JS.contains("Number(source.minWaitMs ?? 50)"));
@@ -1423,13 +954,25 @@ P
         );
         assert!(APP_JS.contains("dispatchKeyboardInput(keyEvent);"));
         assert!(APP_JS.contains("function bindAwaitedComponentEvent(root, instance, definition)"));
-        assert!(APP_JS.contains("const STANDARD_COMPONENT_DEFINITIONS"));
+        assert!(APP_JS.contains("presentationDefinitionForLayer(layer)"));
+        assert!(!APP_JS.contains("const STANDARD_COMPONENT_DEFINITIONS"));
         assert!(APP_JS.contains("definition.events?.[eventName]"));
         assert!(!APP_JS.contains("function renderPresentedComponent("));
         assert!(!APP_JS.contains("ShowMessage"));
         assert!(!APP_JS.contains("CloseMessage"));
         assert!(!APP_JS.contains("hasSfx"));
         assert!(APP_CSS.contains(".scene-layer.is-modal:focus {\n  outline: none;\n}"));
+    }
+
+    #[test]
+    fn html_play_consumes_resolved_scene_values_without_an_expression_interpreter() {
+        assert!(APP_JS.contains("String(component.value || \"\")"));
+        assert!(APP_JS.contains("String(component.label || \"\")"));
+        assert!(APP_JS.contains("typeof component.condition !== \"boolean\""));
+        assert!(!APP_JS.contains("function resolveViewPath("));
+        assert!(!APP_JS.contains("function resolveLabel("));
+        assert!(!APP_JS.contains("function resolveBoolExpr("));
+        assert!(!APP_JS.contains("function resolveExprValue("));
     }
 
     #[test]
@@ -1484,7 +1027,7 @@ P
 let currentState = { inputs: [] };
 let scene = { keys: [] };
 const sessionActions = [];
-function currentSceneDef() { return scene; }
+function focusedComponentDefinition() { return scene; }
 function sceneInteractionProfile() { return { standardChoices: [], acceptsModelInput: false }; }
 function normalizedKeyName(key) { return key.length === 1 ? key.toLowerCase() : key; }
 function logicalKeyTokens(key) { return [normalizedKeyName(key)]; }
@@ -1597,7 +1140,7 @@ const authoredX = effectsForKey({ key: "x" });
     #[test]
     fn standalone_export_includes_sfx_volume() {
         let source = r#"
-title = Sfx Volume
+const title = "Sfx Volume"
 
 sounds {
   sfx click { seed = click; type = select; volume = 1.25 }
@@ -1636,8 +1179,9 @@ scene playing {
     }
 
     #[test]
-    fn html_play_does_not_fallback_scene_definitions_to_variable_export() {
-        assert!(APP_JS.contains("return nonEmptyArray(source?.scenes) || [];"));
+    fn html_play_reads_scene_definitions_only_from_resolved_surface_presentations() {
+        assert!(APP_JS.contains("return presentationDefinitionForLayer(layer);"));
+        assert!(!APP_JS.contains("source?.scenes"));
         assert!(!APP_JS.contains("window.PuzzleExport?.scenes"));
         assert!(!APP_JS.contains("window.PuzzleExport?.screens"));
     }
@@ -1684,9 +1228,9 @@ scene playing {
     }
 
     #[test]
-    fn puzzle3_session_projection_keeps_render_fixture_host_owned() {
+    fn puzzle3_session_projection_is_a_complete_view_snapshot_without_fixture() {
         let source = r#"
-title = "Runtime boundary"
+const title = "Runtime boundary"
 
 puzzle cube {
   dimension = 3
@@ -1712,29 +1256,28 @@ scene playing {
   }
 }
 "#;
-        let document = puzzle_lang::parse_game_for_path(source, "runtime_boundary.puzzle3")
-            .expect("compile Puzzle3 document");
-        let fixture_json = puzzle_lang::export_loaded_document_visual_fixture_json(&document)
-            .expect("export Puzzle3 render fixture");
-        let fixture: Value = serde_json::from_str(&fixture_json).unwrap();
-        let result = validate_puzzle3_fixture_with_browser_contract(&fixture);
-        let mut bridge = StandaloneSessionBridge::from_source(source, "runtime_boundary.puzzle3")
+        let bridge = RuntimeSession::from_source(source, "runtime_boundary.puzzle")
             .expect("compile Puzzle3 session projection");
         let session: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
         let view = session["scene"].clone();
+        let result = validate_puzzle3_fixture_with_browser_contract(&view);
 
         assert_eq!(result["size"], json!({"width": 1, "depth": 1, "height": 1}));
         assert_eq!(result["cellCount"], 1);
         assert!(result["inputCount"].as_u64().is_some_and(|count| count > 0));
-        assert!(view.get("render").is_none());
-        assert!(view.get("objects").is_none());
-        assert!(view.get("visuals").is_none());
+        assert!(view.get("render").is_some());
+        assert!(view.get("objects").is_some());
+        assert!(view.get("visuals").is_some());
+        assert!(view.get("order").is_some());
+        assert!(view.get("inputs").is_some());
         assert!(
             view["cells"][0]["objects"][0].get("id").is_some(),
             "projected Puzzle3 session view: {view}"
         );
-        assert!(APP_JS.contains("function mergePuzzle3SessionSnapshot(fixture, sessionSnapshot)"));
-        assert!(APP_JS.contains("Puzzle3 session references unknown object id"));
+        assert!(APP_JS.contains("function puzzle3FrameSnapshot(sceneName, source = \"board\")"));
+        assert!(APP_JS.contains("return sessionSnapshot;"));
+        assert!(!APP_JS.contains("mergePuzzle3SessionSnapshot"));
+        assert!(!APP_JS.contains("Puzzle3 session references unknown object id"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("model.kind"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("runtimeModel.rules"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("runtimeModel.winCondition"));
@@ -1762,7 +1305,12 @@ scene playing {
         assert!(APP_JS.contains("let puzzle3PreviewSurface = initialPuzzle3PreviewSurface;"));
         assert!(APP_JS.contains("function normalizePuzzle3PreviewSurface(update = null)"));
         assert!(APP_JS.contains("function puzzle3PreviewSurfaceFixture(source, sceneName)"));
-        assert!(APP_JS.contains("if (puzzle3PreviewSurface) {\n    return puzzle3PreviewSurfaceFixture(fixture, sceneName);\n  }"));
+        assert!(APP_JS.contains("function puzzle3PreviewTemplate()"));
+        assert!(
+            APP_JS.contains(
+                "return puzzle3PreviewSurfaceFixture(puzzle3PreviewTemplate(), sceneName);"
+            )
+        );
         assert!(
             APP_JS.contains("if (componentEmbedMode && renderEmbeddedPuzzleComponent(layers))")
         );
@@ -1787,13 +1335,14 @@ scene playing {
         assert!(!PUZZLE3_COMPONENT_JS.contains("mergePuzzle3PreviewRender"));
         assert!(!PUZZLE3_COMPONENT_JS.contains("update(update = {})"));
         assert!(PUZZLE3_COMPONENT_JS.contains("replaceSnapshot(nextSnapshot)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains(r#"coordinateSpace: "canvas-css-px""#));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "const target = source?.target || source?.origin || modelCenterForSize(size);"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function modelCenterForSize(size)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("view.originX = width / 2;"));
-        assert!(!PUZZLE3_COMPONENT_JS.contains(") / 2 + (Number(target.x) || 0)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains(r#"coordinateSpace: "canvas-css-px""#));
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS.contains("function threeViewPayload(frame, camera, canvas)")
+        );
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("payload.cellFootprints = threeStageCellFootprints(payload);")
+        );
     }
 
     #[test]
@@ -1817,129 +1366,19 @@ scene playing {
     }
 
     #[test]
-    fn puzzle3_component_supports_focus_relative_viewport_framing() {
+    fn puzzle3_three_renderer_supports_focus_relative_viewport_framing() {
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function viewportFocusCell(frame)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function viewportRanges(frame)"));
         assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("function fitProjectionToViewport(renderContext, options = {})")
+            PUZZLE3_THREE_RENDERER_JS.contains("function cameraViewForFrame(frame, aspect, zoom)")
         );
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "function viewportFramingProjectionBounds(size, camera, viewport, focusCell)"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains("viewport.framingBox.height === \"full\""));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function scheduleViewportAnimation()"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("frame.viewport?.follow !== \"smooth\""));
         assert!(
-            PUZZLE3_COMPONENT_JS.contains("target.follow !== \"smooth\" || view.viewportSnapNext")
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("function smoothViewportTarget(next, target, frame)")
         );
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("function smoothViewportOrigin(nextX, nextY, target)")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("function smoothViewportMaxLag(target)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("const amount = 0.12;"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function requestSceneViewportDraw()"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("if (smoothViewportActive())"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function smoothViewportActive()"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("const advanceViewport = options.advanceViewport !== false;")
-        );
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("fitProjectionToViewport(renderContext, { advanceViewport })")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("if (options.advanceViewport === false)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("target.cellScale * projectionZoom(camera) * 3.5"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("const SCENE_DEFAULT_WIDTH = 16;"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("const SCENE_DEFAULT_HEIGHT = 12;"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function puzzle3SceneDisplaySize()"));
-        assert!(!PUZZLE3_COMPONENT_JS.contains("function currentPuzzle3IntrinsicSize()"));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "function viewportFitForFrame(frame, viewportBounds, centerPoint = null, zoom = 1, follow = \"snap\")"
-        ));
-        assert!(!PUZZLE3_COMPONENT_JS.contains("function viewportFramingProjectionCenter"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains(
-                "function viewportFocusProjectionAnchor(size, camera, viewport, focusCell)"
-            )
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "function viewportFocusVisualProjectionAnchor(size, camera, viewport, focusCell)"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "for (const voxel of objectVoxels(focusCell.position || {}, object, sourceKey))"
-        ));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("function viewportFramingRanges(size, viewport, focusCell)")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("function virtualCenteredCellRange(center, span)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "const xRange = viewportCellRange(Number(position.x) || 0, viewport.framingBox.width, viewport.mode);"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "const yRange = viewportCellRange(Number(position.y) || 0, viewport.framingBox.depth, viewport.mode);"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            ": viewportCellRange(Number(position.z) || 0, viewport.framingBox.height, viewport.mode);"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function virtualPagedCellRange(center, span)"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("viewport?.mode === \"centered\" || viewport?.mode === \"paged\"")
-        );
-        assert!(!PUZZLE3_COMPONENT_JS.contains("function centeredCellRange(center, span, limit)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "const anchorPoint = viewportFocusProjectionAnchor(size, camera, viewport, focus);"
-        ));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains(
-                "const anchorX = Number.isFinite(centerX) ? centerX : (minX + maxX) / 2;"
-            )
-        );
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("originY: frameHeight / 2 - anchorY * effectiveScale")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("viewportFitForFrame("));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function puzzle3RenderContext(width = canvas.clientWidth, height = canvas.clientHeight)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function canvasLayoutFrame()"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("Number(canvas.clientWidth) || Number(rect.width) || 1")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("const frame = canvasLayoutFrame();"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function normalizeFrame(frame)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function normalizeModelSize(size)"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("function fitScaleForProjectedBounds(frame, bounds, margin = 0)")
-        );
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("const candidates = renderCellCandidates(renderContext);")
-        );
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("function renderCellCandidates(renderContext = puzzle3RenderContext())")
-        );
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("function viewportRenderCullingEnabled(renderContext)")
-        );
-        assert!(!PUZZLE3_COMPONENT_JS.contains("function viewportRenderPixelMargin"));
-        assert!(!PUZZLE3_COMPONENT_JS.contains("function projectedCellPixelMargin"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function cellProjectsIntoFrame(position, frame)"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("cellProjectsIntoFrame(cell.position || {}, renderContext.frame)")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("bounds.maxX >= 0"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("bounds.minX <= frame.width"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("bounds.maxY >= 0"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("bounds.minY <= frame.height"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("cellHasRenderableVoxels(cell)"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains(
-                "const effectiveScale = baseScale * Puzzle3VisualCore.normalizeZoom(zoom);"
-            )
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("cellScale: baseScale"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function threeStageCellFootprints(view)"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("viewportSnapNext: interaction.viewportSnapNext"));
     }
 
     #[test]
@@ -1960,114 +1399,66 @@ scene playing {
     }
 
     #[test]
-    fn puzzle3_component_does_not_render_missing_visual_fallback_cube() {
-        assert!(PUZZLE3_COMPONENT_JS.contains("if (!object.visual) {\n    return [];\n  }"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("if (!template) {\n    return [];\n  }"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("if (!visual) {\n    return null;\n  }"));
-        assert!(!PUZZLE3_COMPONENT_JS.contains("cssVar(\"--top\") || \"#ffde8a\""));
-        assert!(!PUZZLE3_COMPONENT_JS.contains("red_cube"));
-        assert!(!PUZZLE3_COMPONENT_JS.contains("Red Cube"));
-        assert!(!PUZZLE3_COMPONENT_JS.contains("Bumpy"));
+    fn puzzle3_renderer_does_not_render_missing_visual_fallback_cube() {
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("requireResolvedVoxelFrame(resolvedFrame)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("resolvedFrame.batches.flatMap"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("snapshot.visuals"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("red_cube"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("Red Cube"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("Bumpy"));
     }
 
     #[test]
-    fn puzzle3_component_culls_only_opaque_internal_voxel_faces_across_cells() {
-        assert!(PUZZLE3_COMPONENT_JS.contains("function renderOpaqueOcclusion(renderContext)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("for (const cell of snapshot.cells || [])"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("renderContext.opaqueOcclusion = occupied;"));
+    fn puzzle3_renderer_culls_only_opaque_internal_voxel_faces() {
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function frameVisibleVoxels(frame)"));
         assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("function cellVisibleVoxelsForRender(cell, renderContext = null)")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("renderContext.visibleVoxelCells = new Map();"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("function isVoxelFaceOccluded(voxel, offset, occupied)")
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("function isVoxelFaceOccluded(voxel, offset, occupied)")
         );
         assert!(
-            PUZZLE3_COMPONENT_JS
+            PUZZLE3_THREE_RENDERER_JS
                 .contains("if (voxel.opaque !== false && occupied.opaque.has(adjacentKey))")
         );
         assert!(
-            PUZZLE3_COMPONENT_JS.contains("occupied.bySource.has(`${sourceKey}|${adjacentKey}`)")
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("occupied.bySource.has(`${sourceKey}|${adjacentKey}`)")
         );
     }
 
     #[test]
-    fn puzzle3_component_preserves_alpha_voxel_layers_for_depth_sorting() {
-        assert!(PUZZLE3_COMPONENT_JS.contains("function visibleVoxelStack(stack)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("const visible = [];"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("opaque: source.a >= 0.999"));
+    fn puzzle3_renderer_preserves_alpha_voxel_layers_for_depth_sorting() {
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function visibleResolvedVoxelStack(stack)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("const visible = [];"));
         assert!(
-            PUZZLE3_COMPONENT_JS.contains("if (renderVoxel.opaque) {\n      visible.length = 0;")
+            PUZZLE3_THREE_RENDERER_JS.contains("if (voxel.opaque) {\n      visible.length = 0;")
         );
-        assert!(PUZZLE3_COMPONENT_JS.contains("visible.push(renderVoxel);"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("voxels.push(...visibleStack);"));
-        assert!(!PUZZLE3_COMPONENT_JS.contains("function compositeVoxelStack(stack)"));
-        assert!(!PUZZLE3_COMPONENT_JS.contains("function compositeColor(source, destination)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("visible.push(voxel);"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("voxels.push(...visibleStack);"));
     }
 
     #[test]
-    fn puzzle3_component_caches_static_visual_voxel_templates() {
-        assert!(PUZZLE3_COMPONENT_JS.contains("const visualVoxelTemplateCache = new WeakMap();"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function visualVoxelTemplate(visualName)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function buildVisualVoxelTemplate(visual)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function instantiateVisualVoxelTemplate(position, template, sourceKey = null, objectOrder = 0)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("visualVoxelTemplateCache.get(visual)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("visualVoxelTemplateCache.set(visual, template)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("localBounds: voxelBounds(localPosition, scale)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "const sourceGrid = standardVisualGridPosition({ width, depth, height }, col, row, z);"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains("x: (sourceGrid.x + 0.5 - width / 2) * scale"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("y: (sourceGrid.y + 0.5 - depth / 2) * scale"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("z: (sourceGrid.z + 0.5 - height / 2) * scale"));
+    fn puzzle3_component_reuses_completed_resolved_frames_for_view_only_draws() {
+        assert!(PUZZLE3_COMPONENT_JS.contains("let resolvedRenderFrame = null;"));
         assert!(
-            PUZZLE3_COMPONENT_JS.contains("const source = voxel.color || parseColor(voxel.fill);")
+            PUZZLE3_COMPONENT_JS
+                .contains("if (!resolvedRenderFrame || resolvedRenderFrame.continueAnimation)")
         );
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("resolvedFrame !== this.activeResolvedFrame"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("localBounds"));
     }
 
     #[test]
-    fn puzzle3_component_caches_render_geometry_by_dirty_cells() {
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("const renderGeometryCache = createRenderGeometryCache();")
-        );
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("function syncRenderGeometryCache(renderContext = null)")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("function renderCellSignature(cell)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function expandDirtyCellKeys(keys)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("for (const offset of faceNeighborOffsets())"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("function rebuildVisibleCellGeometry(key, cell, signature)")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("function rebuildCachedCellFaces(key, cell)"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("renderGeometryCache.occupied = renderCachedOpaqueOcclusion();")
-        );
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("function cellFaceGeometriesForRender(cell, renderContext = null)")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("faces.push(...cellFaceGeometriesForRender(cell, renderContext).map(projectFaceGeometry));"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("face: (group, rect) => faceGeometry("));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function projectFaceGeometry(geometry)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("const primitive = geometry.primitive || {"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("geometry.primitive = primitive;"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("primitive.ownerCell = projectCellRenderOwner(geometry.ownerCell);")
-        );
-        assert!(!PUZZLE3_COMPONENT_JS.contains("compoundFace:"));
-        assert!(!PUZZLE3_COMPONENT_JS.contains("function compoundPolygonPaths(paths, fill)"));
+    fn puzzle3_component_contains_no_voxel_renderer_implementation() {
+        assert!(!PUZZLE3_COMPONENT_JS.contains("function objectVoxels("));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("function mergedVoxelFaces("));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("getContext(\"2d\""));
+        assert!(PUZZLE3_COMPONENT_JS.contains("window.Puzzle3ThreeRenderer.create"));
     }
 
     #[test]
     fn mixed_document_projects_each_viewport_from_its_world_dimension() {
         let source = r#"
-title = Mixed Game
+const title = "Mixed Game"
 
 puzzle flat {
 layers {
@@ -2159,7 +1550,7 @@ scene mixed_play {
     #[test]
     fn mixed_microban_keeps_scene_metadata_dimension_independent() {
         let source = r#"
-title = Mixed Microban
+const title = "Mixed Microban"
 
 puzzle microban2d {
 layers {
@@ -2297,56 +1688,27 @@ text level.title
         );
         assert!(!PUZZLE3_VISUAL_CORE_JS.contains("adapter.compoundFace"));
         assert!(!PUZZLE3_VISUAL_CORE_JS.contains("const depthDiff ="));
-        assert!(PUZZLE3_COMPONENT_JS.contains("primitives = orderScenePrimitives(primitives);"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("return Puzzle3VisualCore.comparePrimitiveOrder(a, b);")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("function orderScenePrimitives(primitives)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "view.primitiveSortCacheOrder.map((stableKey) => byStableKey.get(stableKey))"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains("primitive.frameIndex = index;"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("primitive.stableKey = occurrence === 0 ? baseKey"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function primitiveSortCacheKey(primitives)"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("cameraOrderKey(),"));
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("compareNumber(a.frameIndex, b.frameIndex)"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("return Puzzle3VisualCore.cameraOrderKey(puzzle3VisualView());")
-        );
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("return Puzzle3VisualCore.faceGridOrder(corners, puzzle3VisualView());")
-        );
         assert!(
             PUZZLE3_VISUAL_CORE_JS.contains("function evaluateSpatialVisualAffine(operations)")
         );
         assert!(PUZZLE3_VISUAL_CORE_JS.contains("function transformSpatialPoint(point, affine)"));
-        assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("Puzzle3VisualCore.evaluateSpatialVisualAffine(visual.spatialOps)")
-        );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("Puzzle3VisualCore.evaluateSpatialVisualAffine(visual.spatialOps)")
-        );
+        assert!(!PUZZLE3_VISUAL_CORE_JS.contains("averageMergedVoxels"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("requireSpatialAffine(batch.transform)"));
     }
 
     #[test]
-    fn puzzle3_component_applies_pixelate_as_canvas_postprocess() {
+    fn puzzle3_three_renderer_owns_pixelate_and_unshaded_materials() {
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function pixelateSettings(frame)"));
         assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("const pixelateBuffer = document.createElement(\"canvas\");")
+            PUZZLE3_THREE_RENDERER_JS.contains("this.renderer.setPixelRatio(ratio / rasterScale);")
         );
-        assert!(PUZZLE3_COMPONENT_JS.contains("applyPixelatePostprocess();"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function pixelateSettings()"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("const raw = snapshot.render.pixelate;"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function applyPixelatePostprocess()"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("bufferCtx.imageSmoothingEnabled = settings.smoothing;")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("ctx.imageSmoothingEnabled = false;"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("ctx.setTransform(1, 0, 0, 1, 0, 0);"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains(
+            "this.canvas.style.imageRendering = pixelate.enabled ? \"pixelated\" : \"\";"
+        ));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function visualShadeEnabled(frame)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("THREE.MeshBasicMaterial"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("getContext(\"2d\""));
     }
 
     #[test]
@@ -2358,9 +1720,14 @@ text level.title
     }
 
     #[test]
-    fn standalone_runtime_accepts_parenthesized_level_goto_commands() {
-        assert!(STANDALONE_JS.contains("applyCommandName(commandName)"));
-        assert!(STANDALONE_JS.contains("this.sessionRuntime.apply_command_name(commandName)"));
+    fn standalone_runtime_exposes_only_typed_session_dispatch() {
+        assert!(!STANDALONE_JS.contains("applyCommandName(commandName)"));
+        assert!(!STANDALONE_JS.contains("applyInputName(inputName)"));
+        assert!(STANDALONE_JS.contains("this.sessionRuntime.dispatch(JSON.stringify(action))"));
+        assert!(STANDALONE_JS.contains("this.sessionRuntime.resolve_scene_presentation("));
+        assert!(
+            PUZZLE_PLAYER_WASM_JS.contains("resolve_scene_presentation(scene_name, state_json)")
+        );
         assert!(!STANDALONE_JS.contains("parseRuntimeSceneTarget(value)"));
         assert!(!STANDALONE_JS.contains("parseRuntimeExpr"));
     }
@@ -2402,11 +1769,9 @@ text level.title
             )
         );
         assert!(APP_JS.contains("function currentSceneAcceptsModelInput()"));
-        assert!(
-            APP_JS.contains(
-                "function sceneInteractionProfile(scene = currentSceneDef(), options = {})"
-            )
-        );
+        assert!(APP_JS.contains(
+            "function sceneInteractionProfile(scene = focusedComponentDefinition(), options = {})"
+        ));
         assert!(
             APP_JS.contains(
                 "function stateAcceptsModelInput(state = currentState || puzzleBoot || {})"
@@ -2419,7 +1784,7 @@ text level.title
         assert!(!APP_JS.contains("menuFocusCells"));
         assert!(APP_JS.contains("return [{ kind: \"model_input\", name: input.name }];"));
         assert!(APP_JS.contains("await sendModelInput(input.name);"));
-        assert!(APP_JS.contains("return post(`/api/input/${encodeURIComponent(input)}`);"));
+        assert!(APP_JS.contains("return postSessionAction({ kind: \"input\", name: input });"));
         assert!(!APP_JS.contains("sceneIsMenuLike"));
         assert!(!APP_JS.contains("const hasPuzzle = sceneHasComponent(sceneDef, \"puzzle\") || sceneHasComponent(sceneDef, \"frame\")"));
         assert!(APP_JS.contains("acceptModelInput: event.data.acceptModelInput === true"));
@@ -2430,7 +1795,7 @@ text level.title
     #[test]
     fn core_runtime_bridge_uses_core_once_all_semantics() {
         let source = r#"
-title = once_all_overlap
+const title = once_all_overlap
 
 puzzle board {
   layers {
@@ -2473,7 +1838,7 @@ scene playing {
     #[test]
     fn standalone_export_embeds_player_wasm_runtime() {
         let source = r#"
-	 title = Wasm Export
+	 const title = "Wasm Export"
 
 puzzle board {
   layers {
@@ -2603,7 +1968,7 @@ scene playing {
             .join("\n");
         let source = format!(
             r#"
-title = Shared Program Size Gate
+const title = "Shared Program Size Gate"
 puzzle board {{
   layers {{ item = A }}
   rules {{
@@ -2645,7 +2010,7 @@ levels default of board {{
     #[test]
     fn editor_preview_runtime_bundle_serializes_scene_input_effects() {
         let source = r#"
-title = Scene Input Runtime Bundle
+const title = "Scene Input Runtime Bundle"
 
 puzzle board {
   layers {
@@ -2696,7 +2061,7 @@ scene playing {
     #[test]
     fn standalone_export_can_embed_browser_supplied_player_runtime_assets() {
         let source = r#"
-title = Browser Supplied Runtime
+const title = "Browser Supplied Runtime"
 
 puzzle board {
   layers {
@@ -2744,7 +2109,7 @@ scene playing {
     #[test]
     fn editor_preview_export_keeps_studio_bridge_for_state_control() {
         let source = r#"
-title = Editor Preview Export
+const title = "Editor Preview Export"
 
 puzzle board {
   layers {
@@ -2819,9 +2184,15 @@ scene playing {
         assert!(runtime_export.get("engine").is_none());
         assert!(runtime_export.get("source").is_none());
         let editor_preview_export = embedded_editor_preview_export_json(&html);
-        assert_eq!(
-            editor_preview_export["title"],
-            json!("Editor Preview Export")
+        assert!(editor_preview_export.get("title").is_none());
+        assert!(
+            editor_preview_export["variables"]
+                .as_array()
+                .is_some_and(|variables| variables.iter().any(|variable| {
+                    variable["name"] == "title"
+                        && variable["default"] == json!("Editor Preview Export")
+                        && variable["mutable"] == json!(false)
+                }))
         );
         assert!(editor_preview_export["engine"].is_object());
         assert!(
@@ -2848,7 +2219,7 @@ scene playing {
     #[test]
     fn standalone_export_includes_scene_and_screen_keys() {
         let source = r#"
-title = Export Test
+const title = "Export Test"
 
 puzzle default {
 layers {
@@ -2906,7 +2277,7 @@ scene playing {
     #[test]
     fn standalone_export_includes_progress_savedata_contract() {
         let source = r#"
-title = Progress Export
+const title = "Progress Export"
 
 puzzle default {
 persistent var bonus = 0
@@ -2948,24 +2319,25 @@ rules {
         let mut data = String::new();
         push_editor_preview_data(&mut data, &state);
 
-        assert!(data.contains(r#""saveKey":"Progress Export:"#));
-        assert!(data.contains(r#""progressSaveVersion":2"#));
+        assert!(data.contains(
+            r#""progressStorageKey":"PuzzleStudio.progress.v2:games/progress_export/game.puzzle:"#
+        ));
         assert!(data.contains(r#""variables":[{"id":0,"name":"bonus"}]"#));
         assert!(data.contains(r#""persistentVars":[0]"#));
         assert!(STANDALONE_JS.contains("WasmStandaloneSession"));
         assert!(STANDALONE_JS.contains("this.sessionRuntime.dispatch(JSON.stringify(action))"));
         assert!(STANDALONE_JS.contains("snapshot()"));
         assert!(STANDALONE_JS.contains("restoreSessionProgressSave()"));
-        assert!(STANDALONE_JS.contains("writeSessionProgressSave()"));
-        assert!(STANDALONE_JS.contains("requires a positive progressSaveVersion"));
-        assert!(STANDALONE_JS.contains("requires saveKey for progress persistence"));
+        assert!(STANDALONE_JS.contains("flushProgressSaveRequest()"));
+        assert!(STANDALONE_JS.contains("requires progressStorageKey for progress persistence"));
         assert!(STANDALONE_JS.contains("saved progress was kept and was not overwritten"));
-        assert!(STANDALONE_JS.contains("next.has_progress_save = true;"));
+        assert!(!STANDALONE_JS.contains("next.has_progress_save = true;"));
         assert!(APP_JS.contains("animationEvents: event.data.animationEvents"));
         assert!(APP_JS.contains("standaloneRuntime.snapshot({ forceJs: true })"));
-        assert!(STANDALONE_JS.contains("this.sessionRuntime.progress_save()"));
-        assert!(STANDALONE_JS.contains("PuzzleStudioPreviewProgressSave"));
-        assert!(STANDALONE_JS.contains("PuzzleStudioEditorPreviewProgressSaves"));
+        assert!(STANDALONE_JS.contains("this.sessionRuntime.progress_save_request()"));
+        assert!(STANDALONE_JS.contains("confirm_progress_save_written(request.requestId)"));
+        assert!(!STANDALONE_JS.contains("PuzzleStudioPreviewProgressSave"));
+        assert!(!STANDALONE_JS.contains("PuzzleStudioEditorPreviewProgressSaves"));
         assert!(STANDALONE_JS.contains("window.localStorage?.setItem"));
         assert!(STANDALONE_JS.contains("window.localStorage?.getItem"));
         assert!(!STANDALONE_JS.contains("progressSaveData()"));
@@ -2989,15 +2361,17 @@ rules {
             "if (!this.sessionRuntime || !this.sessionProgressEnabled()) {\n        return false;\n      }"
         ));
         assert!(
-            STANDALONE_JS.contains("if (method === \"POST\" && this.writeSessionProgressSave()) {")
+            STANDALONE_JS.contains("if (method === \"POST\" && this.flushProgressSaveRequest()) {")
         );
     }
 
     #[test]
     fn standalone_export_uses_typed_scene_projection_without_raw_fallback() {
         let server_source = include_str!("lib_server.rs");
-        assert!(server_source.contains("push_scene_object_body("));
-        assert!(server_source.contains("push_cells(out, loaded, state);"));
+        let runtime_source = include_str!("../../game_runtime/src/lib.rs");
+        assert!(server_source.contains("state.runtime.dispatch(action)"));
+        assert!(!server_source.contains("push_scene_object_body("));
+        assert!(runtime_source.contains("fn snapshot_grid("));
         assert!(
             !server_source
                 .contains("transition_program(&loaded.game, program, state, InputId(0)).ok()")
@@ -3008,7 +2382,7 @@ rules {
     fn standalone_session_bridge_uses_rust_session_for_requests() {
         let source =
             include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
-        let mut bridge = StandaloneSessionBridge::from_source(
+        let mut bridge = RuntimeSession::from_source(
             source,
             "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
         )
@@ -3017,7 +2391,8 @@ rules {
         let initial = bridge.dispatch(SessionAction::Snapshot).unwrap();
         let initial: serde_json::Value = serde_json::from_str(&initial).unwrap();
         assert_eq!(initial["surface"]["focus"], "sokoban");
-        assert_eq!(initial["title"], "Microban");
+        assert!(initial.get("title").is_none());
+        assert_eq!(initial["gameState"]["title"], "Microban");
         let initial = initial.as_object().unwrap();
         assert!(initial.contains_key("surface"));
         assert!(!initial.contains_key("visibleScenes"));
@@ -3048,7 +2423,7 @@ rules {
     #[test]
     fn standalone_debug_input_endpoint_reports_rule_trace() {
         let source = r#"
-title = "Debug Trace"
+const title = "Debug Trace"
 
 puzzle main {
   layers {
@@ -3070,8 +2445,7 @@ levels main of main {
   P
 }
 "#;
-        let mut bridge =
-            StandaloneSessionBridge::from_source(source, "debug_trace.puzzle").unwrap();
+        let mut bridge = RuntimeSession::from_source(source, "debug_trace.puzzle").unwrap();
 
         let body = bridge
             .dispatch(SessionAction::DebugInput {
@@ -3097,8 +2471,7 @@ levels main of main {
     #[test]
     fn standalone_session_scene_preserves_2d_render_settings_after_goto() {
         let source = include_str!("../tests/fixtures/locked.puzzle");
-        let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/TPGJ6/locked.puzzle").unwrap();
+        let mut bridge = RuntimeSession::from_source(source, "games/TPGJ6/locked.puzzle").unwrap();
 
         let playing = bridge
             .dispatch(SessionAction::Command {
@@ -3133,8 +2506,7 @@ levels main of main {
         let mut state_json = String::new();
         push_state_data(&mut state_json, &loaded.levels[level_index].initial_state);
 
-        let mut bridge =
-            StandaloneSessionBridge::from_source(source, "games/TPGJ6/locked.puzzle").unwrap();
+        let mut bridge = RuntimeSession::from_source(source, "games/TPGJ6/locked.puzzle").unwrap();
         bridge
             .set_current_state_json(&state_json, level_index, true)
             .unwrap();
@@ -3175,7 +2547,7 @@ levels main of main {
     #[test]
     fn standalone_snapshot_reports_level_select_model_input_contract() {
         let source = r#"
-title = level_select_input_contract
+const title = level_select_input_contract
 
 puzzle default {
 layers {
@@ -3212,7 +2584,7 @@ text "Select"
 }
 }
 "#;
-        let mut bridge = StandaloneSessionBridge::from_source(source, "contract.puzzle").unwrap();
+        let mut bridge = RuntimeSession::from_source(source, "contract.puzzle").unwrap();
 
         let playing: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
         assert_eq!(playing["surface"]["focus"], json!("default"));
@@ -3245,7 +2617,7 @@ text "Select"
     #[test]
     fn standalone_session_bridge_emits_tween_on_first_input() {
         let source = r#"
-title = "Standalone Tween Fixture"
+const title = "Standalone Tween Fixture"
 
 puzzle board {
   render {
@@ -3280,8 +2652,7 @@ scene playing {
 }
 "#;
         let mut bridge =
-            StandaloneSessionBridge::from_source(source, "standalone_tween_fixture.puzzle")
-                .unwrap();
+            RuntimeSession::from_source(source, "standalone_tween_fixture.puzzle").unwrap();
 
         let playing = bridge
             .dispatch(SessionAction::Command {
@@ -3314,9 +2685,9 @@ scene playing {
 
     #[test]
     fn teneten3d_direction_change_and_move_share_one_renderer_occurrence() {
-        let source = include_str!("../../../games/TENETEN3D.puzzle3");
-        let mut bridge = StandaloneSessionBridge::from_source(source, "games/TENETEN3D.puzzle3")
-            .expect("load TENETEN3D");
+        let source = include_str!("../../../games/TENETEN3D.puzzle");
+        let mut bridge =
+            RuntimeSession::from_source(source, "games/TENETEN3D.puzzle").expect("load TENETEN3D");
 
         let moved: Value = serde_json::from_str(
             &bridge
@@ -3366,7 +2737,7 @@ scene playing {
     #[test]
     fn standalone_session_bridge_exposes_default_move_wait_boundary() {
         let source = r#"
-title = "Standalone Default Move Wait Fixture"
+const title = "Standalone Default Move Wait Fixture"
 
 input_buffer {
   queue_during_wait = true
@@ -3412,8 +2783,7 @@ scene playing {
 }
 "#;
         let mut bridge =
-            StandaloneSessionBridge::from_source(source, "standalone_default_move_wait.puzzle")
-                .unwrap();
+            RuntimeSession::from_source(source, "standalone_default_move_wait.puzzle").unwrap();
 
         bridge
             .dispatch(SessionAction::Command {
@@ -3460,7 +2830,7 @@ scene playing {
     fn standalone_session_bridge_restores_progress_save() {
         let source =
             include_str!("../../../crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
-        let mut bridge = StandaloneSessionBridge::from_source(
+        let mut bridge = RuntimeSession::from_source(
             source,
             "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
         )
@@ -3488,7 +2858,7 @@ scene playing {
     #[test]
     fn standalone_export_resolves_viewport_focus_group_objects() {
         let source = r#"
-title = Flickscreen Focus
+const title = "Flickscreen Focus"
 
 puzzle default {
 layers {
@@ -3537,7 +2907,7 @@ rules {
     #[test]
     fn standalone_export_initial_body_uses_loaded_theme() {
         let source = r##"
-title = Theme Startup
+const title = "Theme Startup"
 theme {
   preset = "noir"
   background_color = #123456
@@ -3571,10 +2941,10 @@ rules {
 
     #[test]
     fn standalone_export_supports_single_puzzle3_document() {
-        let source = include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle3");
+        let source = include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle");
         let html = export_html_from_source(
             source,
-            "games/spec_3d.puzzle3",
+            "games/spec_3d.puzzle",
             "body { --accent: #123456; }",
             "",
         )
@@ -3597,7 +2967,7 @@ rules {
 
         let preview_html = export_editor_preview_html_from_source(
             source,
-            "games/spec_3d.puzzle3",
+            "games/spec_3d.puzzle",
             "body { --accent: #123456; }",
             "",
         )
@@ -3614,7 +2984,7 @@ rules {
         assert!(!preview_html.contains("Puzzle3DTestRuntime"));
         assert!(html.contains("Microban 3D"));
         assert!(html.contains("--accent: #123456"));
-        let mut bridge = StandaloneSessionBridge::from_source(source, "games/spec_3d.puzzle3")
+        let bridge = RuntimeSession::from_source(source, "games/spec_3d.puzzle")
             .expect("single puzzle3 document should have a scene host game runtime");
         let snapshot: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
         assert_eq!(snapshot["surface"]["focus"], json!("sokoban"));
@@ -3622,7 +2992,7 @@ rules {
 
     #[test]
     fn puzzle3_source_free_export_keeps_runtime_semantics_out_of_the_visual_fixture() {
-        let source = r#"title = "Local Frame"
+        let source = r#"const title = "Local Frame"
 
 puzzle cube {
   dimension = 3
@@ -3650,7 +3020,7 @@ levels default of cube {
   }
 }
 "#;
-        let html = export_html_from_source(source, "games/local_frame.puzzle3", "", "")
+        let html = export_html_from_source(source, "games/local_frame.puzzle", "", "")
             .expect("local_frame should compile into the standalone session model");
 
         assert!(!html.contains("runtimeContract"));
@@ -3698,10 +3068,6 @@ return [undefined, 0, -2, 0.05, 2].map((zoom) => (
 
         assert_eq!(value, json!([1, 0.1, 0.1, 0.1, 2]));
         assert!(
-            PUZZLE3_COMPONENT_JS
-                .contains("const cameraZoom = Puzzle3VisualCore.normalizeZoom(camera?.zoom);")
-        );
-        assert!(
             PUZZLE3_THREE_RENDERER_JS.contains(
                 "const cameraValue = Puzzle3VisualCore.normalizeZoom(cameraSettings.zoom);"
             )
@@ -3709,50 +3075,10 @@ return [undefined, 0, -2, 0.05, 2].map((zoom) => (
     }
 
     #[test]
-    fn puzzle3_three_tween_math_covers_xyz_and_shortest_rotation_path() {
-        let value = evaluate_puzzle3_render_math(
-            r#"
-const offset = window.Puzzle3ThreeRenderer.animationOffset3(
-  { animationProgress: 0.5 },
-  { from: { x: 1, y: 2, z: 3 }, to: { x: 5, y: 6, z: 7 } },
-);
-const tween = {
-  from: { transforms: [{ kind: "rotate", space: "local", axis: [0, 0, 1], degrees: 350 }] },
-  to: { transforms: [{ kind: "rotate", space: "local", axis: [0, 0, 1], degrees: 10 }] },
-};
-const state = window.PuzzleVisualTweenCore.interpolate(tween, 0.5);
-const halfway = window.Puzzle3VisualCore.evaluateSpatialVisualAffine(
-  state.transforms.map((transform) => ({ ...transform, kind: "rotate3" })),
-);
-const point = window.Puzzle3VisualCore.transformSpatialPoint({ x: 1, y: 0, z: 0 }, halfway);
-return { offset, point };
-"#,
-        );
-
-        assert_eq!(value["offset"], json!({"x": -2, "y": -2, "z": 2}));
-        assert!((value["point"]["x"].as_f64().unwrap() - 1.0).abs() < 0.000000001);
-        assert!(value["point"]["y"].as_f64().unwrap().abs() < 0.000000001);
-        assert!(value["point"]["z"].as_f64().unwrap().abs() < 0.000000001);
-    }
-
-    #[test]
-    fn puzzle3_three_tween_rejects_incompatible_rotation_axes() {
-        let value = evaluate_puzzle3_render_math(
-            r#"
-try {
-  window.PuzzleVisualTweenCore.interpolate(
-    { from: { transforms: [{ kind: "rotate", space: "local", axis: [0, 0, 1], degrees: 0 }] },
-      to: { transforms: [{ kind: "rotate", space: "local", axis: [0, 1, 0], degrees: 90 }] } },
-    0.5,
-  );
-  return { message: "" };
-} catch (error) {
-  return { message: String(error?.message || error) };
-}
-"#,
-        );
-
-        assert_eq!(value["message"], "Visual tween rotation axis 0 changes.");
+    fn puzzle3_three_tween_does_not_own_endpoint_compatibility() {
+        assert!(!VISUAL_TWEEN_CORE_JS.contains("changes space"));
+        assert!(!VISUAL_TWEEN_CORE_JS.contains("changes."));
+        assert!(!VISUAL_TWEEN_CORE_JS.contains("shortest"));
     }
 
     #[test]
@@ -3760,20 +3086,11 @@ try {
         let value = evaluate_puzzle3_render_math(
             r#"
 return window.PuzzleVisualTweenCore.interpolate({
-  from: {
-    transforms: [
-      { kind: "translate", space: "world", value: [0, 2, 4] },
-      { kind: "scale", space: "local", value: [1, 1, 1] },
-    ],
-    opacity: 0,
-  },
-  to: {
-    transforms: [
-      { kind: "translate", space: "world", value: [2, 4, 6] },
-      { kind: "scale", space: "local", value: [3, 2, 1] },
-    ],
-    opacity: 1,
-  },
+  transforms: [
+    { kind: "translate", space: "world", start: [0, 2, 4], delta: [2, 2, 2] },
+    { kind: "scale", space: "local", start: [1, 1, 1], delta: [2, 1, 0] },
+  ],
+  opacity: { start: 0, delta: 1 },
 }, 0.5);
 "#,
         );
@@ -3784,88 +3101,26 @@ return window.PuzzleVisualTweenCore.interpolate({
     }
 
     #[test]
-    fn puzzle3_three_tween_requires_addressed_batches_and_animates_culling_bounds() {
+    fn puzzle3_three_tween_requires_addressed_batches_and_rebuilds_animated_scene() {
         assert!(
             PUZZLE3_COMPONENT_JS.contains("animationBatchId must identify its Tween event batch")
         );
         assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("Puzzle3 Tween animation events require a positive animationBatchId.")
+            PUZZLE3_COMPONENT_JS.contains("`batch:${Number(loadedSnapshot.animationBatchId)}`")
         );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("key: events.length ? `batch:${batchId}` : \"idle\"")
-        );
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("positions.push(animation.from);"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("PuzzleVisualTweenCore.interpolate("));
+        assert!(PUZZLE3_COMPONENT_JS.contains("animations,"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("animationBatchId"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("PuzzleVisualTweenCore"));
     }
 
     #[test]
-    fn puzzle3_three_tween_reuses_frame_data_and_owns_one_animation_loop() {
-        let value = evaluate_puzzle3_render_math(
-            r##"
-const snapshot = {
-  size: { width: 2, depth: 1, height: 1 },
-  render: {
-    camera: {},
-    animation: { tween: { enabled: true, intervalMs: 100 } },
-    viewport: null,
-  },
-  objects: {
-    A: { id: 1, name: "A", visual: "shared" },
-    B: { id: 2, name: "B", visual: "shared" },
-  },
-  visuals: {
-    shared: {
-      palette: { "0": "#fff" },
-      spatialOps: [],
-      frames: [{ layers: [["0"]] }],
-    },
-  },
-  cells: [
-    { position: { x: 0, y: 0, z: 0 }, objects: [{ id: 1 }] },
-    { position: { x: 1, y: 0, z: 0 }, objects: [{ id: 2 }] },
-  ],
-  animationEvents: [
-    { kind: "move", name: "tween", occurrenceId: 1, objectId: 1, from: { x: -1, y: 0, z: 0 }, to: { x: 0, y: 0, z: 0 } },
-    { kind: "move", name: "tween", occurrenceId: 2, objectId: 2, from: { x: 0, y: 0, z: 0 }, to: { x: 1, y: 0, z: 0 } },
-  ],
-  order: { direction_priority: ["down", "right", "front"], priorities: [{}] },
-};
-const frame = window.Puzzle3ThreeRenderer.buildPuzzleStudioThreeFrame(snapshot, { animationProgress: 0 });
-const updated = window.Puzzle3ThreeRenderer.updatePuzzleStudioThreeFrame(frame, snapshot, {}, 0.5);
-return {
-  sameFrame: frame === updated,
-  animationProgress: updated.animationProgress,
-  cachedVisuals: updated.visualCache.size,
-  indexedEvents: updated.animationEventIndex.size,
-};
-"##,
-        );
-
-        assert_eq!(
-            value,
-            json!({
-                "sameFrame": true,
-                "animationProgress": 0.5,
-                "cachedVisuals": 1,
-                "indexedEvents": 2
-            })
-        );
+    fn puzzle3_three_renderer_reuses_component_snapshot_identity() {
         assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("const staticCellCache = frame.staticCellVisibilityCache || new Map();")
+            PUZZLE3_COMPONENT_JS.contains("const loadedSnapshot = requireLoadedPuzzle3Snapshot")
         );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("const boundsCache = frame.cellRenderBoundsCache || new Map();")
-        );
-        assert!(!PUZZLE3_COMPONENT_JS.contains("if (result?.animating)"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS.contains(
-                "frame.viewport?.follow === \"smooth\" && frame.viewportAnimating === true"
-            )
-        );
+        assert!(!PUZZLE3_COMPONENT_JS.contains(
+            "snapshot: clonePuzzle3ViewSnapshot(requireLoadedPuzzle3Snapshot(\"Puzzle3 renderer snapshot\"))"
+        ));
     }
 
     #[test]
@@ -3879,32 +3134,40 @@ const snapshot = {
     animation: { tween: { enabled: true, intervalMs: 100 } },
     viewport: null,
   },
-  objects: { A: { id: 1, name: "A", visual: "bar" } },
-  visuals: {
-    bar: {
-      palette: { "0": "#fff" },
-      spatialOps: [{ kind: "rotate3", space: "local", axis: [0, 0, 1], degrees: 90 }],
-      frames: [{ layers: [["00"]] }],
-    },
-  },
-  cells: [{ position: { x: 0, y: 0, z: 0 }, objects: [{ id: 1 }] }],
-  animationEvents: [{
-    kind: "move",
-    name: "tween",
-    occurrenceId: 1,
-    objectId: 1,
-    from: { x: 0, y: 0, z: 0 },
-    to: { x: 0, y: 0, z: 0 },
-    visualTween: {
-      from: { transforms: [{ kind: "rotate", space: "local", axis: [0, 0, 1], degrees: 0 }] },
-      to: { transforms: [{ kind: "rotate", space: "local", axis: [0, 0, 1], degrees: 90 }] },
+  cells: [{ position: { x: 0, y: 0, z: 0 }, renderOrder: 0, objects: [{ id: 1, renderOrder: 0 }] }],
+};
+const angle = Math.PI / 4;
+const resolvedFrame = {
+  continueAnimation: true,
+  batches: [{
+    renderOrder: 0,
+    objectIds: [1],
+    cell: [0, 0, 0],
+    transform: [
+      [Math.cos(angle), -Math.sin(angle), 0, 0],
+      [Math.sin(angle), Math.cos(angle), 0, 0],
+      [0, 0, 1, 0],
+      [0, 0, 0, 1],
+    ],
+    opacity: 1,
+    pixelGeometry: null,
+    content: {
+      kind: "voxels",
+      width: 2,
+      depth: 1,
+      height: 1,
+      voxels: [
+        { position: [0, 0, 0], color: { red: 1, green: 1, blue: 1, alpha: 1 } },
+        { position: [1, 0, 0], color: { red: 1, green: 1, blue: 1, alpha: 1 } },
+      ],
     },
   }],
-  order: { direction_priority: ["down", "right", "front"], priorities: [{ objects: ["A"] }] },
 };
 const frame = window.Puzzle3ThreeRenderer.buildPuzzleStudioThreeFrame(
   snapshot,
-  { animationProgress: 0.5 },
+  { cells: [{ position: [0, 0, 0], renderOrder: 0, objectIds: [1] }] },
+  resolvedFrame,
+  {},
 );
 const visible = window.Puzzle3ThreeRenderer.frameVisibleVoxels(frame);
 const faces = window.Puzzle3ThreeRenderer.mergedVoxelFaces(visible.voxels, visible.occupied);
@@ -3930,7 +3193,7 @@ return {
 
     #[test]
     fn puzzle3_export_embeds_source_free_frame_fixture_and_path() {
-        let source = r#"title = "Tiny"
+        let source = r#"const title = "Tiny"
 
 puzzle cube {
   dimension = 3
@@ -3962,7 +3225,7 @@ levels default of cube {
   }
 }
 "#;
-        let html = export_html_from_source(source, "games/tiny.puzzle3", "", "")
+        let html = export_html_from_source(source, "games/tiny.puzzle", "", "")
             .expect("release puzzle3 document should use source-free runtime");
 
         assert!(html.contains("window.Puzzle3DFrameFixture = JSON.parse"));
@@ -3981,30 +3244,18 @@ levels default of cube {
             !APP_JS
                 .contains("<body class=\"is-component-embed\" style=\"background:transparent;\">")
         );
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains(
-                "const ctx = puzzle3RendererMode === \"three\" ? null : canvas.getContext(\"2d\", { alpha: true });"
-            )
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains("function drawWithThree()"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function resolvePuzzle3RendererMode(value)"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("return text === \"canvas\" ? \"canvas\" : \"three\";")
-        );
-        assert!(!PUZZLE3_COMPONENT_JS.contains("function puzzle3ThreeRendererAvailable()"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("const PUZZLE3_RENDERER_CONTRACT_VERSION = 1;"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("function puzzle3RendererContractInput(width, height)")
-        );
-        assert!(PUZZLE3_COMPONENT_JS.contains(
-            "snapshot: clonePuzzle3ViewSnapshot(requireLoadedPuzzle3Snapshot(\"Puzzle3 renderer snapshot\"))"
-        ));
-        assert!(PUZZLE3_COMPONENT_JS.contains("renderer.render(input.snapshot, input.view)"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("getContext(\"2d\""));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("rendererMode"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("function ensurePuzzle3ThreeRenderer()"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("PUZZLE3_RENDERER_CONTRACT_VERSION"));
+        assert!(PUZZLE3_COMPONENT_JS.contains("result = renderer.render("));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("const PUZZLE3_THREE_RENDERER_CONTRACT = "));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("input: [\"snapshot\", \"view\"]"));
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS
+                .contains("input: [\"snapshot\", \"resolvedFrame\", \"view\"]")
+        );
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("contract: PUZZLE3_THREE_RENDERER_CONTRACT"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("buildPuzzleStudioThreeFrame"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("projection: camera.projection,"));
         assert!(
             PUZZLE3_COMPONENT_JS
                 .contains(".render.camera.projection must be perspective or orthographic.")
@@ -4053,11 +3304,10 @@ levels default of cube {
                 .contains("function addShadowCatcher(THREE, scene, frame, shadow)")
         );
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("new THREE.ShadowMaterial({"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("function canvasShadowRenderError()"));
-        assert!(PUZZLE3_COMPONENT_JS.contains("Canvas renderer cannot render `shadow = true`"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("canvasShadowRenderError"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function addGrid(THREE, scene, frame)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function frameVisibleVoxels(frame)"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function visibleVoxelStack(stack)"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function visibleResolvedVoxelStack(stack)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function mergedVoxelFaces(voxels, occupied)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("Puzzle3VisualCore.mergeVoxelFaces(voxels"));
         assert!(
@@ -4074,38 +3324,42 @@ levels default of cube {
         );
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function faceBufferGeometry(THREE, faces)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function parseColor(fill)"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("opaque: !source || source.a >= 0.999"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("opaque: color.a >= 0.999"));
         assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("if (renderVoxel.opaque) {\n      visible.length = 0;")
+            PUZZLE3_THREE_RENDERER_JS.contains("if (voxel.opaque) {\n      visible.length = 0;")
         );
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("transparent: alpha < 0.999"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("opacity: Math.max(0, Math.min(1, alpha))"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("depthWrite: alpha >= 0.999"));
         assert!(!PUZZLE3_THREE_RENDERER_JS.contains("new THREE.BoxGeometry"));
         assert!(!PUZZLE3_THREE_RENDERER_JS.contains("new THREE.InstancedMesh"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS.contains("resolvedVisual = visual(visuals[visualName]);")
-        );
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("|| !resolvedVisual) {\n    return null;\n  }"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("return [];\n}"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("resolvedFrame.batches.flatMap"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("batch?.content?.kind !== \"voxels\""));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("snapshot.visuals"));
         assert!(!PUZZLE3_THREE_RENDERER_JS.contains("fallbackVisual"));
         assert!(!PUZZLE3_THREE_RENDERER_JS.contains("function cubeInstance"));
         assert!(!PUZZLE3_THREE_RENDERER_JS.contains("function colorForObject"));
         assert!(!PUZZLE3_THREE_RENDERER_JS.contains("kind: \"cube\""));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("x: position.x - (frame.size.width - 1) / 2"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: position.z - (frame.size.height - 1) / 2"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("z: (frame.size.depth - 1) / 2 - position.y"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: (frame.size.height - 1) / 2 - position.z"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("z: position.y - (frame.size.depth - 1) / 2"));
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS.contains("x: (position[0] + 0.5 - size.width / 2) * step")
+        );
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS.contains("y: (position[1] + 0.5 - size.depth / 2) * step")
+        );
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS.contains("z: (position[2] + 0.5 - size.height / 2) * step")
+        );
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("const layerY = object.layer * 0.08;"));
+        assert!(
+            PUZZLE3_THREE_RENDERER_JS.contains("return { x: point.x, y: -point.z, z: point.y };")
+        );
         assert!(
             PUZZLE3_THREE_RENDERER_JS
-                .contains("function visualVoxelLocalPosition(voxel, size, step)")
+                .contains("transformRenderLocalPoint(renderLocalPosition, spatialAffine, base)")
         );
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("x: (voxel.x + 0.5 - size.width / 2) * step"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: (voxel.y + 0.5 - size.depth / 2) * step"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("z: (voxel.z + 0.5 - size.height / 2) * step"));
-        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("const layerY = object.layer * 0.08;"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("y: base.y + local.z"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("z: base.z - local.y"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function viewportRanges(frame)"));
         assert!(
             PUZZLE3_THREE_RENDERER_JS
@@ -4128,47 +3382,22 @@ levels default of cube {
             PUZZLE3_THREE_RENDERER_JS
                 .contains("function projectRenderPointForCamera(point, cameraSettings)")
         );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("applyProjectedRenderCulling(THREE, frame, camera, this.canvas);")
-        );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("function applyProjectedRenderCulling(THREE, frame, camera, canvas)")
-        );
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("camera.updateMatrixWorld?.();"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS.contains("function projectedRenderCullingEnabled(frame)")
-        );
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("function cellCoordinateRenderBounds(frame, cell, extent")
-        );
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function conservativeCellRenderExtent(frame)"));
-        assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("function projectedRenderBounds(THREE, bounds, camera)")
-        );
-        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("function cellRenderBounds(frame, cell)"));
+        assert!(!PUZZLE3_THREE_RENDERER_JS.contains("applyProjectedRenderCulling"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("frame.renderCells = frame.cells;"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("this.renderer.render(this.scene, camera);"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("this.renderer.shadowMap.autoUpdate = false;"));
         assert!(
             !PUZZLE3_THREE_RENDERER_JS.contains("objectVoxels(frame, cell.position || {}, object")
         );
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("function cameraZoom(frame)"));
         assert!(PUZZLE3_THREE_RENDERER_JS.contains("mode === \"paged\""));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains("frame.renderCells = cells;"));
         assert!(!PUZZLE3_THREE_RENDERER_JS.contains("function renderRanges(frame)"));
         assert!(!PUZZLE3_THREE_RENDERER_JS.contains("function cellInRanges(cell, ranges)"));
-        assert!(PUZZLE3_THREE_RENDERER_JS.contains(
-            "if ((!Number.isFinite(Number(merged.id)) && !name && !visualName) || !resolvedVisual)"
-        ));
         assert!(
-            PUZZLE3_THREE_RENDERER_JS
-                .contains("id: Number.isFinite(Number(merged.id)) ? Number(merged.id) : name")
+            PUZZLE3_THREE_RENDERER_JS.contains("const objectIds = Array.isArray(batch.objectIds)")
         );
-        assert!(PUZZLE3_COMPONENT_JS.contains("viewportSnapNext: view.viewportSnapNext"));
-        assert!(
-            PUZZLE3_COMPONENT_JS.contains("pixelateBuffer.getContext(\"2d\", { alpha: true })")
-        );
+        assert!(PUZZLE3_COMPONENT_JS.contains("viewportSnapNext: interaction.viewportSnapNext"));
+        assert!(PUZZLE3_THREE_RENDERER_JS.contains("function pixelateSettings(frame)"));
         assert!(APP_JS.contains("window.Puzzle3Component.attach(canvas"));
         assert!(APP_CSS.contains(
             ".scene-ratio-slot > [data-frame-component=\"true\"] {\n  width: 100%;\n  height: 100%;"
@@ -4196,14 +3425,14 @@ levels default of cube {
         assert!(runtime_export.get("compiledPlay").is_none());
         assert!(!html.contains("\\npuzzle3 cube"));
         assert!(!html.contains("\"source\":\"title \\\\\\\"Tiny\\\\\\\"\\n"));
-        assert!(html.contains("\"puzzlePath\":\"games/tiny.puzzle3\""));
+        assert!(html.contains("\"puzzlePath\":\"games/tiny.puzzle\""));
         assert!(!html.contains("window.Puzzle3DSource ="));
         assert!(!html.contains("window.Puzzle3DPath ="));
     }
 
     #[test]
     fn puzzle3_frame_export_keeps_component_document_transparent() {
-        let source = r##"title = "Themed 3D"
+        let source = r##"const title = "Themed 3D"
 theme {
   preset = "clean"
   background_color = #123456
@@ -4233,7 +3462,7 @@ levels default of cube {
   }
 }
 "##;
-        let html = export_html_from_source(source, "games/themed_3d.puzzle3", "", "")
+        let html = export_html_from_source(source, "games/themed_3d.puzzle", "", "")
             .expect("release themed puzzle3 document should use source-free runtime");
         let boot = embedded_puzzle_boot_json(&html);
         let fixture = embedded_puzzle3_frame_fixture_json(&html);
@@ -4257,13 +3486,13 @@ levels default of cube {
         assert!(
             !html.contains("<body class=\"is-component-embed\" style=\"background:transparent;\">")
         );
-        assert!(PUZZLE3_COMPONENT_JS.contains("canvas.getContext(\"2d\", { alpha: true })"));
+        assert!(!PUZZLE3_COMPONENT_JS.contains("getContext(\"2d\""));
     }
 
     #[test]
     fn puzzle3_screenshot_default_scene_uses_document_scene_order() {
         let source = r#"
-title = "Screenshot"
+const title = "Screenshot"
 
 puzzle cube {
   dimension = 3
@@ -4296,7 +3525,7 @@ levels basic of cube {
   }
 }
 "#;
-        let document = puzzle_lang::parse_game_for_path(source, "screenshot.puzzle3")
+        let document = puzzle_lang::parse_game_for_path(source, "screenshot.puzzle")
             .expect("parse puzzle3 document");
         assert_eq!(
             default_puzzle3_screenshot_scene(&document).as_deref(),
@@ -4308,7 +3537,7 @@ levels basic of cube {
     #[test]
     fn native_solver_route_uses_the_shared_typed_solver_result() {
         let source = r#"
-title = shared_native_solver
+const title = shared_native_solver
 
 puzzle default {
 layers {
@@ -4407,7 +3636,7 @@ impl std::fmt::Display for AppError {
 #[test]
 fn solver_defaults_match_product_entry_points() {
     let defaults = SolverConfig::default();
-    assert_eq!(defaults.max_nodes, 1_000_000);
+    assert_eq!(defaults.max_stored_nodes, 1_000_000);
     assert_eq!(defaults.max_duration, Duration::from_secs(5));
     let solve_start = APP_JS
         .find("async function solveStandaloneCurrentState(")
@@ -4417,23 +3646,38 @@ fn solver_defaults_match_product_entry_points() {
         .map(|index| solve_start + index)
         .expect("standalone solve entry point end");
     let solve_source = &APP_JS[solve_start..solve_end];
-    assert!(solve_source.contains("options.maxNodes ?? 5_000_000"));
-    assert!(!solve_source.contains("options.maxNodes ?? 1000"));
+    assert!(solve_source.contains("options.maxStoredNodes ?? 5_000_000"));
+    assert!(!solve_source.contains("options.maxStoredNodes ?? 1000"));
+}
+
+#[test]
+fn cli_requires_an_explicit_puzzle_file() {
+    let error = Config::from_args(Vec::<String>::new())
+        .expect_err("missing puzzle path")
+        .to_string();
+    assert!(error.contains("requires an explicit .puzzle file path"));
 }
 
 #[cfg(feature = "solver")]
 #[test]
 fn solver_cli_can_override_the_wall_clock_limit() {
-    let puzzle_path = format!("{}/../../games/spec_3d.puzzle3", env!("CARGO_MANIFEST_DIR"));
+    let puzzle_path = format!("{}/../../games/spec_3d.puzzle", env!("CARGO_MANIFEST_DIR"));
     let defaults = Config::from_args([puzzle_path.clone()]).unwrap();
     assert_eq!(defaults.solver.max_duration, Duration::from_secs(5));
 
     let help = Config::from_args(["--help".to_string()])
         .expect_err("help exits through the config diagnostic")
         .to_string();
-    assert!(help.contains("[--solver-nodes 1000000]"));
+    assert!(help.contains("[--solver-stored-nodes 1000000]"));
 
-    let bounded =
-        Config::from_args([puzzle_path, "--solver-ms".to_string(), "250".to_string()]).unwrap();
+    let bounded = Config::from_args([
+        puzzle_path,
+        "--solver-stored-nodes".to_string(),
+        "2048".to_string(),
+        "--solver-ms".to_string(),
+        "250".to_string(),
+    ])
+    .unwrap();
+    assert_eq!(bounded.solver.max_stored_nodes, 2048);
     assert_eq!(bounded.solver.max_duration, Duration::from_millis(250));
 }

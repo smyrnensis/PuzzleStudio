@@ -3,7 +3,7 @@ use puzzle_lang::parse_game2d;
 fn game_with_rule(rule: &str) -> Result<puzzle_lang::LoadedGame, puzzle_lang::DiagnosticReport> {
     parse_game2d(&format!(
         r#"
-title = set_binding_contract
+const title = set_binding_contract
 
 puzzle default {{
 layers {{

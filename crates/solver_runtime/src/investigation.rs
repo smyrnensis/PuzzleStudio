@@ -1,4 +1,4 @@
-use puzzle_core::{InputId, ObjectId, Size2, State, TransitionCommand};
+use puzzle_core::{GridCoord, InputId, ObjectId, Size2, State, TransitionCommand};
 use puzzle_lang::{LoadedDocumentModel, LoadedGame};
 use puzzle_play::{GameSession, TransitionTrace, cell_objects};
 use puzzle_solver::{
@@ -10,7 +10,6 @@ use puzzle_solver::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -84,6 +83,8 @@ pub enum InvestigationCommand {
         session_id: String,
         artifact: SemanticStateArtifact,
     },
+    DeriveState(DeriveStateRequest),
+    StartLevelFromState(StartLevelFromStateRequest),
     ImportSemanticGoal {
         session_id: String,
         artifact: SemanticGoalArtifact,
@@ -189,6 +190,67 @@ pub struct SemanticStateArtifact {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SemanticObjectPositions {
+    pub object: String,
+    pub positions: Vec<[u16; 2]>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SemanticVariableValue {
+    pub variable: String,
+    pub value: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeriveStateRequest {
+    pub session_id: String,
+    pub base_state_id: String,
+    #[serde(default)]
+    pub expected_base_hash: Option<String>,
+    #[serde(default)]
+    pub set_object_positions: Vec<SemanticObjectPositions>,
+    #[serde(default)]
+    pub set_variables: Vec<SemanticVariableValue>,
+    #[serde(default, rename = "assert")]
+    pub assertions: Vec<SemanticStateAssertion>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StartLevelFromStateRequest {
+    pub session_id: String,
+    pub level_index: usize,
+    #[serde(default)]
+    pub expected_level_name: Option<String>,
+    #[serde(default)]
+    pub set_object_positions: Vec<SemanticObjectPositions>,
+    #[serde(default)]
+    pub set_variables: Vec<SemanticVariableValue>,
+    #[serde(default, rename = "assert")]
+    pub assertions: Vec<SemanticStateAssertion>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SemanticStateAssertion {
+    Exact {
+        position: [u16; 2],
+        objects: Vec<String>,
+    },
+    Contains {
+        position: [u16; 2],
+        objects: Vec<String>,
+    },
+    Excludes {
+        position: [u16; 2],
+        objects: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticGoalArtifact {
     pub version: u32,
@@ -224,7 +286,7 @@ pub enum SemanticGoalSearchAlgorithm {
 #[serde(rename_all = "camelCase")]
 pub struct SemanticGoalSearchBudget {
     pub max_depth: u32,
-    pub max_nodes: usize,
+    pub max_stored_nodes: usize,
     pub max_millis: u64,
 }
 
@@ -274,6 +336,24 @@ impl InvestigationService {
             } => self
                 .session_mut(&session_id)?
                 .import_semantic_state(&artifact),
+            InvestigationCommand::DeriveState(request) => {
+                self.session_mut(&request.session_id)?.derive_state(
+                    &request.base_state_id,
+                    request.expected_base_hash.as_deref(),
+                    &request.set_object_positions,
+                    &request.set_variables,
+                    &request.assertions,
+                )
+            }
+            InvestigationCommand::StartLevelFromState(request) => self
+                .session_mut(&request.session_id)?
+                .start_level_from_state(
+                    request.level_index,
+                    request.expected_level_name.as_deref(),
+                    &request.set_object_positions,
+                    &request.set_variables,
+                    &request.assertions,
+                ),
             InvestigationCommand::ImportSemanticGoal {
                 session_id,
                 artifact,
@@ -377,23 +457,30 @@ impl InvestigationService {
     ) -> Result<Value, InvestigationError> {
         let entry = puzzle_lang::resolve_game_entry(raw_path)
             .map_err(|error| InvestigationError::new("compile_failed", error.to_string()))?;
-        let source = fs::read_to_string(&entry).map_err(|error| {
-            InvestigationError::new(
-                "compile_failed",
-                format!("failed to read {}: {error}", entry.display()),
-            )
-        })?;
-        let expanded = puzzle_lang::expand_game_imports_for_file(&source, &entry)
+        let root = entry.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let workspace = puzzle_workspace::FileWorkspace::load(&entry, root)
+            .map_err(|error| InvestigationError::new("compile_failed", error))?;
+        let document = workspace
+            .compile()
             .map_err(|error| InvestigationError::new("compile_failed", error.to_string()))?;
-        let document = puzzle_lang::parse_game_file(&entry)
-            .map_err(|error| InvestigationError::new("compile_failed", error.to_string()))?;
+        let source_hash =
+            workspace
+                .documents()
+                .iter()
+                .fold(String::new(), |mut source, document| {
+                    source.push_str(&document.path);
+                    source.push('\0');
+                    source.push_str(&document.source);
+                    source.push('\0');
+                    source
+                });
         let (model_name, game) = select_2d_model(document.models, model)?;
 
         self.next_session += 1;
         let session_id = format!("session-{}", self.next_session);
         let session = InvestigationSession::new(
             entry.to_string_lossy().into_owned(),
-            stable_hash_hex(expanded.as_bytes()),
+            stable_hash_hex(source_hash.as_bytes()),
             model_name,
             game,
         )?;
@@ -445,7 +532,7 @@ fn select_2d_model(
                 LoadedDocumentModel::Puzzle3d { name, .. } if name == requested => {
                     return Err(InvestigationError::new(
                         "unsupported_model_kind",
-                        "Agent runtime v1 supports puzzle2d only",
+                        "Agent investigation supports puzzle2d models only",
                     ));
                 }
                 _ => {}
@@ -475,7 +562,7 @@ fn select_2d_model(
         LoadedDocumentModel::Puzzle2d { name, game } => Ok((name, game)),
         LoadedDocumentModel::Puzzle3d { .. } => Err(InvestigationError::new(
             "unsupported_model_kind",
-            "Agent runtime v1 supports puzzle2d only",
+            "Agent investigation supports puzzle2d models only",
         )),
     }
 }
@@ -511,12 +598,78 @@ enum StateReplay {
         inputs: Vec<InputId>,
     },
     Hypothetical {
+        origin: HypotheticalOrigin,
         base_state_id: String,
         root_level_index: usize,
         root_state: State,
         inputs: Vec<InputId>,
     },
+    LevelStartHypothetical {
+        level_index: usize,
+        pre_start_state: State,
+        inputs: Vec<InputId>,
+    },
 }
+
+#[derive(Clone, Copy)]
+enum HypotheticalOrigin {
+    Imported,
+    Derived,
+}
+
+#[derive(Clone, Copy)]
+struct StatePatchDiagnostics {
+    label: &'static str,
+    empty_code: &'static str,
+    invalid_code: &'static str,
+    duplicate_object_code: &'static str,
+    duplicate_position_code: &'static str,
+    layer_conflict_code: &'static str,
+    persistent_variable_code: &'static str,
+    duplicate_variable_code: &'static str,
+}
+
+const DERIVED_STATE_PATCH_DIAGNOSTICS: StatePatchDiagnostics = StatePatchDiagnostics {
+    label: "derived state",
+    empty_code: "empty_derived_state_patch",
+    invalid_code: "invalid_derived_state",
+    duplicate_object_code: "duplicate_derived_state_object",
+    duplicate_position_code: "duplicate_derived_state_position",
+    layer_conflict_code: "derived_state_layer_conflict",
+    persistent_variable_code: "derived_state_persistent_variable_change",
+    duplicate_variable_code: "duplicate_derived_state_variable",
+};
+
+const LEVEL_START_STATE_PATCH_DIAGNOSTICS: StatePatchDiagnostics = StatePatchDiagnostics {
+    label: "level start state",
+    empty_code: "empty_level_start_state_patch",
+    invalid_code: "invalid_level_start_state",
+    duplicate_object_code: "duplicate_level_start_state_object",
+    duplicate_position_code: "duplicate_level_start_state_position",
+    layer_conflict_code: "level_start_state_layer_conflict",
+    persistent_variable_code: "level_start_state_persistent_variable_change",
+    duplicate_variable_code: "duplicate_level_start_state_variable",
+};
+
+#[derive(Clone, Copy)]
+struct StateAssertionDiagnostics {
+    label: &'static str,
+    invalid_code: &'static str,
+    failed_code: &'static str,
+}
+
+const DERIVED_STATE_ASSERTION_DIAGNOSTICS: StateAssertionDiagnostics = StateAssertionDiagnostics {
+    label: "derived state",
+    invalid_code: "invalid_derived_state_assertion",
+    failed_code: "derived_state_assertion_failed",
+};
+
+const LEVEL_START_STATE_ASSERTION_DIAGNOSTICS: StateAssertionDiagnostics =
+    StateAssertionDiagnostics {
+        label: "level start state",
+        invalid_code: "invalid_level_start_state_assertion",
+        failed_code: "level_start_state_assertion_failed",
+    };
 
 struct RunRecord {
     from_state_id: String,
@@ -621,8 +774,13 @@ impl InvestigationSession {
                 format!("level index {level_index} is out of range"),
             ));
         }
-        let mut play = GameSession::new(&self.game);
-        play.start_level(&self.game, level_index);
+        let mut play = GameSession::new_headless_before_level_start(&self.game);
+        play.start_level(&self.game, level_index).map_err(|error| {
+            InvestigationError::new(
+                "level_start_failed",
+                format!("failed to start level {level_index}: {error:?}"),
+            )
+        })?;
         Ok(play)
     }
 
@@ -634,9 +792,10 @@ impl InvestigationSession {
             } => (self.play_session_for_level(*start_level_index)?, inputs),
             StateReplay::Hypothetical {
                 base_state_id,
-                root_level_index,
+                root_level_index: _,
                 root_state,
                 inputs,
+                ..
             } => {
                 let base = self.states.get(base_state_id).ok_or_else(|| {
                     InvestigationError::new(
@@ -645,18 +804,13 @@ impl InvestigationSession {
                     )
                 })?;
                 let mut play = self.replay_state(base)?;
-                play.start_level_from_state(
-                    &self.game,
-                    *root_level_index,
-                    root_state.clone(),
-                    false,
-                )
-                .map_err(|error| {
-                    InvestigationError::new(
-                        "transition_failed",
-                        format!("failed to materialize hypothetical state: {error:?}"),
-                    )
-                })?;
+                play.replace_active_state_snapshot(&self.game, root_state.clone())
+                    .map_err(|error| {
+                        InvestigationError::new(
+                            "transition_failed",
+                            format!("failed to materialize hypothetical state: {error:?}"),
+                        )
+                    })?;
                 if play.state() != root_state {
                     return Err(InvestigationError::new(
                         "hypothetical_state_changed",
@@ -665,9 +819,29 @@ impl InvestigationSession {
                 }
                 (play, inputs)
             }
+            StateReplay::LevelStartHypothetical {
+                level_index,
+                pre_start_state,
+                inputs,
+            } => {
+                let mut play = GameSession::new_headless_before_level_start(&self.game);
+                play.start_level_from_state(
+                    &self.game,
+                    *level_index,
+                    pre_start_state.clone(),
+                    true,
+                )
+                .map_err(|error| {
+                    InvestigationError::new(
+                        "transition_failed",
+                        format!("failed to start hypothetical level state: {error:?}"),
+                    )
+                })?;
+                (play, inputs)
+            }
         };
         for input in inputs {
-            apply_traced_input_to_completion(&mut play, &self.game, *input).map_err(|error| {
+            apply_semantic_input_with_trace(&mut play, &self.game, *input).map_err(|error| {
                 InvestigationError::new("transition_failed", format!("replay failed: {error:?}"))
             })?;
         }
@@ -682,6 +856,208 @@ impl InvestigationSession {
             })));
         }
         Ok(play)
+    }
+
+    fn validate_hypothetical_root(
+        &self,
+        base_state_id: &str,
+        state: &State,
+    ) -> Result<(), InvestigationError> {
+        let base = self.states.get(base_state_id).ok_or_else(|| {
+            InvestigationError::new(
+                "unknown_state",
+                format!("hypothetical base state {base_state_id:?} does not exist"),
+            )
+        })?;
+        let mut play = self.replay_state(base)?;
+        play.replace_active_state_snapshot(&self.game, state.clone())
+            .map_err(|error| {
+                InvestigationError::new(
+                    "transition_failed",
+                    format!("failed to materialize hypothetical state: {error:?}"),
+                )
+            })?;
+        if play.state() != state {
+            return Err(InvestigationError::new(
+                "hypothetical_state_changed",
+                "play lifecycle changed a hypothetical state during materialization",
+            )
+            .with_details(json!({
+                "declaredHash": state_hash(state),
+                "materializedHash": state_hash(play.state()),
+            })));
+        }
+        Ok(())
+    }
+
+    fn apply_state_patch(
+        &self,
+        base: &State,
+        set_object_positions: &[SemanticObjectPositions],
+        set_variables: &[SemanticVariableValue],
+        diagnostics: StatePatchDiagnostics,
+    ) -> Result<State, InvestigationError> {
+        if set_object_positions.is_empty() && set_variables.is_empty() {
+            return Err(InvestigationError::new(
+                diagnostics.empty_code,
+                format!(
+                    "{} patch requires at least one object-position or variable replacement",
+                    diagnostics.label
+                ),
+            ));
+        }
+
+        let mut replacements = Vec::with_capacity(set_object_positions.len());
+        let mut replaced_objects = BTreeSet::new();
+        for replacement in set_object_positions {
+            let objects = resolve_semantic_objects(
+                &self.game,
+                std::slice::from_ref(&replacement.object),
+                &format!("{} object position", diagnostics.label),
+                true,
+                diagnostics.invalid_code,
+            )?;
+            let object = objects[0];
+            if !replaced_objects.insert(object) {
+                return Err(InvestigationError::new(
+                    diagnostics.duplicate_object_code,
+                    format!(
+                        "{} specifies object {:?} more than once",
+                        diagnostics.label, replacement.object
+                    ),
+                ));
+            }
+            let mut positions = BTreeSet::new();
+            for position in &replacement.positions {
+                validate_semantic_position(
+                    base,
+                    *position,
+                    &format!("{} object", diagnostics.label),
+                )?;
+                if !positions.insert(*position) {
+                    return Err(InvestigationError::new(
+                        diagnostics.duplicate_position_code,
+                        format!(
+                            "{} repeats position ({},{}) for object {:?}",
+                            diagnostics.label, position[0], position[1], replacement.object
+                        ),
+                    ));
+                }
+            }
+            replacements.push((object, replacement.object.as_str(), positions));
+        }
+
+        let mut state = base.clone();
+        for (object, name, _) in &replacements {
+            let occupied_slots = state.object_positions(*object).to_vec();
+            for slot in occupied_slots {
+                let position = state.slot_coord(slot).ok_or_else(|| {
+                    InvestigationError::new(
+                        diagnostics.invalid_code,
+                        format!(
+                            "{} could not locate existing object {name:?}",
+                            diagnostics.label
+                        ),
+                    )
+                })?;
+                state
+                    .remove_object_at(&self.game.game, position, *object)
+                    .map_err(|error| {
+                        InvestigationError::new(
+                            diagnostics.invalid_code,
+                            format!(
+                                "{} could not remove existing object {name:?}: {error:?}",
+                                diagnostics.label
+                            ),
+                        )
+                    })?;
+            }
+        }
+        for (object, name, positions) in &replacements {
+            for [x, y] in positions {
+                state
+                    .place_object_at(&self.game.game, GridCoord::new([*x, *y]), *object)
+                    .map_err(|error| {
+                        InvestigationError::new(
+                            diagnostics.layer_conflict_code,
+                            format!(
+                                "{} could not place object {name:?} at ({x},{y}): {error:?}",
+                                diagnostics.label
+                            ),
+                        )
+                        .with_details(json!({
+                            "object": name,
+                            "position": [x, y],
+                            "error": format!("{error:?}"),
+                        }))
+                    })?;
+            }
+        }
+
+        let variable_by_name = self
+            .game
+            .variable_labels
+            .iter()
+            .map(|(id, name)| (name.as_str(), *id))
+            .collect::<HashMap<_, _>>();
+        let mut replaced_variables = BTreeSet::new();
+        for replacement in set_variables {
+            let name = &replacement.variable;
+            let value = replacement.value;
+            let variable = variable_by_name
+                .get(name.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    InvestigationError::new(
+                        "unknown_variable",
+                        format!("{} names unknown variable {name:?}", diagnostics.label),
+                    )
+                })?;
+            if !replaced_variables.insert(variable) {
+                return Err(InvestigationError::new(
+                    diagnostics.duplicate_variable_code,
+                    format!(
+                        "{} specifies variable {:?} more than once",
+                        diagnostics.label, replacement.variable
+                    ),
+                ));
+            }
+            let index = usize::from(variable.0);
+            let current = state
+                .visible_variables()
+                .get(index)
+                .copied()
+                .ok_or_else(|| {
+                    InvestigationError::new(
+                        diagnostics.invalid_code,
+                        format!(
+                            "{} variable {name:?} has no visible state slot",
+                            diagnostics.label
+                        ),
+                    )
+                })?;
+            if self.game.persistent_vars.contains(&variable) && current != value {
+                return Err(InvestigationError::new(
+                    diagnostics.persistent_variable_code,
+                    format!(
+                        "{} cannot change persistent variable {name:?}; preserve its authored value",
+                        diagnostics.label
+                    ),
+                ));
+            }
+            state
+                .set_visible_variable(variable, value)
+                .map_err(|error| {
+                    InvestigationError::new(
+                        diagnostics.invalid_code,
+                        format!(
+                            "{} could not set variable {name:?}: {error:?}",
+                            diagnostics.label
+                        ),
+                    )
+                })?;
+        }
+        Ok(state)
     }
 
     fn store_state(&mut self, record: StateRecord) -> String {
@@ -858,7 +1234,7 @@ impl InvestigationSession {
             if semantic_goal_reached {
                 break;
             }
-            apply_traced_input_to_completion(&mut play, &self.game, *input).map_err(|error| {
+            apply_semantic_input_with_trace(&mut play, &self.game, *input).map_err(|error| {
                 InvestigationError::new(
                     "transition_failed",
                     format!("input {} failed: {error:?}", input_names[offset]),
@@ -941,6 +1317,7 @@ impl InvestigationSession {
                 }
             }
             StateReplay::Hypothetical {
+                origin,
                 base_state_id,
                 root_level_index,
                 root_state,
@@ -948,9 +1325,22 @@ impl InvestigationSession {
             } => {
                 inputs.extend(executed.iter().copied());
                 StateReplay::Hypothetical {
+                    origin,
                     base_state_id,
                     root_level_index,
                     root_state,
+                    inputs,
+                }
+            }
+            StateReplay::LevelStartHypothetical {
+                level_index,
+                pre_start_state,
+                mut inputs,
+            } => {
+                inputs.extend(executed.iter().copied());
+                StateReplay::LevelStartHypothetical {
+                    level_index,
+                    pre_start_state,
                     inputs,
                 }
             }
@@ -1068,7 +1458,13 @@ impl InvestigationSession {
                     ));
                 }
             };
-            let objects = resolve_semantic_objects(&self.game, names, "semantic state", true)?;
+            let objects = resolve_semantic_objects(
+                &self.game,
+                names,
+                "semantic state",
+                true,
+                "invalid_semantic_legend",
+            )?;
             char_objects.insert(ch, objects);
         }
 
@@ -1136,10 +1532,12 @@ impl InvestigationSession {
         }
 
         let diff = semantic_state_diff(&self.game, &base.state, &state);
+        self.validate_hypothetical_root(&artifact.base_state_id, &state)?;
         let state_id = self.store_state(StateRecord {
             level_index: base.level_index,
             state: state.clone(),
             replay: StateReplay::Hypothetical {
+                origin: HypotheticalOrigin::Imported,
                 base_state_id: artifact.base_state_id.clone(),
                 root_level_index: base.level_index,
                 root_state: state,
@@ -1151,6 +1549,167 @@ impl InvestigationSession {
             "stateHash": state_hash(&self.states[&state_id].state),
             "provenance": state_provenance(&self.states[&state_id].replay),
             "diff": diff,
+        }))
+    }
+
+    fn derive_state(
+        &mut self,
+        base_state_id: &str,
+        expected_base_hash: Option<&str>,
+        set_object_positions: &[SemanticObjectPositions],
+        set_variables: &[SemanticVariableValue],
+        assertions: &[SemanticStateAssertion],
+    ) -> Result<Value, InvestigationError> {
+        let base = self.states.get(base_state_id).cloned().ok_or_else(|| {
+            InvestigationError::new(
+                "unknown_state",
+                format!("agent state {base_state_id:?} does not exist"),
+            )
+        })?;
+        let actual_base_hash = state_hash(&base.state);
+        if expected_base_hash.is_some_and(|expected| expected != actual_base_hash) {
+            return Err(InvestigationError::new(
+                "derived_state_base_mismatch",
+                "derived state expectedBaseHash does not match its immutable base state",
+            )
+            .with_details(json!({
+                "baseStateId": base_state_id,
+                "expectedBaseHash": expected_base_hash,
+                "actualBaseHash": actual_base_hash,
+            })));
+        }
+        let state = self.apply_state_patch(
+            &base.state,
+            set_object_positions,
+            set_variables,
+            DERIVED_STATE_PATCH_DIAGNOSTICS,
+        )?;
+
+        validate_semantic_state_assertions(
+            &self.game,
+            &state,
+            assertions,
+            DERIVED_STATE_ASSERTION_DIAGNOSTICS,
+        )?;
+        self.validate_hypothetical_root(base_state_id, &state)?;
+
+        let diff = semantic_state_diff(&self.game, &base.state, &state);
+        let level_name = self.game.levels[base.level_index].name.clone();
+        let state_id = self.store_state(StateRecord {
+            level_index: base.level_index,
+            state: state.clone(),
+            replay: StateReplay::Hypothetical {
+                origin: HypotheticalOrigin::Derived,
+                base_state_id: base_state_id.to_string(),
+                root_level_index: base.level_index,
+                root_state: state.clone(),
+                inputs: Vec::new(),
+            },
+        });
+        Ok(json!({
+            "baseStateId": base_state_id,
+            "stateId": state_id,
+            "stateHash": state_hash(&state),
+            "levelIndex": base.level_index,
+            "levelName": level_name,
+            "provenance": state_provenance(&self.states[&state_id].replay),
+            "applied": {
+                "setObjectPositions": set_object_positions,
+                "setVariables": set_variables,
+            },
+            "diff": diff,
+            "state": describe_state(&self.game, &state),
+        }))
+    }
+
+    fn start_level_from_state(
+        &mut self,
+        level_index: usize,
+        expected_level_name: Option<&str>,
+        set_object_positions: &[SemanticObjectPositions],
+        set_variables: &[SemanticVariableValue],
+        assertions: &[SemanticStateAssertion],
+    ) -> Result<Value, InvestigationError> {
+        let level = self.game.levels.get(level_index).ok_or_else(|| {
+            InvestigationError::new(
+                "unknown_level",
+                format!("level index {level_index} is out of range"),
+            )
+        })?;
+        if expected_level_name.is_some_and(|expected| expected != level.name) {
+            return Err(InvestigationError::new(
+                "level_start_state_level_mismatch",
+                "start_level_from_state expectedLevelName does not match levelIndex",
+            )
+            .with_details(json!({
+                "levelIndex": level_index,
+                "expectedLevelName": expected_level_name,
+                "actualLevelName": level.name,
+            })));
+        }
+        let level_name = level.name.clone();
+        let authored_state = level.initial_state.clone();
+        let pre_start_state = self.apply_state_patch(
+            &authored_state,
+            set_object_positions,
+            set_variables,
+            LEVEL_START_STATE_PATCH_DIAGNOSTICS,
+        )?;
+        let pre_start_diff = semantic_state_diff(&self.game, &authored_state, &pre_start_state);
+
+        let mut play = GameSession::new_headless_before_level_start(&self.game);
+        play.start_level_from_state(&self.game, level_index, pre_start_state.clone(), true)
+            .map_err(|error| {
+                InvestigationError::new(
+                    "level_start_state_failed",
+                    format!("failed to start declared level state: {error:?}"),
+                )
+            })?;
+        let state = play.state().clone();
+        validate_semantic_state_assertions(
+            &self.game,
+            &state,
+            assertions,
+            LEVEL_START_STATE_ASSERTION_DIAGNOSTICS,
+        )?;
+
+        let normal_play = self.play_session_for_level(level_index)?;
+        let normal_state = normal_play.state();
+        let diff = semantic_state_diff(&self.game, normal_state, &state);
+        let active_level_index = play.active_level_index().unwrap_or(level_index);
+        let active_level_name = self
+            .game
+            .levels
+            .get(active_level_index)
+            .map(|active| active.name.clone())
+            .unwrap_or_else(|| level_name.clone());
+        let state_id = self.store_state(StateRecord {
+            level_index: active_level_index,
+            state: state.clone(),
+            replay: StateReplay::LevelStartHypothetical {
+                level_index,
+                pre_start_state,
+                inputs: Vec::new(),
+            },
+        });
+        Ok(json!({
+            "stateId": state_id,
+            "stateHash": state_hash(&state),
+            "levelIndex": active_level_index,
+            "levelName": active_level_name,
+            "startedFrom": {
+                "levelIndex": level_index,
+                "levelName": level_name,
+                "authoredStateHash": state_hash(&authored_state),
+            },
+            "provenance": state_provenance(&self.states[&state_id].replay),
+            "applied": {
+                "setObjectPositions": set_object_positions,
+                "setVariables": set_variables,
+            },
+            "preStartDiff": pre_start_diff,
+            "diff": diff,
+            "state": describe_state(&self.game, &state),
         }))
     }
 
@@ -1182,9 +1741,15 @@ impl InvestigationSession {
                 ));
             }
             let cell = match meaning {
-                SemanticLegendMeaning::Exact { objects } => SemanticGoalCell::Exact(
-                    resolve_semantic_objects(&self.game, objects, "semantic goal exact", true)?,
-                ),
+                SemanticLegendMeaning::Exact { objects } => {
+                    SemanticGoalCell::Exact(resolve_semantic_objects(
+                        &self.game,
+                        objects,
+                        "semantic goal exact",
+                        true,
+                        "invalid_semantic_legend",
+                    )?)
+                }
                 SemanticLegendMeaning::Contains { objects } => {
                     if objects.is_empty() {
                         return Err(InvestigationError::new(
@@ -1197,6 +1762,7 @@ impl InvestigationSession {
                         objects,
                         "semantic goal contains",
                         true,
+                        "invalid_semantic_legend",
                     )?)
                 }
                 SemanticLegendMeaning::Excludes { objects } => {
@@ -1211,6 +1777,7 @@ impl InvestigationSession {
                         objects,
                         "semantic goal excludes",
                         false,
+                        "invalid_semantic_legend",
                     )?)
                 }
                 SemanticLegendMeaning::Unknown => SemanticGoalCell::Unknown,
@@ -1307,10 +1874,10 @@ impl InvestigationSession {
         algorithm: SemanticGoalSearchAlgorithm,
         budget: SemanticGoalSearchBudget,
     ) -> Result<Value, InvestigationError> {
-        if budget.max_depth == 0 || budget.max_nodes == 0 || budget.max_millis == 0 {
+        if budget.max_depth == 0 || budget.max_stored_nodes == 0 || budget.max_millis == 0 {
             return Err(InvestigationError::new(
                 "invalid_search_budget",
-                "maxDepth, maxNodes, and maxMillis must all be greater than zero",
+                "maxDepth, maxStoredNodes, and maxMillis must all be greater than zero",
             ));
         }
         let goal = self.goals.get(goal_id).cloned().ok_or_else(|| {
@@ -1345,7 +1912,7 @@ impl InvestigationSession {
             })?;
         let search_budget = SearchBudget::bounded(
             budget.max_depth,
-            budget.max_nodes,
+            budget.max_stored_nodes,
             Duration::from_millis(budget.max_millis),
         );
         let outcome = match algorithm {
@@ -1853,16 +2420,12 @@ impl InvestigationSession {
     }
 }
 
-fn apply_traced_input_to_completion(
+fn apply_semantic_input_with_trace(
     play: &mut GameSession,
     game: &LoadedGame,
     input: InputId,
 ) -> Result<(), puzzle_core::TransitionError> {
-    play.apply_traced_input(game, input)?;
-    while play.is_waiting() {
-        play.resume_wait(game)?;
-    }
-    Ok(())
+    play.apply_headless_traced_input(game, input)
 }
 
 fn state_provenance(replay: &StateReplay) -> Value {
@@ -1872,13 +2435,33 @@ fn state_provenance(replay: &StateReplay) -> Value {
             "inputCount": inputs.len(),
         }),
         StateReplay::Hypothetical {
+            origin,
             base_state_id,
+            inputs,
+            ..
+        } => match origin {
+            HypotheticalOrigin::Imported => json!({
+                "kind": "hypothetical",
+                "origin": "imported",
+                "baseStateId": base_state_id,
+                "inputCountAfterImport": inputs.len(),
+            }),
+            HypotheticalOrigin::Derived => json!({
+                "kind": "hypothetical",
+                "origin": "derived",
+                "baseStateId": base_state_id,
+                "inputCountAfterDerivation": inputs.len(),
+            }),
+        },
+        StateReplay::LevelStartHypothetical {
+            level_index,
             inputs,
             ..
         } => json!({
             "kind": "hypothetical",
-            "baseStateId": base_state_id,
-            "inputCountAfterImport": inputs.len(),
+            "origin": "level_start",
+            "startLevelIndex": level_index,
+            "inputCountAfterStart": inputs.len(),
         }),
     }
 }
@@ -2102,6 +2685,7 @@ fn resolve_semantic_objects(
     names: &[String],
     label: &str,
     require_distinct_layers: bool,
+    structural_error_code: &str,
 ) -> Result<Vec<ObjectId>, InvestigationError> {
     let object_by_name = game
         .object_labels
@@ -2114,34 +2698,126 @@ fn resolve_semantic_objects(
         let object = object_by_name.get(name.as_str()).copied().ok_or_else(|| {
             InvestigationError::new(
                 "unknown_object",
-                format!("{label} legend names unknown object {name:?}"),
+                format!("{label} names unknown object {name:?}"),
             )
         })?;
         if objects.contains(&object) {
             return Err(InvestigationError::new(
-                "invalid_semantic_legend",
-                format!("{label} legend repeats object {name:?}"),
+                structural_error_code,
+                format!("{label} repeats object {name:?}"),
             ));
         }
         let layer = game.game.object_layer(object).ok_or_else(|| {
             InvestigationError::new(
-                "invalid_semantic_legend",
+                structural_error_code,
                 format!("{label} object {name:?} has no compiled layer"),
             )
         })?;
         if require_distinct_layers && !layers.insert(layer) {
             return Err(InvestigationError::new(
-                "invalid_semantic_legend",
-                format!(
-                    "{label} legend places multiple objects in layer {}",
-                    layer.0
-                ),
+                structural_error_code,
+                format!("{label} places multiple objects in layer {}", layer.0),
             ));
         }
         objects.push(object);
     }
     objects.sort_by_key(|object| game.game.object_layer(*object).map(|layer| layer.0));
     Ok(objects)
+}
+
+fn validate_semantic_position(
+    state: &State,
+    position: [u16; 2],
+    label: &str,
+) -> Result<(), InvestigationError> {
+    if position[0] >= state.width || position[1] >= state.height {
+        return Err(InvestigationError::new(
+            "semantic_position_out_of_bounds",
+            format!(
+                "{label} position ({},{}) is outside {}x{} state",
+                position[0], position[1], state.width, state.height
+            ),
+        )
+        .with_details(json!({
+            "position": position,
+            "width": state.width,
+            "height": state.height,
+        })));
+    }
+    Ok(())
+}
+
+fn validate_semantic_state_assertions(
+    game: &LoadedGame,
+    state: &State,
+    assertions: &[SemanticStateAssertion],
+    diagnostics: StateAssertionDiagnostics,
+) -> Result<(), InvestigationError> {
+    for assertion in assertions {
+        let (kind, position, names, require_distinct_layers) = match assertion {
+            SemanticStateAssertion::Exact { position, objects } => {
+                ("exact", *position, objects, true)
+            }
+            SemanticStateAssertion::Contains { position, objects } => {
+                if objects.is_empty() {
+                    return Err(InvestigationError::new(
+                        diagnostics.invalid_code,
+                        format!(
+                            "{} contains assertion requires at least one object",
+                            diagnostics.label
+                        ),
+                    ));
+                }
+                ("contains", *position, objects, true)
+            }
+            SemanticStateAssertion::Excludes { position, objects } => {
+                if objects.is_empty() {
+                    return Err(InvestigationError::new(
+                        diagnostics.invalid_code,
+                        format!(
+                            "{} excludes assertion requires at least one object",
+                            diagnostics.label
+                        ),
+                    ));
+                }
+                ("excludes", *position, objects, false)
+            }
+        };
+        validate_semantic_position(state, position, &format!("{} assertion", diagnostics.label))?;
+        let expected = resolve_semantic_objects(
+            game,
+            names,
+            &format!("{} assertion", diagnostics.label),
+            require_distinct_layers,
+            diagnostics.invalid_code,
+        )?;
+        let actual = cell_objects(state, position[0], position[1]);
+        let matches = match assertion {
+            SemanticStateAssertion::Exact { .. } => same_object_set(&expected, &actual),
+            SemanticStateAssertion::Contains { .. } => {
+                expected.iter().all(|object| actual.contains(object))
+            }
+            SemanticStateAssertion::Excludes { .. } => {
+                expected.iter().all(|object| !actual.contains(object))
+            }
+        };
+        if !matches {
+            return Err(InvestigationError::new(
+                diagnostics.failed_code,
+                format!(
+                    "{} {kind} assertion failed at ({},{})",
+                    diagnostics.label, position[0], position[1]
+                ),
+            )
+            .with_details(json!({
+                "kind": kind,
+                "position": position,
+                "objects": names,
+                "actual": semantic_object_names(game, &actual),
+            })));
+        }
+    }
+    Ok(())
 }
 
 fn clone_goal_cell(cell: &SemanticGoalCell) -> SemanticGoalCell {

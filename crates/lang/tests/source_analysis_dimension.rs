@@ -1,6 +1,6 @@
-use puzzle_lang::{PuzzleSourceProfile, SourceTargetKind, analyze_source_for_profile};
+use puzzle_lang::{SourceTargetKind, analyze_source};
 
-const PROFILE_SENSITIVE_SOURCE: &str = r#"
+const OWNER_DIMENSION_SOURCE: &str = r#"
 puzzle sokoban {
 dimension = 3
 }
@@ -29,51 +29,35 @@ shape = {
 "#;
 
 #[test]
-fn source_analysis_profile_does_not_override_model_dimension() {
-    let level_cursor = PROFILE_SENSITIVE_SOURCE
+fn source_analysis_uses_the_puzzle_owner_dimension() {
+    let level_cursor = OWNER_DIMENSION_SOURCE
         .find(".\n-\n.")
         .expect("stacked level body");
-    let visual_cursor = PROFILE_SENSITIVE_SOURCE
+    let visual_cursor = OWNER_DIMENSION_SOURCE
         .find("0\n-\n.")
         .expect("stacked visual body");
 
-    let puzzle3 =
-        analyze_source_for_profile(PROFILE_SENSITIVE_SOURCE, PuzzleSourceProfile::Puzzle3d);
+    let analysis = analyze_source(OWNER_DIMENSION_SOURCE);
     assert_eq!(
-        puzzle3
+        analysis
             .resolve_target(level_cursor)
             .map(|target| target.kind),
         Some(SourceTargetKind::Level),
     );
     assert_eq!(
-        puzzle3
-            .resolve_target(visual_cursor)
-            .map(|target| target.kind),
-        Some(SourceTargetKind::Visual),
-    );
-
-    let puzzle2 =
-        analyze_source_for_profile(PROFILE_SENSITIVE_SOURCE, PuzzleSourceProfile::Puzzle2d);
-    assert_eq!(
-        puzzle2
-            .resolve_target(level_cursor)
-            .map(|target| target.kind),
-        Some(SourceTargetKind::Level),
-    );
-    assert_eq!(
-        puzzle2
+        analysis
             .resolve_target(visual_cursor)
             .map(|target| target.kind),
         Some(SourceTargetKind::Visual),
     );
     assert_eq!(
-        puzzle2
+        analysis
             .resolve_target(level_cursor)
             .and_then(|target| target.dimension),
         Some(puzzle_lang::ModelDimension::Three),
     );
     assert_eq!(
-        puzzle2
+        analysis
             .resolve_target(visual_cursor)
             .and_then(|target| target.dimension),
         Some(puzzle_lang::ModelDimension::Three),

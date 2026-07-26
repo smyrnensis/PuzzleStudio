@@ -161,7 +161,7 @@ fn run_solver(
                 state,
                 materialize_level_start: true,
                 max_depth: 512,
-                max_nodes: 100_000,
+                max_stored_nodes: 100_000,
             },
             0,
         )

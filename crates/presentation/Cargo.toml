@@ -1,0 +1,11 @@
+[package]
+name = "puzzle-presentation"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+puzzle-runtime-contract = { path = "../runtime_contract" }
+
+[dev-dependencies]
+serde_json = "1"
