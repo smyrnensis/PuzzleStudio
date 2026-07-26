@@ -138,6 +138,7 @@ fn standalone_html(
     let game_css = escape_style(game_css);
     let game_visuals_js = escape_script(game_visuals_js);
     let visual_tween_core_js = escape_script(VISUAL_TWEEN_CORE_JS);
+    let render_asset_decoder_js = escape_script(RENDER_ASSET_DECODER_JS);
     let renderer_js = escape_script(RENDERER_JS);
     let standalone_js_source = standalone_runtime_js(host_mode);
     let standalone_js = escape_script(&standalone_js_source);
@@ -174,6 +175,11 @@ fn standalone_html(
         html,
         "/visual_tween_core.js",
         &format!("<script>\n{visual_tween_core_js}\n</script>"),
+    );
+    let html = replace_required_script_asset(
+        html,
+        "/render_asset_decoder.js",
+        &format!("<script>\n{render_asset_decoder_js}\n</script>"),
     );
     replace_required_script_asset(
         html,
@@ -507,7 +513,30 @@ fn export_puzzle3_editor_preview_html_with_runtime_wasm(
         "puzzlePath".to_string(),
         serde_json::Value::String(puzzle_path.to_string()),
     );
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     boot_object.insert("editorPreview".to_string(), serde_json::Value::Bool(true));
+=======
+    boot_object.insert(
+        "progressStorageKey".to_string(),
+        serde_json::Value::String(progress_storage_key(puzzle_path)),
+    );
+    boot_object.insert(
+        "editorPreview".to_string(),
+        serde_json::Value::Bool(host_mode == StandaloneHostMode::EditorPreview),
+    );
+    boot_object.insert(
+        "theme".to_string(),
+        serde_json::json!({
+            "name": document.theme.name,
+            "variables": document
+                .theme
+                .variables
+                .iter()
+                .map(|variable| (variable.name.clone(), serde_json::Value::String(variable.value.clone())))
+                .collect::<serde_json::Map<_, _>>(),
+        }),
+    );
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     if let Some(source) = source {
         boot_object.insert(
             "source".to_string(),
@@ -600,10 +629,6 @@ fn mixed_document_puzzle3_fixture_json(
         return Err("mixed HTML export requires a 3D puzzle model".to_string());
     };
     let puzzle3_document = puzzle_lang::LoadedDocument {
-        title: document.title.clone(),
-        subtitle: document.subtitle.clone(),
-        author: document.author.clone(),
-        homepage: document.homepage.clone(),
         default_wait_ms: document.default_wait_ms,
         input_buffer: document.input_buffer.clone(),
         animation: document.animation.clone(),
@@ -720,6 +745,39 @@ pub fn export_html_from_source_with_embedded_wasm(
     )
 }
 
+pub fn export_html_from_document_with_embedded_wasm(
+    document: &puzzle_lang::LoadedDocument,
+    entry_source: &str,
+    puzzle_path: &str,
+    game_css: &str,
+    game_visuals_js: &str,
+    player_runtime_module_js: &str,
+    player_runtime_wasm_base64: &str,
+) -> Result<String, DiagnosticReport> {
+    if player_runtime_module_js.trim().is_empty() {
+        return Err(DiagnosticReport::error(
+            "Standalone HTML export requires puzzle_wasm_player.js content.",
+        ));
+    }
+    if player_runtime_wasm_base64.trim().is_empty() {
+        return Err(DiagnosticReport::error(
+            "Standalone HTML export requires puzzle_wasm_player_bg.wasm content.",
+        ));
+    }
+    export_html_from_document_with_runtime_wasm(
+        document,
+        entry_source,
+        puzzle_path,
+        game_css,
+        game_visuals_js,
+        StandaloneHostMode::Export,
+        StandaloneRuntimeWasm::EmbeddedBase64 {
+            module_source: player_runtime_module_js,
+            wasm_base64: player_runtime_wasm_base64,
+        },
+    )
+}
+
 pub fn export_editor_preview_html_from_source(
     source: &str,
     puzzle_path: &str,
@@ -732,6 +790,24 @@ pub fn export_editor_preview_html_from_source(
         game_css,
         game_visuals_js,
         StandaloneHostMode::EditorPreview,
+    )
+}
+
+pub fn export_editor_preview_html_from_document(
+    document: &puzzle_lang::LoadedDocument,
+    entry_source: &str,
+    puzzle_path: &str,
+    game_css: &str,
+    game_visuals_js: &str,
+) -> Result<String, DiagnosticReport> {
+    export_html_from_document_with_runtime_wasm(
+        document,
+        entry_source,
+        puzzle_path,
+        game_css,
+        game_visuals_js,
+        StandaloneHostMode::EditorPreview,
+        StandaloneRuntimeWasm::HostDefault,
     )
 }
 
@@ -761,10 +837,33 @@ fn export_html_from_source_with_runtime_wasm(
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, DiagnosticReport> {
     let document = puzzle_lang::parse_game_for_path(source, puzzle_path)?;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     if host_mode == StandaloneHostMode::Export {
         return export_bevy_document_html(&document, puzzle_path, runtime_wasm)
             .map_err(DiagnosticReport::error);
     }
+=======
+    export_html_from_document_with_runtime_wasm(
+        &document,
+        source,
+        puzzle_path,
+        game_css,
+        game_visuals_js,
+        host_mode,
+        runtime_wasm,
+    )
+}
+
+fn export_html_from_document_with_runtime_wasm(
+    document: &puzzle_lang::LoadedDocument,
+    entry_source: &str,
+    puzzle_path: &str,
+    game_css: &str,
+    game_visuals_js: &str,
+    host_mode: StandaloneHostMode,
+    runtime_wasm: StandaloneRuntimeWasm<'_>,
+) -> Result<String, DiagnosticReport> {
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     if matches!(
         document.single_model(),
         Some(LoadedDocumentModel::Puzzle3d { .. })
@@ -774,7 +873,12 @@ fn export_html_from_source_with_runtime_wasm(
             puzzle_path,
             game_css,
             game_visuals_js,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             Some(source),
+=======
+            Some(entry_source),
+            host_mode,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             runtime_wasm,
         )
         .map_err(DiagnosticReport::error);
@@ -785,7 +889,7 @@ fn export_html_from_source_with_runtime_wasm(
         export_mixed_document_editor_preview_html(
             &document,
             loaded,
-            source.to_string(),
+            entry_source.to_string(),
             puzzle_path.to_string(),
             game_css.to_string(),
             game_visuals_js.to_string(),
@@ -798,7 +902,7 @@ fn export_html_from_source_with_runtime_wasm(
         let state = ServerState::new(
             document.clone(),
             loaded,
-            source.to_string(),
+            entry_source.to_string(),
             puzzle_path.to_string(),
             visual_images,
             game_css.to_string(),
@@ -816,6 +920,7 @@ fn export_html_from_source_with_runtime_wasm(
 #[cfg(not(target_arch = "wasm32"))]
 pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
     let puzzle_path = resolve_game_entry(path).map_err(|error| error.to_string())?;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     let source = fs::read_to_string(&puzzle_path).map_err(|error| error.to_string())?;
     let source = if puzzle_lang::puzzle_source_profile_for_path(&puzzle_path)
         == Some(puzzle_lang::PuzzleSourceProfile::Puzzle3d)
@@ -831,6 +936,54 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
         &puzzle_path.display().to_string(),
         StandaloneRuntimeWasm::HostDefault,
     )
+=======
+    let root = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
+    let workspace = puzzle_workspace::FileWorkspace::load(&puzzle_path, root)?;
+    let source = workspace.entry_source().to_string();
+    let document = workspace.compile().map_err(|error| error.to_string())?;
+    let game_css =
+        load_asset_css(&puzzle_path, &document.assets).map_err(|error| error.to_string())?;
+
+    if matches!(
+        document.single_model(),
+        Some(LoadedDocumentModel::Puzzle3d { .. })
+    ) {
+        return export_puzzle3_document_html(
+            &document,
+            &puzzle_path.display().to_string(),
+            &game_css,
+            VISUALS_JS,
+        );
+    }
+
+    let loaded = loaded_document_scene_host_loaded_game(&document)?;
+    let game_visuals_js =
+        load_game_visuals_js(&puzzle_path, &loaded).map_err(|error| error.to_string())?;
+    if document_uses_puzzle3_renderer(&document) {
+        export_mixed_document_html(
+            &document,
+            loaded,
+            source,
+            puzzle_path.display().to_string(),
+            game_css,
+            game_visuals_js,
+            SolverConfig::default(),
+            StandaloneHostMode::Export,
+            StandaloneRuntimeWasm::HostDefault,
+        )
+    } else {
+        let state = ServerState::new(
+            document.clone(),
+            loaded,
+            source,
+            puzzle_path.display().to_string(),
+            game_css,
+            game_visuals_js,
+            SolverConfig::default(),
+        );
+        Ok(export_html(&state))
+    }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 pub fn export_visuals_js_from_source(

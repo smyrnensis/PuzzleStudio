@@ -5,7 +5,7 @@ use puzzle_lang::parse_game2d;
 fn rhs_add_sets_an_occupied_collision_layer_slot() {
     let loaded = parse_game2d(
         r#"
-title = layer_slot_write
+const title = layer_slot_write
 
 puzzle default {
 layers {
@@ -43,7 +43,7 @@ X
 fn later_routine_rule_sees_tag_variant_written_by_previous_rule() {
     let loaded = parse_game2d(
         r#"
-title = sequential_tag_write
+const title = sequential_tag_write
 
 puzzle default {
 tags {

@@ -1409,7 +1409,6 @@ async function refreshSourceHighlight() {
     const text = await window.PuzzleStudioHost.highlight(
       {
         source,
-        sourceProfile: puzzleSourceProfile(document),
         rangeStart: range.from,
         rangeEnd: range.to,
         includeOutline,
@@ -1489,7 +1488,6 @@ async function refreshSourceOutline() {
   try {
     const text = await window.PuzzleStudioHost.sourceOutline({
       source,
-      sourceProfile: puzzleSourceProfile(document),
     });
     if (requestId !== sourceOutlineRequestId || source !== sourceEditorDocumentValue()) {
       return;
@@ -3282,10 +3280,7 @@ sourceEditor.addEventListener("beforeinput", handleSourceBeforeInputTextInsert);
 sourceEditor.addEventListener("sourceanalysisreset", () => {
   const source = sourceEditorDocumentValue();
   sourceEntriesRefreshRequestId += 1;
-  window.PuzzleStudioRuntime.resetSourceAnalysis(
-    source,
-    puzzleSourceProfile(activeDocument()),
-  ).then(() => {
+  window.PuzzleStudioRuntime.resetSourceAnalysis(source).then(() => {
     if (source === sourceEditorDocumentValue()) {
       void refreshSourceLineAdd();
     }

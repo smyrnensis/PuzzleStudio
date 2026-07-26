@@ -3,7 +3,7 @@
 ## Status And Scope
 
 This document defines the developer-facing contract for parsing one exact
-`.puzzle` or `.puzzle3` source snapshot into editor-facing surface information.
+`.puzzle` source snapshot into editor-facing surface information.
 It covers the shared language boundary used by highlighting, outline,
 source-target resolution, and completion. It also defines the boundary between
 that tolerant surface analysis and strict compilation.
@@ -43,15 +43,28 @@ select or reject parser facts, but none may recognize the spelling again.
 ### Source revision
 
 A source revision is an immutable revision identity plus the exact source text
-and source profile (`.puzzle` or `.puzzle3`) that identity denotes. A service may
-reuse an existing revision identity only when both the source text is
-byte-for-byte identical and the source profile is unchanged. Any textual or
-profile change creates a different revision before new analysis products are
-exposed.
+that identity denotes. A service may reuse an existing revision identity only
+when the source text is byte-for-byte identical. Any textual change creates a
+different revision before new analysis products are exposed. File names do not
+select a dimension profile; each `puzzle` owner declares its own `dimension`.
 
 Revision numbers are coordination metadata, not source semantics. The language
 crate may represent a revision as an immutable `SourceAnalysis` value while a
 host or adapter assigns the externally visible revision number.
+
+### Workspace revision
+
+A workspace revision is one immutable set of normalized document paths and
+their exact source revisions. `WorkspaceAnalysis` owns its import graph,
+diagnostics, reverse edges, containing entries, and compilation plan. Every
+edge comes from the imported document's canonical parse snapshot. Adapters may
+provide files and project the resulting index, but must not scan `import` text,
+normalize language paths, compute reachability, or infer an entry graph.
+
+Strict workspace compilation consumes the stored document parse products. It
+does not concatenate source or remap diagnostics from a synthetic buffer.
+Cross-document references resolve only through a direct import alias; imports
+do not create implicit local names or transitive re-exports.
 
 ### Current surface document
 
@@ -229,7 +242,7 @@ leaf's authored span.
 
 ### Determinism and ordering
 
-The same source bytes, source profile, and language version must produce equal
+The same source bytes and language version must produce equal
 canonical facts and equal projections. Authored order must be preserved for
 ordered constructs. Sets or maps used only for lookup must not make serialized
 product order nondeterministic.
@@ -334,7 +347,7 @@ pass. A parser-owned outline product may then assemble those facts lazily and be
 cached on the active `SourceAnalysis` revision. That lazy product must be built
 at most once per revision, only when outline is requested; highlight-only and
 other non-outline queries must not construct it. An editor outline request must
-query the already-active profile-aware analysis revision rather than submitting
+query the already-active analysis revision rather than submitting
 the source to a separate outline parser.
 
 An outline item may be omitted when its owner or label is ambiguous. Items after

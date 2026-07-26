@@ -1,4 +1,4 @@
-title = solver_checkpoint_restart
+const title = solver_checkpoint_restart
 
 puzzle default {
 layers {

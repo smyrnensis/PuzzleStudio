@@ -135,40 +135,10 @@ fn parse_asset_path(token: &str, line: &str) -> Result<String, DiagnosticReport>
     if path.starts_with('/') || path.contains('\\') || path.split('/').any(|part| part == "..") {
         return Err(parse_error(
             line,
-            "asset path must be a game-folder relative path",
+            "asset path must be a workspace-relative path",
         ));
     }
     Ok(path.to_string())
-}
-
-fn parse_metadata_text(line: &str, keyword: &str) -> Result<String, DiagnosticReport> {
-    let Some(definition) = authoring_grammar::parse_authoring_definition_row(
-        authoring_grammar::AuthoringKind::Root,
-        line,
-    )?
-    else {
-        return Err(parse_error(
-            line,
-            &format!("{keyword} metadata must be: {keyword} = <text>"),
-        ));
-    };
-    if definition.key != keyword {
-        return Err(parse_error(
-            line,
-            "metadata directive has the wrong keyword",
-        ));
-    }
-    if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
-        return Err(parse_error(
-            line,
-            &format!("{keyword} metadata must be: {keyword} = <text>"),
-        ));
-    }
-    let value = definition.values.join(" ");
-    if value.is_empty() {
-        return Err(parse_error(line, "metadata value must not be empty"));
-    }
-    Ok(parse_quoted_text(&value).unwrap_or(value).to_string())
 }
 
 fn normalize_theme_setting_name(name: &str, line: &str) -> Result<String, DiagnosticReport> {

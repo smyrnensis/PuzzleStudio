@@ -1,7 +1,8 @@
 use puzzle_core::{InputId, ObjectId, transition_program, transition_state};
 use puzzle_lang::{
     LevelId, LoadedGame, ModelOperationSound, ModelOperationSoundDef, SceneComponent, SceneEffect,
-    SceneExpr, VisualKind, parse_game2d as parse_game, translate_puzzlescript_to_canonical,
+    SceneExpr, SceneValue, VisualKind, parse_game2d as parse_game,
+    translate_puzzlescript_to_canonical,
 };
 
 fn find_choice_by_label<'a>(
@@ -560,7 +561,7 @@ P
 #[test]
 fn group_selector_intersection_filters_impossible_same_layer_tuples() {
     let source = r#"
-title = "Group Intersection"
+const title = "Group Intersection"
 
 puzzle main {
 layers {
@@ -1338,7 +1339,7 @@ fn puzzlescript_title_scene_precedes_generated_game_content() {
     let translated = translate_puzzlescript_to_canonical(source).unwrap();
     let title_scene = translated.find("scene title {").unwrap();
 
-    assert!(translated.find("title = ").unwrap() < title_scene);
+    assert!(translated.find("const title = ").unwrap() < title_scene);
     assert!(
         title_scene < translated.find("theme = ").unwrap(),
         "{translated}"
@@ -1472,7 +1473,7 @@ fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
     let translated = translate_puzzlescript_to_canonical(source)
         .expect("TENETEN should import from PuzzleScript Next syntax");
 
-    assert!(translated.contains("title = \"TENETEN\""));
+    assert!(translated.contains("const title = \"TENETEN\""));
     assert!(translated.contains("layers {\nlayer1 = Background\n"));
     assert!(translated.contains("all TargetCrate on crate"));
     assert!(translated.contains("level \"1\""));
@@ -1496,9 +1497,25 @@ fn imports_puzzlescript_next_teneten_sample_as_current_canonical_syntax() {
     assert_imported_output_uses_current_canonical_surface(&translated);
 
     let loaded = parse_game(&translated).expect("translated TENETEN should parse as canonical");
-    assert_eq!(loaded.title, "TENETEN");
-    assert_eq!(loaded.author.as_deref(), Some("smyrnensis"));
-    assert_eq!(loaded.homepage.as_deref(), Some("smyrnensis.itch.io"));
+    let constant = |name: &str| {
+        loaded
+            .variables
+            .iter()
+            .find(|variable| variable.name == name)
+            .map(|variable| &variable.default)
+    };
+    assert_eq!(
+        constant("title"),
+        Some(&SceneValue::Text("TENETEN".to_string()))
+    );
+    assert_eq!(
+        constant("author"),
+        Some(&SceneValue::Text("smyrnensis".to_string()))
+    );
+    assert_eq!(
+        constant("homepage"),
+        Some(&SceneValue::Text("smyrnensis.itch.io".to_string()))
+    );
     assert!(
         loaded
             .scenes
@@ -1517,7 +1534,7 @@ fn puzzlescript_import_preserves_homepage_url_schemes() {
     assert!(
         translated
             .lines()
-            .any(|line| line == r#"homepage = "https://example.com/games/puzzle""#),
+            .any(|line| line == r#"const homepage = "https://example.com/games/puzzle""#),
         "{translated}"
     );
 }

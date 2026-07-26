@@ -2,8 +2,8 @@
 // EXPECT: Moving, clearing the level, and entering the scene sound different.
 // TRY: Change a seed, type, volume, or music bpm.
 
-title = "03 — Sound"
-subtitle = "Put sounds in the lifecycle that owns them"
+const title = "03 — Sound"
+const subtitle = "Put sounds in the lifecycle that owns them"
 
 sounds {
 sfx step { seed = step; type = step; volume = 0.45 }

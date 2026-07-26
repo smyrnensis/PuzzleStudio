@@ -88,10 +88,14 @@ fn materialize_visual_set(
             .find(|visual| visual.name == alias.visual)
             .cloned()
             .ok_or_else(|| {
-                DiagnosticReport::error(format!(
-                    "visual alias `{}` references unknown visual `{}`",
-                    alias.object, alias.visual
-                ))
+                diagnostic_at_optional_source(
+                    alias.source_line.as_deref(),
+                    alias.source_line_number,
+                    format!(
+                        "visual alias `{}` references unknown visual `{}`",
+                        alias.object, alias.visual
+                    ),
+                )
             })?;
         entries.push(VoxelVisual {
             name: alias.object.clone(),
@@ -115,10 +119,13 @@ fn materialize_visual(visual: &crate::VisualDef) -> Result<VoxelVisual, Diagnost
             Vec::new(),
         ),
         VisualKind::Image { .. } => {
-            return Err(DiagnosticReport::error(format!(
-                "3D voxel renderer cannot materialize image visual `{}`",
-                visual.name
-            )));
+            return Err(visual_diagnostic(
+                visual,
+                format!(
+                    "3D voxel renderer cannot materialize image visual `{}`",
+                    visual.name
+                ),
+            ));
         }
     };
     let spatial_frames = if visual.frames.is_empty() {
@@ -132,7 +139,7 @@ fn materialize_visual(visual: &crate::VisualDef) -> Result<VoxelVisual, Diagnost
     };
     let frames = spatial_frames
         .into_iter()
-        .map(|slices| materialize_voxels(&visual.name, slices))
+        .map(|slices| materialize_voxels(visual, slices))
         .collect::<Result<_, _>>()?;
     let mut materialized = VoxelVisual::new(
         visual.name.clone(),
@@ -154,7 +161,7 @@ fn visual_color(color: &str) -> VoxelColor {
 }
 
 fn materialize_voxels(
-    visual_name: &str,
+    visual: &crate::VisualDef,
     slices: Vec<Vec<String>>,
 ) -> Result<VoxelFrame, DiagnosticReport> {
     let height = slices.len();
@@ -170,19 +177,42 @@ fn materialize_voxels(
             slice.len() != depth || slice.iter().any(|row| row.chars().count() != width)
         })
     {
-        return Err(DiagnosticReport::error(format!(
-            "visual `{visual_name}` must be rectangular in every spatial frame"
-        )));
+        return Err(visual_diagnostic(
+            visual,
+            format!(
+                "visual `{}` must be rectangular in every spatial frame",
+                visual.name
+            ),
+        ));
     }
     let size = Size3::new(
-        u16::try_from(width)
-            .map_err(|_| DiagnosticReport::error("visual width exceeds u16".to_string()))?,
-        u16::try_from(depth)
-            .map_err(|_| DiagnosticReport::error("visual depth exceeds u16".to_string()))?,
+        u16::try_from(width).map_err(|_| visual_diagnostic(visual, "visual width exceeds u16"))?,
+        u16::try_from(depth).map_err(|_| visual_diagnostic(visual, "visual depth exceeds u16"))?,
         u16::try_from(height)
-            .map_err(|_| DiagnosticReport::error("visual height exceeds u16".to_string()))?,
+            .map_err(|_| visual_diagnostic(visual, "visual height exceeds u16"))?,
     );
     Ok(VoxelFrame::new(size, slices))
+}
+
+fn visual_diagnostic(visual: &crate::VisualDef, message: impl Into<String>) -> DiagnosticReport {
+    diagnostic_at_optional_source(
+        visual.source_line.as_deref(),
+        visual.source_line_number,
+        message,
+    )
+}
+
+fn diagnostic_at_optional_source(
+    source_line: Option<&str>,
+    source_line_number: Option<usize>,
+    message: impl Into<String>,
+) -> DiagnosticReport {
+    match (source_line, source_line_number) {
+        (Some(source_line), Some(source_line_number)) => {
+            DiagnosticReport::error_at_source_line_number(message, source_line, source_line_number)
+        }
+        _ => DiagnosticReport::error(message),
+    }
 }
 
 fn materialize_levels(
@@ -235,11 +265,12 @@ fn materialize_levels(
                 }
                 local.insert(legend.ch, objects);
             }
-            let slices = crate::level::split_spatial_level_slices(&level.lines)?;
-            let height = u16::try_from(slices.len())
-                .map_err(|_| DiagnosticReport::error("3D level height exceeds u16".to_string()))?;
+            let slices = crate::level::split_spatial_level_slices(&level.source, &level.lines)?;
+            let height = u16::try_from(slices.len()).map_err(|_| {
+                crate::level::error_at(&level.source, "3D level height exceeds u16")
+            })?;
             let depth = u16::try_from(slices.iter().map(|slice| slice.len()).max().unwrap_or(0))
-                .map_err(|_| DiagnosticReport::error("3D level depth exceeds u16".to_string()))?;
+                .map_err(|_| crate::level::error_at(&level.source, "3D level depth exceeds u16"))?;
             let width = u16::try_from(
                 slices
                     .iter()
@@ -248,20 +279,31 @@ fn materialize_levels(
                     .max()
                     .unwrap_or(0),
             )
-            .map_err(|_| DiagnosticReport::error("3D level width exceeds u16".to_string()))?;
-            if slices.iter().any(|slice| {
-                slice.len() != usize::from(depth)
-                    || slice
-                        .iter()
-                        .any(|row| row.text.chars().count() != usize::from(width))
-            }) {
-                return Err(DiagnosticReport::error(format!(
-                    "3D level `{}` must be rectangular in every slice",
-                    level.name
-                )));
+            .map_err(|_| crate::level::error_at(&level.source, "3D level width exceeds u16"))?;
+            let non_rectangular_row = slices.iter().find_map(|slice| {
+                if slice.len() != usize::from(depth) {
+                    return slice.first().copied();
+                }
+                slice
+                    .iter()
+                    .find(|row| row.text.chars().count() != usize::from(width))
+                    .copied()
+            });
+            if let Some(row) = non_rectangular_row {
+                return Err(crate::level::error_at(
+                    row,
+                    format!(
+                        "3D level `{}` must be rectangular in every slice",
+                        level.name
+                    ),
+                ));
             }
             let size = Size3::new(width, depth, height);
-            let mut cells = Vec::<(puzzle_core::GridCoord<3>, Vec<puzzle_core::ObjectId>)>::new();
+            let mut cells = Vec::<(
+                puzzle_core::GridCoord<3>,
+                Vec<puzzle_core::ObjectId>,
+                &crate::source::LogicalLine,
+            )>::new();
             for (slice_index, slice) in slices.iter().enumerate() {
                 for (row_index, row) in slice.iter().enumerate() {
                     for (column, ch) in row.text.chars().enumerate() {
@@ -284,14 +326,9 @@ fn materialize_levels(
                             continue;
                         }
                         cells.push((
-                            Coord3::from_standard_text_position(
-                                size,
-                                column as u16,
-                                row_index as u16,
-                                slice_index as u16,
-                            )
-                            .into(),
+                            Coord3::new(column as u16, row_index as u16, slice_index as u16).into(),
                             objects.to_vec(),
+                            row,
                         ));
                     }
                 }
@@ -309,20 +346,20 @@ fn materialize_levels(
                 catalog.variable_defaults.clone(),
             )
             .map_err(|error| {
-                DiagnosticReport::error(format!(
-                    "invalid 3D level `{}` dimensions: {error:?}",
-                    level.name
-                ))
+                crate::level::error_at(
+                    &level.source,
+                    format!("invalid 3D level `{}` dimensions: {error:?}", level.name),
+                )
             })?;
-            for (position, objects) in cells {
+            for (position, objects, row) in cells {
                 for object in objects {
                     initial_state
                         .place_object_at(game, position, object)
                         .map_err(|error| {
-                            DiagnosticReport::error(format!(
-                                "invalid 3D level `{}`: {error:?}",
-                                level.name
-                            ))
+                            crate::level::error_at(
+                                row,
+                                format!("invalid 3D level `{}`: {error:?}", level.name),
+                            )
                         })?;
                 }
             }

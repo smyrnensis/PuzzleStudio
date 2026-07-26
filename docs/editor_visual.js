@@ -251,6 +251,8 @@ function mountSharedVisualAnimationUi(dimension) {
     playbackPanel.setAttribute("aria-label", "3D visual animation playback preview");
     visualAnimationPlaybackView.setAttribute("aria-label", "3D visual animation playback preview");
     panel.setAttribute("aria-label", "3D visual animation frames");
+    visualAnimationDurationInput?.closest(".visual-animation-duration-control")?.toggleAttribute("hidden", true);
+    visual3dAnimationDurationInput?.closest(".visual-animation-duration-control")?.toggleAttribute("hidden", false);
     return;
   }
   const boardWrap = visualBuilder.querySelector(".visual-board-wrap");
@@ -266,15 +268,14 @@ function mountSharedVisualAnimationUi(dimension) {
   playbackPanel.setAttribute("aria-label", "Visual animation playback preview");
   visualAnimationPlaybackView.setAttribute("aria-label", "Visual animation playback preview");
   panel.setAttribute("aria-label", "Visual animation frames");
+  visualAnimationDurationInput?.closest(".visual-animation-duration-control")?.toggleAttribute("hidden", false);
+  visual3dAnimationDurationInput?.closest(".visual-animation-duration-control")?.toggleAttribute("hidden", true);
 }
 
 function syncVisualAnimationInputValues(options = {}) {
   const preserveActive = options.preserveActive === true;
   if (visualAnimationDurationInput && (!preserveActive || document.activeElement !== visualAnimationDurationInput)) {
     visualAnimationDurationInput.value = String(visual.animationDurationMs);
-  }
-  if (visualAnimationFrameCountInput && (!preserveActive || document.activeElement !== visualAnimationFrameCountInput)) {
-    visualAnimationFrameCountInput.value = String(visual.animationFrameCount);
   }
   if (visualAnimationFrameInput && (!preserveActive || document.activeElement !== visualAnimationFrameInput)) {
     visualAnimationFrameInput.value = String(visual.animationFrameIndex + 1);
@@ -471,6 +472,7 @@ function moveVisualAnimationFrame(delta) {
   moveSharedVisualAnimationFrame("visual", delta);
 }
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 function updateVisualAnimationFrameCount(value) {
   const before = visualEditSnapshot("visual");
   visual.animationFrameCount = normalizedVisualAnimationFrameCount(value);
@@ -479,6 +481,8 @@ function updateVisualAnimationFrameCount(value) {
   pushVisualEditUndoSnapshot("visual", before);
 }
 
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 function insertVisualAnimationFrameAt(index) {
   return insertSharedVisualAnimationFrameAt("visual", index);
 }
@@ -508,7 +512,7 @@ function updateVisualAnimationDuration(value, options = {}) {
 }
 
 function isVisualEditUndoTarget(target) {
-  return target === visualAnimationDurationInput || target === visualAnimationFrameCountInput;
+  return target === visualAnimationDurationInput || target === visual3dAnimationDurationInput;
 }
 
 function visualAnimationFrameDelayMs() {
@@ -638,27 +642,13 @@ function renderVisualEditorUpperControls(target, controls) {
   scaleGroup.append(
     scalePrefix,
     controls.scaleInput,
-    controls.scaleDownButton,
     controls.scaleUpButton,
+    controls.scaleDownButton,
   );
   scale.append(scaleGroup);
   geometry.append(scale);
 
-  const animation = document.createElement("div");
-  animation.className = "visual-editor-animation-group";
-  const durationWrap = document.createElement("span");
-  durationWrap.className = "visual-duration-input";
-  const durationUnit = document.createElement("span");
-  durationUnit.className = "visual-duration-unit";
-  durationUnit.setAttribute("aria-hidden", "true");
-  durationUnit.textContent = "ms";
-  durationWrap.append(controls.durationInput, durationUnit);
-  animation.append(
-    labeledControl("Duration", durationWrap, "visual-duration-control"),
-    labeledControl("Frames", controls.frameCountInput, "visual-frame-count-control"),
-  );
-
-  root.append(nameRow, geometry, animation);
+  root.append(nameRow, geometry);
   target.replaceChildren(root);
 }
 
@@ -672,8 +662,6 @@ function visualEditorUpperControls2d() {
     scaleInput: visualScaleInput,
     scaleDownButton: visualScaleDownButton,
     scaleUpButton: visualScaleUpButton,
-    durationInput: visualAnimationDurationInput,
-    frameCountInput: visualAnimationFrameCountInput,
     shapeField: visualShapeField,
   };
 }
@@ -688,8 +676,6 @@ function visualEditorUpperControls3d() {
     scaleInput: visual3dScaleInput,
     scaleDownButton: visual3dScaleDownButton,
     scaleUpButton: visual3dScaleUpButton,
-    durationInput: visual3dAnimationDurationInput,
-    frameCountInput: visual3dAnimationFrameCountInput,
     shapeField: visual3dShapeField,
   };
 }
@@ -760,16 +746,13 @@ function syncVisualBucketButton() {
 }
 
 function toggleVisualBucketMode() {
-  const wasClipActive = visualClipActive || visualClipSelection;
-  deactivateVisualClipMode({ render: false });
   visualBucketActive = !visualBucketActive;
   syncVisualPaintToolControls();
   renderVisualPalette();
-  if (wasClipActive) {
-    renderVisualBoard();
-  }
   setVisualActionStatus(
-    visualBucketActive ? "Bucket: click a connected area" : visualPaintToolStatusText(),
+    visualBucketActive
+      ? visualClipActive ? "Bucket: click a connected area inside the clip region" : "Bucket: click a connected area"
+      : visualClipActive ? "Clip: drag selection to move it" : visualPaintToolStatusText(),
     "is-ok",
   );
 }
@@ -1308,10 +1291,6 @@ function renderVisualEditorToolbar({ dimension, target }) {
   const row = document.createElement("div");
   row.className = "visual-paint-tool-row visual-editor-toolbar";
   row.setAttribute("role", "toolbar");
-  const contextRow = document.createElement("div");
-  contextRow.className = "visual-toolbar-context-row";
-  const operationRow = document.createElement("div");
-  operationRow.className = "visual-toolbar-operation-row";
   const context = document.createElement("span");
   context.className = "visual-paint-tool-group visual-context-actions";
   const paint = document.createElement("span");
@@ -1328,9 +1307,7 @@ function renderVisualEditorToolbar({ dimension, target }) {
     }
     groups[group].append(part);
   }
-  contextRow.append(context);
-  operationRow.append(paint, transform, clipboard);
-  row.append(contextRow, operationRow);
+  row.append(context, paint, transform, clipboard);
   target.replaceChildren(row);
   return row;
 }
@@ -3676,6 +3653,17 @@ function startVisualPaint(event) {
   }
   const point = visualBoardPointFromClient(event.clientX, event.clientY, geometry);
   const index = visualCellIndexFromPoint(point);
+  if (visualBucketActive) {
+    if (!point || index < 0) {
+      return;
+    }
+    event.preventDefault();
+    const before = visualEditSnapshot("visual");
+    if (bucketFillVisualFromIndex(index)) {
+      pushVisualEditUndoSnapshot("visual", before);
+    }
+    return;
+  }
   if (visualClipActive) {
     const cell = visualClipCellFromClient(event.clientX, event.clientY, geometry);
     if (!cell) {
@@ -3688,13 +3676,6 @@ function startVisualPaint(event) {
     return;
   }
   event.preventDefault();
-  if (visualBucketActive) {
-    const before = visualEditSnapshot("visual");
-    if (bucketFillVisualFromIndex(index)) {
-      pushVisualEditUndoSnapshot("visual", before);
-    }
-    return;
-  }
   visualPaintDrag = {
     pointerId: event.pointerId,
     colorIndex: visual.selectedColorIndex,
@@ -4458,7 +4439,6 @@ for (const input of [
   visualHeightInput,
   visualScaleInput,
   visualAnimationDurationInput,
-  visualAnimationFrameCountInput,
   visualAnimationFrameInput,
 ]) {
   if (input) {
@@ -4498,14 +4478,6 @@ visualAnimationDurationInput?.addEventListener("keydown", (event) => {
   }
   event.preventDefault();
   updateVisualAnimationDuration(visualAnimationDurationInput.value);
-});
-visualAnimationFrameCountInput?.addEventListener("change", () => updateVisualAnimationFrameCount(visualAnimationFrameCountInput.value));
-visualAnimationFrameCountInput?.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") {
-    return;
-  }
-  event.preventDefault();
-  updateVisualAnimationFrameCount(visualAnimationFrameCountInput.value);
 });
 visualAnimationFrameInput?.addEventListener("change", () => {
   if (currentVisualPaneMode === "visual3d") return setVisual3dAnimationFrame(Number(visualAnimationFrameInput.value) - 1);
@@ -4596,6 +4568,7 @@ visualRotateLeftButton.addEventListener("click", rotateVisualLeft);
 visualRotateRightButton.addEventListener("click", rotateVisualRight);
 visualFlipHorizontalButton.addEventListener("click", flipVisualHorizontal);
 visualFlipVerticalButton.addEventListener("click", flipVisualVertical);
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 visualGridButton?.addEventListener("click", () => {
   if (currentVisualPaneMode === "visual3d" && typeof toggleVisual3dGrid === "function") {
     toggleVisual3dGrid();
@@ -4603,4 +4576,6 @@ visualGridButton?.addEventListener("click", () => {
   }
   toggleVisualGrid();
 });
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 resetVisualBuilder();

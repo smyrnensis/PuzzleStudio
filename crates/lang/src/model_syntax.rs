@@ -275,8 +275,24 @@ pub(crate) fn parse_puzzle_models_from_document_entries(
 ) -> Result<Vec<PuzzleModelSyntax>, DiagnosticReport> {
     (|| {
         let mut models = Vec::new();
+        let mut import_aliases = std::collections::HashSet::new();
         for document_entry in document_entries {
             validate_document_entry(document_entry)?;
+            if document_entry.directive == puzzle_authoring::PuzzleDirectiveSurface::Import {
+                let import =
+                    import_declaration_syntax(&document_entry.header).ok_or_else(|| {
+                        error_at(
+                            "import must be: import <alias> = \"<relative-path>.puzzle\"",
+                            &document_entry.header,
+                        )
+                    })?;
+                if !import_aliases.insert(import.alias.clone()) {
+                    return Err(error_at(
+                        format!("duplicate import alias `{}`", import.alias),
+                        &document_entry.header,
+                    ));
+                }
+            }
             let line = &document_entry.header;
             let header = crate::split_header_tokens(&line.text);
             let Some(declaration) =
@@ -317,7 +333,8 @@ fn validate_document_entry(entry: &PuzzleEntrySyntax) -> Result<(), DiagnosticRe
 
     match entry.directive {
         Directive::Empty
-        | Directive::Metadata
+        | Directive::Import
+        | Directive::DocumentSetting
         | Directive::DocumentShell
         | Directive::InputBuffer
         | Directive::Variable
@@ -340,10 +357,6 @@ fn validate_document_entry(entry: &PuzzleEntrySyntax) -> Result<(), DiagnosticRe
         }
         Directive::RemovedModelPrefix => Err(error_at(
             "top-level puzzle definition must be: puzzle <name>",
-            &entry.header,
-        )),
-        Directive::RemovedNameMetadata => Err(error_at(
-            "top-level `name` metadata was removed; use `title = <text>`",
             &entry.header,
         )),
         Directive::RemovedAnimation => Err(error_at(
@@ -783,6 +796,12 @@ fn parse_model_body_syntax(
                 }
                 puzzle_authoring::PuzzleDirectiveSurface::RemovedMain => {
                     return Err(error_at("`main` was removed; use `rules`", &entry.header));
+                }
+                puzzle_authoring::PuzzleDirectiveSurface::Import => {
+                    return Err(error_at(
+                        "import is document-scoped and must appear at the source root",
+                        &entry.header,
+                    ));
                 }
                 other => {
                     let directive = crate::split_header_tokens(&entry.header.text)
@@ -1568,6 +1587,33 @@ fn entry_semantic_syntax(
         );
     }
     match directive {
+        puzzle_authoring::PuzzleDirectiveSurface::Import => {
+            if let Some(import) = import_declaration_syntax(header) {
+                semantics.fixed.imports.push(import);
+                mark_token(
+                    &mut semantics.fixed,
+                    header.tokens.get(1),
+                    SurfaceSemanticKind::Binding,
+                );
+                mark_token(
+                    &mut semantics.fixed,
+                    header.tokens.get(2),
+                    SurfaceSemanticKind::Setting,
+                );
+                mark_token(
+                    &mut semantics.fixed,
+                    header.tokens.get(3),
+                    SurfaceSemanticKind::String,
+                );
+            } else {
+                for token in header.tokens.iter().skip(1) {
+                    semantics.fixed.mark_invalid(SourceSpan {
+                        start: token.start,
+                        end: token.end,
+                    });
+                }
+            }
+        }
         puzzle_authoring::PuzzleDirectiveSurface::Legend
         | puzzle_authoring::PuzzleDirectiveSurface::Level
         | puzzle_authoring::PuzzleDirectiveSurface::Levels => {
@@ -1653,7 +1699,7 @@ fn entry_semantic_syntax(
         puzzle_authoring::PuzzleDirectiveSurface::Layers => {
             for line in body {
                 let tokens = crate::split_header_tokens(&line.text);
-                if matches!(tokens.as_slice(), ["merge"] | ["}"]) {
+                if crate::is_layers_merge_block(&line.text) || matches!(tokens.as_slice(), ["}"]) {
                     mark_text(
                         &mut semantics.fixed,
                         line,
@@ -1899,6 +1945,40 @@ fn entry_semantic_syntax(
         _ => {}
     }
     semantics
+}
+
+pub(crate) fn import_declaration_syntax(
+    header: &LogicalLine,
+) -> Option<crate::SourceImportDeclaration> {
+    let [keyword, alias, equals, path] = header.tokens.as_slice() else {
+        return None;
+    };
+    if keyword.text != "import"
+        || !puzzle_authoring::is_identifier(&alias.text)
+        || equals.text != "="
+    {
+        return None;
+    }
+    let raw_path = puzzle_authoring::parse_quoted_text(&path.text)?;
+    if raw_path.is_empty() {
+        return None;
+    }
+    Some(crate::SourceImportDeclaration {
+        range: crate::SourceImportRange {
+            start: keyword.start,
+            end: path.end,
+        },
+        alias_range: crate::SourceImportRange {
+            start: alias.start,
+            end: alias.end,
+        },
+        path_range: crate::SourceImportRange {
+            start: path.start + 1,
+            end: path.end - 1,
+        },
+        alias: alias.text.clone(),
+        raw_path,
+    })
 }
 
 fn mark_resource_header_semantics(
@@ -2203,7 +2283,7 @@ rules {
     fn model_owner_contains_nested_2d_blocks() {
         let models = parse(
             r#"
-title = render_model
+const title = render_model
 
 puzzle default {
 layers 1

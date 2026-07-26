@@ -14,6 +14,7 @@ pub fn run_cli_with_args(args: impl IntoIterator<Item = String>) -> Result<(), S
 #[cfg(not(target_arch = "wasm32"))]
 fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     let config = Config::from_args(args)?;
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     let source = fs::read_to_string(&config.puzzle_path)?;
     puzzle_lang::validate_source_profile_for_path(&source, &config.puzzle_path)?;
     let profile = puzzle_lang::puzzle_source_profile_for_path(&config.puzzle_path)
@@ -30,6 +31,21 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     let document =
         puzzle_lang::parse_game_for_path(&source, &config.puzzle_path).map_err(AppError::Lang)?;
     if !config.serve || document_uses_puzzle3_renderer(&document) {
+=======
+    let root = config
+        .puzzle_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let workspace = puzzle_workspace::FileWorkspace::load(&config.puzzle_path, root)
+        .map_err(AppError::Config)?;
+    let source = workspace.entry_source().to_string();
+    let document = workspace.compile().map_err(AppError::Lang)?;
+    if matches!(
+        document.single_model(),
+        Some(LoadedDocumentModel::Puzzle3d { .. })
+    ) {
+        let game_css = load_asset_css(&config.puzzle_path, &document.assets)?;
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let output_path = config.output_path();
         let puzzle_path = config.puzzle_path.display().to_string();
         let html =
@@ -265,8 +281,8 @@ impl Config {
                 "--solver-depth" => {
                     parse_solver_depth_arg(&mut solver, &mut args)?;
                 }
-                "--solver-nodes" => {
-                    parse_solver_nodes_arg(&mut solver, &mut args)?;
+                "--solver-stored-nodes" => {
+                    parse_solver_stored_nodes_arg(&mut solver, &mut args)?;
                 }
                 "--solver-ms" => {
                     parse_solver_ms_arg(&mut solver, &mut args)?;
@@ -304,7 +320,11 @@ impl Config {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
                         "usage: html-play [path/to/game-folder-or-game.puzzle-or-game.puzzle3] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms N]".to_string(),
+=======
+                        "usage: html-play <path/to/game.puzzle> [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--scene name] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-stored-nodes 1000000] [--solver-ms N]".to_string(),
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                     ));
                 }
                 value if value.starts_with('-') => {
@@ -340,7 +360,11 @@ impl Config {
             Some(path) => {
                 resolve_game_entry(path).map_err(|error| AppError::Config(error.to_string()))?
             }
-            None => discover_default_puzzle_path()?,
+            None => {
+                return Err(AppError::Config(
+                    "html-play requires an explicit .puzzle file path".to_string(),
+                ));
+            }
         };
 
         Ok(Self {

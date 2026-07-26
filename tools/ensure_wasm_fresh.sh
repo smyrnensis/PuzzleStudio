@@ -6,13 +6,26 @@ cd "$repo_root"
 
 mode="${1:-desktop}"
 if (($# > 1)); then
-  echo "usage: tools/ensure_wasm_fresh.sh [desktop]" >&2
+  echo "usage: tools/ensure_wasm_fresh.sh [desktop|desktop-dev]" >&2
   exit 2
 fi
-if [[ "$mode" != "desktop" ]]; then
+case "$mode" in
+  # The generated static files do not record whether they came from Cargo's
+  # debug or release profile. Always invoke the selected profile so switching
+  # between `tauri dev` and `tauri build` cannot reuse the other profile's WASM.
+  desktop)
+    wasm_profile="release"
+    force_wasm_build=1
+    ;;
+  desktop-dev)
+    wasm_profile="debug"
+    force_wasm_build=1
+    ;;
+  *)
   echo "unknown wasm freshness mode: $mode" >&2
   exit 2
-fi
+    ;;
+esac
 
 oldest_artifact_file() {
   local oldest=""
@@ -90,8 +103,9 @@ verify_target_current() {
 
 ensure_target_current() {
   local name="$1"
-  local build_cmd="$2"
-  shift 2
+  local build_profile="$2"
+  local build_cmd="$3"
+  shift 3
   local artifacts=()
   while (($#)); do
     if [[ "$1" == "--" ]]; then
@@ -104,9 +118,15 @@ ensure_target_current() {
   local sources=("$@")
 
   local oldest_artifact newest_source
+  if ((force_wasm_build)); then
+    echo "wasm: $name $build_profile build requested; running $build_cmd" >&2
+    "$build_cmd" "$build_profile"
+    verify_target_current "$name" "${artifacts[@]}" -- "${sources[@]}"
+    return
+  fi
   if ! oldest_artifact="$(oldest_artifact_file "${artifacts[@]}")"; then
-    echo "wasm: $name artifacts missing; running $build_cmd" >&2
-    "$build_cmd"
+    echo "wasm: $name artifacts missing; running $build_cmd $build_profile" >&2
+    "$build_cmd" "$build_profile"
     verify_target_current "$name" "${artifacts[@]}" -- "${sources[@]}"
     return
   fi
@@ -114,10 +134,10 @@ ensure_target_current() {
     exit 1
   fi
   if [[ "$newest_source" -nt "$oldest_artifact" ]]; then
-    echo "wasm: $name stale; running $build_cmd" >&2
+    echo "wasm: $name stale; running $build_cmd $build_profile" >&2
     echo "wasm: newest source: $newest_source" >&2
     echo "wasm: oldest artifact: $oldest_artifact" >&2
-    "$build_cmd"
+    "$build_cmd" "$build_profile"
     verify_target_current "$name" "${artifacts[@]}" -- "${sources[@]}"
     return
   fi
@@ -126,11 +146,12 @@ ensure_target_current() {
 
 ensure_wasm_copies_match() {
   local name="$1"
-  local build_cmd="$2"
-  local source_js="$3"
-  local target_js="$4"
-  local source_wasm="$5"
-  local target_wasm="$6"
+  local build_profile="$2"
+  local build_cmd="$3"
+  local source_js="$4"
+  local target_js="$5"
+  local source_wasm="$6"
+  local target_wasm="$7"
   if cmp -s \
     "$source_js" \
     "$target_js" \
@@ -140,15 +161,15 @@ ensure_wasm_copies_match() {
     return
   fi
 
-  echo "wasm: $name editor copy differs; running $build_cmd" >&2
-  "$build_cmd"
+  echo "wasm: $name editor copy differs; running $build_cmd $build_profile" >&2
+  "$build_cmd" "$build_profile"
   if ! cmp -s \
     "$source_js" \
     "$target_js" \
     || ! cmp -s \
       "$source_wasm" \
       "$target_wasm"; then
-    echo "wasm: $name editor copy still differs after $build_cmd" >&2
+    echo "wasm: $name editor copy still differs after $build_cmd $build_profile" >&2
     exit 1
   fi
 }
@@ -247,6 +268,7 @@ html_play_preview_sources=(
 
 ensure_target_current \
   puzzle_wasm \
+  "$wasm_profile" \
   tools/build_wasm_editor.sh \
   crates/html_editor/static/wasm/puzzle_wasm.js \
   crates/html_editor/static/wasm/puzzle_wasm_bg.wasm \
@@ -258,6 +280,7 @@ ensure_target_current \
 
 ensure_target_current \
   puzzle_wasm_player \
+  "$wasm_profile" \
   tools/build_wasm_player.sh \
   crates/web_audio/generated/puzzle_audio_worklet.js \
   crates/html_play/static/wasm_player/puzzle_wasm_player.js \
@@ -275,6 +298,7 @@ ensure_target_current \
 
 ensure_target_current \
   puzzle_wasm_game \
+  "$wasm_profile" \
   tools/build_wasm_game.sh \
   crates/html_play/static/wasm_game/puzzle_wasm_game.js \
   crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm \
@@ -287,6 +311,7 @@ ensure_target_current \
 
 ensure_wasm_copies_match \
   puzzle_wasm_player \
+  "$wasm_profile" \
   tools/build_wasm_player.sh \
   crates/html_play/static/wasm_player/puzzle_wasm_player.js \
   crates/html_editor/static/wasm_player/puzzle_wasm_player.js \
@@ -294,6 +319,7 @@ ensure_wasm_copies_match \
   crates/html_editor/static/wasm_player/puzzle_wasm_player_bg.wasm
 ensure_wasm_copies_match \
   puzzle_wasm_game \
+  "$wasm_profile" \
   tools/build_wasm_game.sh \
   crates/html_play/static/wasm_game/puzzle_wasm_game.js \
   crates/html_editor/static/wasm_game/puzzle_wasm_game.js \

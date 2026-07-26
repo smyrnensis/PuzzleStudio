@@ -9,7 +9,6 @@ fn main() {
 
     println!("cargo:rerun-if-changed=static/editor.html");
     println!("cargo:rerun-if-changed=docs/editor.md");
-    println!("cargo:rerun-if-changed=docs/metadata.md");
     println!("cargo:rerun-if-changed=docs/puzzle-block.md");
     println!("cargo:rerun-if-changed=docs/layers.md");
     println!("cargo:rerun-if-changed=docs/groups.md");

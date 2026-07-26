@@ -20,7 +20,7 @@ try PuzzleStudio without installing anything.
 
 Use it when you want to:
 
-- edit `.puzzle` and `.puzzle3` files
+- edit `.puzzle` files
 - preview levels in the browser
 - try the 2D puzzle flow and the prototype 3D authoring flow
 - import or export project files from the editor UI

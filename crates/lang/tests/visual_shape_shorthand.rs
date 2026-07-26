@@ -17,7 +17,7 @@ fn visual_pattern(source: &str) -> Vec<String> {
 fn source_with_visual_body(visual_body: &str, shapes: &str) -> String {
     format!(
         r##"
-title = visual shape resolution
+const title = "visual shape resolution"
 
 puzzle default {{
 layers {{

@@ -1,5 +1,5 @@
-title = "Microban"
-author = "Levels by David Skinner"
+const title = "Microban"
+const author = "Levels by David Skinner"
 
 theme = "puzzlescript"
 
@@ -33,8 +33,7 @@ next_level
 
 visuals {
 
-visual {
-selector = Background
+visual Background {
 colors = #90ee90 #008000
 duration = 500ms
 11111
@@ -68,8 +67,7 @@ duration = 500ms
 11111
 }
 
-visual {
-selector = Wall
+visual Wall {
 colors = #a46322 #493c2b
 duration = 500ms
 00010

@@ -244,6 +244,51 @@ When a generated file looks relevant, first find the source that owns it instead
 of reading or patching the generated output. Owner-specific generated-artifact
 rules live in the corresponding folder `AGENTS.md`.
 
+## Mutation Authority And Gates
+
+Mutation authority belongs to a concrete action, not permanently to a session,
+plan, goal, or file. It exists only while the action follows from a live mandate
+and the current session owns the affected scope. Session labels, process
+topology, historical context, an old plan, and the ability to edit are not
+authority by themselves.
+
+Revalidate that causal chain before the first mutation and whenever control may
+have changed: after new user input, resume, task or owner handoff, a delayed
+subagent result, or an external change to the intended contract. A live mandate
+must be evidenced by an applicable user instruction in the current conversation
+or an explicit handoff, with later control input checked for whether it preserves,
+adds to, replaces, or pauses that work. After a control discontinuity, a prior
+mandate remains live only when the new control input establishes continuity. A
+bare request to resume does so only when the current conversation contains
+exactly one unfinished, non-conflicting mandate; a delayed result is never
+continuity evidence by itself. The session's account of an old request is not
+evidence that it remains active. If later input conflicts or its effect is
+unclear, remain read-only until the mandate is resolved.
+
+First acquisition of an uncontested scope requires a live mandate, no overlapping
+dirty, staged, or untracked work, and no known competing assignment. Record the
+pre-mutation baseline immediately before the first write. Retention after that
+write is evidenced by the baseline and the traceable edits this session made
+from it. A contested scope instead requires an explicit handoff or a user
+instruction that resolves the competing mandate. A hash first recorded after
+overlapping work was discovered does not establish prior ownership.
+
+Before writing, identify the mandate, why the action follows from it, and the
+evidence that this session acquired or retained the affected scope. Missing or
+competing provenance makes the current session a potential entrant; performing
+an edit cannot create authority retroactively.
+
+A gate is an authority boundary, not advice to weigh against task completion.
+Classify its trigger only from the named read-only evidence. If that evidence is
+unresolved, suspend the current session's mutation rather than interpreting the
+gate as clear. The current session must not waive, reinterpret, or clear a gate
+that suspended its authority using confidence, apparent safety, patch size,
+recoverability, test results, urgency, or ability to work around the condition.
+The suspension applies to that session and scope; it does not revoke another
+owner's established mandate. Every gate must name both the authority that can
+clear it and the evidence that proves clearance; absent either, mutation remains
+suspended. The gated mutation may not be used as the experiment.
+
 ## Concurrent Sessions And Worktree Ownership
 
 Prefer separate git worktrees for parallel agent sessions. A shared dirty
@@ -251,13 +296,34 @@ worktree is not a safe coordination mechanism: the filesystem does not record
 which session owns a change, and repeatedly repairing drift in the same file can
 silently overwrite another session's work.
 
-Before editing any file that is dirty, staged, untracked, or likely to be touched
-by another session, record its current content hash after reading it. Immediately
-before applying a patch, check the hash again. If the hash changed, treat that as
-evidence of concurrent ownership, not as an automatic reason to stop. Re-read the
-latest file and its diff, identify whether the concurrent change overlaps the
-lines or behavior contract you intend to change, and reconstruct your smallest
-patch against the latest content while preserving all unrelated work.
+When accepting a mandate that may mutate files, record the pre-mutation hashes
+and intended semantic scope before the first edit. For any file that is already
+dirty, staged, or untracked, establish authority from earlier traceable edits by
+this session or through the ownership-gate clearance defined below; an assignment
+alone and the newly recorded hash prove nothing about prior ownership. Existing
+overlapping changes without that provenance are an early signal that this session
+may be entering another owner's scope, so do not first edit and wait for a later
+collision. Immediately before each patch, check the hash again and classify any
+change against the same recorded provenance.
+
+When the change is demonstrably unrelated, reconstruct your smallest patch
+against the latest content while preserving all unrelated work. When an
+overlapping change was made by this session under its live mandate, continue
+from the latest owned state. When this session cannot show that it owned the
+contract before an overlapping change appeared, it is the entrant: remain
+read-only for that contract. This ownership gate is cleared only by a handoff
+from the established owner, a user instruction that explicitly resolves the
+known competing mandate by revoking or repartitioning its scope, or assignment
+to a demonstrably non-overlapping scope. A generic assignment that leaves the
+competing scope intact is not clearance. If multiple mandates have valid
+competing provenance and no unique incumbent can be established, the current
+session must not appoint itself; mutation remains suspended until the user
+revokes or repartitions the overlap. An established owner does not lose its
+mandate merely because an entrant wrote into the same area; it may continue
+non-overlapping work, but must preserve the foreign edit and request coordination
+before a mutation would overwrite it. Repeated changes, reversions, or
+disappearing content strengthen the evidence of interference; local confidence
+that the edits can be merged safely does not create ownership.
 
 Do not revert, overwrite, normalize, or otherwise repair concurrent changes merely
 to restore the state you first inspected. Do not alter authored inputs or generator
@@ -266,19 +332,16 @@ satisfy formatting, or force a particular generated result. Run verification
 against the combined current authored state, and regenerate derived outputs from
 that state when required. Report failures that belong to concurrent work without
 trying to absorb or conceal them.
-Ask the user only when the concurrent change overlaps the same lines or semantic
-contract, makes ownership impossible to determine, or prevents a safe minimal
-patch. Treat repeated patch context mismatches, content that reverts between
-commands, or a change that disappears after a test/build as evidence of another
-owner or generator and narrow the work accordingly.
 
-Do not edit an `AM`, staged, or otherwise externally owned file unless the user
-explicitly assigns that file to the current session or you can identify the
-existing changes as your own. If shared-worktree editing is unavoidable, use the
-hash-and-overlap check above as the minimum safety gate; separate worktrees remain
-the preferred structure. Apply this ownership check to authored inputs, not to a
-known generated artifact as though it were an independently edited source file.
-Generated outputs follow the regeneration rules below.
+Do not edit an `AM`, staged, or otherwise externally owned file unless authority
+over its existing changes was acquired or transferred under the rules above. A
+user assignment permits entry only when no competing provenance exists or when
+it explicitly clears the ownership gate. If shared-worktree editing is
+unavoidable, use the hash-and-overlap check above as the minimum safety gate;
+separate worktrees remain the preferred structure. Apply this ownership check to
+authored inputs, not to a known generated artifact as though it were an
+independently edited source file. Generated outputs follow the regeneration
+rules below.
 
 ## Diagnose Briefly, Then Act
 

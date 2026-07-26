@@ -8,7 +8,7 @@ Open a file, preview it, then make the change suggested by its `TRY` comment.
 3. `03-sound.puzzle` — movement sounds, clear sounds, and scene music
 4. `04-animation.puzzle` — visual frames, directional visuals, and movement tween
 5. `05-tags-marks-and-routines.puzzle` — reusable variants and staged rules
-6. `06-3d.puzzle3` — a grid puzzle with depth and a camera
+6. `06-3d.puzzle` — a grid puzzle with depth and a camera
 7. `07-meta-level.puzzle` — one puzzle used to select levels in another puzzle
 
 The files do not import one another. Copy or download any one of them as a

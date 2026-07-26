@@ -57,10 +57,6 @@ impl RuleEffect {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadedDocument {
-    pub title: String,
-    pub subtitle: Option<String>,
-    pub author: Option<String>,
-    pub homepage: Option<String>,
     pub default_wait_ms: u64,
     pub input_buffer: InputBufferDef,
     pub animation: AnimationDef,
@@ -103,10 +99,6 @@ pub struct RuleDebugInfo {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LoadedGridGame<const D: usize, Size: GridSize<D>> {
-    pub title: String,
-    pub subtitle: Option<String>,
-    pub author: Option<String>,
-    pub homepage: Option<String>,
     pub game: GridCompiledGame<D>,
     #[serde(default)]
     pub inputs: Vec<GridInput<D>>,
@@ -451,11 +443,19 @@ pub struct VisualOrderPriorityDef {
 pub struct VisualAliasDef {
     pub object: String,
     pub visual: String,
+    #[serde(skip)]
+    pub source_line: Option<String>,
+    #[serde(skip)]
+    pub source_line_number: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VisualDef {
     pub name: String,
+    #[serde(skip)]
+    pub source_line: Option<String>,
+    #[serde(skip)]
+    pub source_line_number: Option<usize>,
     pub kind: VisualKind,
     /// Canonical cell-art frames. Each frame contains one or more parallel planes.
     #[serde(default)]

@@ -517,6 +517,7 @@ export function createSourceEditor(parent) {
   let readOnly = false;
   let offsetMapSource = null;
   let offsetMaps = null;
+  let sourcePointerPress = null;
 
   const offsetsForSource = (source) => {
     const expected = String(source || "");
@@ -526,6 +527,55 @@ export function createSourceEditor(parent) {
     }
     return offsetMaps;
   };
+
+  nativeAddEventListener("mousedown", (event) => {
+    if (event.button !== 0 || event.detail !== 1 || event.target.closest("button")) {
+      sourcePointerPress = null;
+      return;
+    }
+    sourcePointerPress = {
+      x: event.clientX,
+      y: event.clientY,
+      moved: false,
+    };
+  }, true);
+  nativeAddEventListener("mousemove", (event) => {
+    if (!sourcePointerPress || !(event.buttons & 1)) {
+      return;
+    }
+    if (
+      Math.abs(event.clientX - sourcePointerPress.x) > 3
+      || Math.abs(event.clientY - sourcePointerPress.y) > 3
+    ) {
+      sourcePointerPress.moved = true;
+    }
+  }, true);
+  const collapseSourcePointerClick = (event) => {
+    const press = sourcePointerPress;
+    if (!press || press.moved || event.button !== 0 || event.detail !== 1) {
+      return;
+    }
+    const offset = view.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (offset !== null) {
+      view.dispatch({
+        selection: EditorSelection.cursor(offset),
+        annotations: Transaction.userEvent.of("select.pointer"),
+      });
+    }
+  };
+  nativeAddEventListener("mouseup", (event) => {
+    const pointer = {
+      button: event.button,
+      detail: event.detail,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
+    queueMicrotask(() => collapseSourcePointerClick(pointer));
+  });
+  nativeAddEventListener("click", (event) => {
+    collapseSourcePointerClick(event);
+    sourcePointerPress = null;
+  }, true);
 
   content.id = "sourceEditor";
   // This adapter is the migration boundary for existing editor consumers. It

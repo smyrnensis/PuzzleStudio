@@ -11,6 +11,7 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LevelBlock {
+    pub(crate) source: LogicalLine,
     pub(crate) name: String,
     pub(crate) source_name: String,
     pub(crate) source_span: SourceSpan,
@@ -84,20 +85,21 @@ pub(crate) fn recognize_spatial_levels(
                     }
                 }
             }
-            split_spatial_level_slices(&level.lines)?;
+            split_spatial_level_slices(&level.source, &level.lines)?;
         }
         Ok(())
     })();
     ParseProduct::new(value, recognition)
 }
 
-pub(crate) fn split_spatial_level_slices<Line: AsRef<str>>(
-    rows: &[Line],
-) -> Result<Vec<Vec<&Line>>, DiagnosticReport> {
-    let mut slices = Vec::<Vec<&Line>>::new();
-    let mut current = Vec::<&Line>::new();
+pub(crate) fn split_spatial_level_slices<'a>(
+    source: &LogicalLine,
+    rows: &'a [LogicalLine],
+) -> Result<Vec<Vec<&'a LogicalLine>>, DiagnosticReport> {
+    let mut slices = Vec::<Vec<&'a LogicalLine>>::new();
+    let mut current = Vec::<&'a LogicalLine>::new();
     for row in rows {
-        let text = row.as_ref();
+        let text = row.text.as_str();
         if text.trim().is_empty() {
             if !current.is_empty() {
                 slices.push(std::mem::take(&mut current));
@@ -106,8 +108,9 @@ pub(crate) fn split_spatial_level_slices<Line: AsRef<str>>(
         }
         if text == "-" {
             if current.is_empty() {
-                return Err(DiagnosticReport::error(
-                    "3D level slice separator requires a preceding ASCII slice".to_string(),
+                return Err(error_at(
+                    row,
+                    "3D level slice separator requires a preceding ASCII slice",
                 ));
             }
             slices.push(std::mem::take(&mut current));
@@ -115,18 +118,17 @@ pub(crate) fn split_spatial_level_slices<Line: AsRef<str>>(
         }
         current.push(row);
     }
-    if current.is_empty() && rows.last().is_some_and(|row| row.as_ref() == "-") {
-        return Err(DiagnosticReport::error(
-            "3D level slice separator requires a following ASCII slice".to_string(),
+    if current.is_empty() && rows.last().is_some_and(|row| row.text == "-") {
+        return Err(error_at(
+            rows.last().expect("a trailing separator exists"),
+            "3D level slice separator requires a following ASCII slice",
         ));
     }
     if !current.is_empty() {
         slices.push(current);
     }
     if slices.is_empty() {
-        return Err(DiagnosticReport::error(
-            "level requires at least one height slice".to_string(),
-        ));
+        return Err(error_at(source, "level requires at least one height slice"));
     }
     Ok(slices)
 }
@@ -139,6 +141,7 @@ pub(crate) struct ParsedLevel {
 
 pub(crate) fn parse_level(
     game: &CompiledGame,
+    source: &LogicalLine,
     lines: &[LogicalLine],
     empty: Option<char>,
     char_objects: &HashMap<char, Vec<ObjectId>>,
@@ -146,7 +149,7 @@ pub(crate) fn parse_level(
 ) -> ParseProduct<Result<ParsedLevel, DiagnosticReport>> {
     let recognition = recognize_level_display(lines, empty, char_objects);
     let value = (|| {
-        let regions = split_regions(lines)?;
+        let regions = split_regions(source, lines)?;
         let layout = lower_regions(&regions);
         let mut state = State::empty_with_variables(
             layout.width as u16,
@@ -154,7 +157,8 @@ pub(crate) fn parse_level(
             game.layer_count,
             game.object_count(),
             variable_defaults.to_vec(),
-        )?;
+        )
+        .map_err(|error| error_at(source, format!("invalid level dimensions: {error:?}")))?;
         let authored_layer_count = layout
             .regions
             .iter()
@@ -170,48 +174,63 @@ pub(crate) fn parse_level(
                     game.object_count(),
                     variable_defaults.to_vec(),
                 )
+                .map_err(|error| error_at(source, format!("invalid level dimensions: {error:?}")))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut placements = HashMap::<(usize, usize, LayerId), ObjectId>::new();
+        let mut placements = HashMap::<(usize, usize, LayerId), (ObjectId, LogicalLine)>::new();
         for placed_region in &layout.regions {
             for (authored_layer, layer) in placed_region.region.layers.iter().enumerate() {
                 for (y, row) in layer.iter().enumerate() {
-                    for (x, ch) in row.chars().enumerate() {
-                        let Some(objects) = level_cell_objects(ch, empty, char_objects)? else {
+                    for (x, ch) in row.text.chars().enumerate() {
+                        let Some(objects) = level_cell_objects(ch, empty, char_objects)
+                            .map_err(|error| error_at(row, error.message()))?
+                        else {
                             continue;
                         };
                         let mut char_layers = HashMap::<LayerId, ObjectId>::new();
                         for object in objects {
                             let object_layer = game
                                 .object_layer(*object)
-                                .ok_or(StateError::UnknownObject { object: *object })?;
+                                .ok_or(StateError::UnknownObject { object: *object })
+                                .map_err(|error| {
+                                    error_at(row, format!("invalid level cell: {error:?}"))
+                                })?;
                             if let Some(existing) = char_layers.insert(object_layer, *object) {
-                                return Err(StateError::LayerOccupied {
-                                    position: puzzle_kernel::GridCoord::new([
-                                        (placed_region.x + x) as u16,
-                                        y as u16,
-                                    ]),
-                                    layer: object_layer,
-                                    existing,
-                                    attempted: *object,
-                                }
-                                .into());
+                                return Err(error_at(
+                                    row,
+                                    format!(
+                                        "invalid level cell: {:?}",
+                                        StateError::LayerOccupied {
+                                            position: puzzle_kernel::GridCoord::new([
+                                                (placed_region.x + x) as u16,
+                                                y as u16,
+                                            ]),
+                                            layer: object_layer,
+                                            existing,
+                                            attempted: *object,
+                                        }
+                                    ),
+                                ));
                             }
-                            placements.insert((placed_region.x + x, y, object_layer), *object);
-                            layer_states[authored_layer].place_object(
-                                game,
-                                (placed_region.x + x) as u16,
-                                y as u16,
-                                *object,
-                            )?;
+                            placements.insert(
+                                (placed_region.x + x, y, object_layer),
+                                (*object, row.clone()),
+                            );
+                            layer_states[authored_layer]
+                                .place_object(game, (placed_region.x + x) as u16, y as u16, *object)
+                                .map_err(|error| {
+                                    error_at(row, format!("invalid level cell: {error:?}"))
+                                })?;
                         }
                     }
                 }
             }
         }
-        for ((x, y, _), object) in placements {
-            state.place_object(game, x as u16, y as u16, object)?;
+        for ((x, y, _), (object, row)) in placements {
+            state
+                .place_object(game, x as u16, y as u16, object)
+                .map_err(|error| error_at(&row, format!("invalid level cell: {error:?}")))?;
         }
 
         Ok(ParsedLevel {
@@ -273,21 +292,29 @@ pub(crate) fn level_cell_objects<'a>(
     ch: char,
     empty: Option<char>,
     char_objects: &'a HashMap<char, Vec<ObjectId>>,
-) -> Result<Option<&'a [ObjectId]>, DiagnosticReport> {
+) -> Result<Option<&'a [ObjectId]>, UnknownLevelChar> {
     if let Some(objects) = char_objects.get(&ch) {
         return Ok(Some(objects));
     }
     if Some(ch) == empty {
         return Ok(None);
     }
-    Err(DiagnosticReport::error(format!(
-        "unknown level char '{ch}'"
-    )))
+    Err(UnknownLevelChar { ch })
+}
+
+pub(crate) struct UnknownLevelChar {
+    ch: char,
+}
+
+impl UnknownLevelChar {
+    pub(crate) fn message(&self) -> String {
+        format!("unknown level char '{}'", self.ch)
+    }
 }
 
 #[derive(Clone, Debug)]
 struct LevelAsciiRegion {
-    layers: Vec<Vec<String>>,
+    layers: Vec<Vec<LogicalLine>>,
     width: usize,
     height: usize,
 }
@@ -306,45 +333,65 @@ struct LoweredLevelLayout {
     regions: Vec<PlacedLevelAsciiRegion>,
 }
 
-fn split_regions(lines: &[LogicalLine]) -> Result<Vec<LevelAsciiRegion>, DiagnosticReport> {
+fn split_regions(
+    source: &LogicalLine,
+    lines: &[LogicalLine],
+) -> Result<Vec<LevelAsciiRegion>, DiagnosticReport> {
     let mut regions = Vec::<LevelAsciiRegion>::new();
-    let mut current_layers = Vec::<Vec<String>>::new();
-    let mut current_rows = Vec::<String>::new();
+    let mut current_layers = Vec::<Vec<LogicalLine>>::new();
+    let mut current_rows = Vec::<LogicalLine>::new();
+    let mut trailing_separator = None::<LogicalLine>;
     for line in lines {
         if line.trim().is_empty() {
-            flush_region(&mut regions, &mut current_layers, &mut current_rows)?;
+            flush_region(
+                &mut regions,
+                &mut current_layers,
+                &mut current_rows,
+                trailing_separator.take(),
+            )?;
             continue;
         }
         if line.as_ref() == "+" {
             if current_rows.is_empty() {
-                return Err(DiagnosticReport::error(
-                    "level layer separator requires a preceding ASCII layer".to_string(),
+                return Err(error_at(
+                    line,
+                    "level layer separator requires a preceding ASCII layer",
                 ));
             }
             current_layers.push(std::mem::take(&mut current_rows));
+            trailing_separator = Some(line.clone());
             continue;
         }
-        current_rows.push(line.text.clone());
+        trailing_separator = None;
+        current_rows.push(line.clone());
     }
-    flush_region(&mut regions, &mut current_layers, &mut current_rows)?;
+    flush_region(
+        &mut regions,
+        &mut current_layers,
+        &mut current_rows,
+        trailing_separator,
+    )?;
     if regions.is_empty() {
-        return Err(DiagnosticReport::error(
-            "level requires at least one row".to_string(),
-        ));
+        return Err(error_at(source, "level requires at least one row"));
     }
     Ok(regions)
 }
 
 fn flush_region(
     regions: &mut Vec<LevelAsciiRegion>,
-    current_layers: &mut Vec<Vec<String>>,
-    current_rows: &mut Vec<String>,
+    current_layers: &mut Vec<Vec<LogicalLine>>,
+    current_rows: &mut Vec<LogicalLine>,
+    trailing_separator: Option<LogicalLine>,
 ) -> Result<(), DiagnosticReport> {
     if !current_rows.is_empty() {
         current_layers.push(std::mem::take(current_rows));
     } else if !current_layers.is_empty() {
-        return Err(DiagnosticReport::error(
-            "level layer separator requires a following ASCII layer".to_string(),
+        let separator = trailing_separator
+            .as_ref()
+            .expect("a separator exists when its following layer is missing");
+        return Err(error_at(
+            separator,
+            "level layer separator requires a following ASCII layer",
         ));
     }
     if current_layers.is_empty() {
@@ -355,44 +402,46 @@ fn flush_region(
     Ok(())
 }
 
-fn validate_region_layers(layers: Vec<Vec<String>>) -> Result<LevelAsciiRegion, DiagnosticReport> {
+fn validate_region_layers(
+    layers: Vec<Vec<LogicalLine>>,
+) -> Result<LevelAsciiRegion, DiagnosticReport> {
     let mut expected_size = None::<(usize, usize)>;
     for layer in &layers {
         let Some(first_row) = layer.first() else {
-            return Err(DiagnosticReport::error(
-                "level layer requires at least one row".to_string(),
-            ));
+            unreachable!("empty level layers are rejected before region validation");
         };
-        let width = first_row.chars().count();
-        if width == 0 || layer.iter().any(|row| row.chars().count() != width) {
-            return Err(DiagnosticReport::error(
-                "level regions must be rectangular".to_string(),
-            ));
+        let width = first_row.text.chars().count();
+        if let Some(row) = layer
+            .iter()
+            .find(|row| width == 0 || row.text.chars().count() != width)
+        {
+            return Err(error_at(row, "level regions must be rectangular"));
         }
-        if layer.iter().any(|row| row.contains(['{', '}'])) {
-            return Err(DiagnosticReport::error(
-                "ASCII rows cannot contain braces".to_string(),
-            ));
+        if let Some(row) = layer.iter().find(|row| row.text.contains(['{', '}'])) {
+            return Err(error_at(row, "ASCII rows cannot contain braces"));
         }
         let size = (width, layer.len());
         if let Some(expected) = expected_size {
             if size != expected {
-                return Err(DiagnosticReport::error(
-                    "level ASCII layers in the same region must have the same size".to_string(),
+                return Err(error_at(
+                    first_row,
+                    "level ASCII layers in the same region must have the same size",
                 ));
             }
         } else {
             expected_size = Some(size);
         }
     }
-    let (width, height) = expected_size.ok_or_else(|| {
-        DiagnosticReport::error("level region requires at least one layer".to_string())
-    })?;
+    let (width, height) = expected_size.expect("validated regions contain at least one layer");
     Ok(LevelAsciiRegion {
         layers,
         width,
         height,
     })
+}
+
+pub(crate) fn error_at(line: &LogicalLine, message: impl Into<String>) -> DiagnosticReport {
+    DiagnosticReport::error_at_source_line_number(message, line.text.clone(), line.line)
 }
 
 fn lower_regions(regions: &[LevelAsciiRegion]) -> LoweredLevelLayout {

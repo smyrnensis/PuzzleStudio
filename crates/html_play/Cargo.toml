@@ -25,6 +25,11 @@ puzzle-presentation-json = { path = "../presentation_json" }
 puzzle-solver-runtime = { path = "../solver_runtime", optional = true }
 serde_json = "1"
 
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 [dev-dependencies]
 puzzle-audio-contract = { path = "../audio_contract" }
 puzzle-player-bootstrap = { path = "../player_bootstrap" }
+=======
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+puzzle-workspace = { path = "../workspace" }
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544

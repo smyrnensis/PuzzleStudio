@@ -1193,6 +1193,7 @@ fn parse_named_level_body(
     let (source_span, body_span) = braced_level_source_spans(lines, start, i);
     Ok((
         canonicalize_level_block(LevelBlock {
+            source: lines[start].clone(),
             name,
             source_name,
             source_span,
@@ -1279,6 +1280,9 @@ fn parse_unbraced_level_body(
     let source_name = source_header.map_or_else(String::new, |_| name.clone());
     Ok((
         canonicalize_level_block(LevelBlock {
+            source: source_header
+                .cloned()
+                .unwrap_or_else(|| level_lines[0].clone()),
             name,
             source_name,
             source_span,
@@ -1543,6 +1547,7 @@ fn parse_level_legend_syntax(
 
 #[derive(Clone, Debug)]
 struct PreparedLevelBody {
+    source: source::LogicalLine,
     name: String,
     pack: Option<String>,
     puzzle: String,
@@ -1657,7 +1662,7 @@ fn parse_level_event_sugar(line: &str) -> Result<Option<StatementAst>, Diagnosti
             EffectAst::PlaySfx { .. }
                 | EffectAst::Wait { .. }
                 | EffectAst::WaitAnimation
-                | EffectAst::PresentComponent { .. }
+                | EffectAst::Message { .. }
         )
     }) {
         return Err(parse_error(

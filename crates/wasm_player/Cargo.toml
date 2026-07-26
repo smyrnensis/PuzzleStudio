@@ -16,8 +16,14 @@ default = []
 bevy = { version = "0.19", default-features = false, features = ["2d", "3d", "ui"] }
 puzzle-bevy-player = { path = "../bevy_player" }
 puzzle-game-runtime = { path = "../game_runtime", default-features = false }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 puzzle-player-bootstrap = { path = "../player_bootstrap" }
 puzzle-runtime-contract = { path = "../runtime_contract" }
+=======
+puzzle-presentation = { path = "../presentation" }
+puzzle-runtime-contract = { path = "../runtime_contract" }
+serde_json = "1"
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 wasm-bindgen = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

@@ -1,6 +1,6 @@
 # Start Here
-PuzzleStudio reads `.puzzle` files for 2D models and `.puzzle3` files for 3D
-models. Start with one `puzzle` or `puzzle` block. A model owns its objects,
+PuzzleStudio reads `.puzzle` files. Each `puzzle` block declares its own
+dimension and owns its objects,
 levels, rules, lifecycle, and presentation.
 
 ## Smallest Shape
@@ -70,8 +70,8 @@ gameplay entry point.
 ## Basic Path
 Read the Basic pages in order when making your first game.
 
-Metadata and Puzzle Block define the game and its playable model. Layers,
-Legend, and Levels make a board that the editor can load. Rewrite Rules, Input
+Puzzle Block defines the playable model. Layers, Legend, and Levels make a board
+that the editor can load. Rewrite Rules, Input
 Rules, and Movement make it respond to input. Win Conditions make a level
 finish, and Visuals make declared objects visible.
 

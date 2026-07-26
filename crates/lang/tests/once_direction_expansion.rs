@@ -5,7 +5,7 @@ use puzzle_lang::parse_game2d;
 fn once_input_wildcard_rotation_fires_only_one_lowered_alternative() {
     let loaded = parse_game2d(
         r#"
-title = once_input_wildcard_rotation
+const title = once_input_wildcard_rotation
 
 puzzle default {
 layers {
@@ -55,7 +55,7 @@ U.D.
 fn explicit_direction_loop_keeps_one_once_boundary_per_expanded_statement() {
     let loaded = parse_game2d(
         r#"
-title = explicit_once_direction_boundaries
+const title = explicit_once_direction_boundaries
 
 puzzle default {
 layers {

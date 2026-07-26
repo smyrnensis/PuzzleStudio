@@ -79,6 +79,7 @@ impl LoweredEffects {
 }
 
 fn lower_programs(
+    model_source: &source::LogicalLine,
     definitions: Vec<RuleDefinitionAst>,
     main_statements: Option<Vec<StatementAst>>,
     main_local_frame: Option<LocalFrame<ObjectId>>,
@@ -116,7 +117,11 @@ fn lower_programs(
         }
     }
     let Some(main_statements) = main_statements else {
-        return Err(DiagnosticReport::error("missing puzzle rules".to_string()));
+        return Err(DiagnosticReport::error_at_source_line_number(
+            "missing puzzle rules",
+            model_source.text.clone(),
+            model_source.line,
+        ));
     };
     let mut diagnostics = collect_program_reference_diagnostics(
         &definitions_by_name,
@@ -2571,6 +2576,7 @@ impl<'a> ProgramLowerer<'a> {
                         .into(),
                     );
                 }
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
                 EffectAst::PresentComponent { text, literal } => {
                     lowered.ordered.push(
                         RuntimeEffect::PresentComponent {
@@ -2585,6 +2591,15 @@ impl<'a> ProgramLowerer<'a> {
                         }
                         .into(),
                     );
+=======
+                EffectAst::Message { text, literal } => {
+                    lowered
+                        .ordered
+                        .push(puzzle_runtime_contract::standard_message_effect(
+                            text.clone(),
+                            *literal,
+                        ));
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                 }
                 EffectAst::Scene(effect) => {
                     lowered.ordered.push(RuleEffect::Lifecycle(effect.clone()));

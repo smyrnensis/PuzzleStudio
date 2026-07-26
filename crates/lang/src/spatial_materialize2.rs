@@ -114,6 +114,8 @@ mod tests {
         VisualsDef {
             entries: vec![VisualDef {
                 name: "test".to_string(),
+                source_line: None,
+                source_line_number: None,
                 kind: VisualKind::Solid("#fff".to_string()),
                 frames: Vec::new(),
                 transforms: vec![transform],

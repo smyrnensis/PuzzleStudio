@@ -496,7 +496,7 @@ impl EffectAst {
             | EffectAst::Wait { .. }
             | EffectAst::WaitAnimation
             | EffectAst::EmitVisual { .. }
-            | EffectAst::PresentComponent { .. }
+            | EffectAst::Message { .. }
             | EffectAst::Scene(_) => RewriteEffectCommandSyntax::Emission,
             EffectAst::Cancel
             | EffectAst::Win

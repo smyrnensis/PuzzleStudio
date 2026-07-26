@@ -572,10 +572,14 @@ soundsSfxVolumeInput.addEventListener("input", renderSoundSfx);
 soundsSfxCopyButton.addEventListener("click", () => {
   copySoundLine("sfx").catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
 });
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 soundsSfxInsertButton.addEventListener("click", () => {
   insertSoundsDefinition("sfx")
     .catch((error) => setStatus(`Could not insert sounds: ${error?.message || error}`, "is-error"));
 });
+=======
+soundsSfxInsertButton.addEventListener("click", () => insertSoundsDefinition("sfx"));
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 soundsMusicTitleInput.addEventListener("input", updateSoundMusic);
 soundsMusicSeedInput.addEventListener("input", updateSoundMusic);
 soundsMusicHeightInput.addEventListener("input", updateSoundMusic);
@@ -585,10 +589,14 @@ soundsMusicVolumeInput.addEventListener("input", updateSoundMusic);
 soundsMusicCopyButton.addEventListener("click", () => {
   copySoundLine("music").catch((error) => setStatus(`Could not copy sounds: ${error?.message || error}`, "is-error"));
 });
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 soundsMusicInsertButton.addEventListener("click", () => {
   insertSoundsDefinition("music")
     .catch((error) => setStatus(`Could not insert sounds: ${error?.message || error}`, "is-error"));
 });
+=======
+soundsMusicInsertButton.addEventListener("click", () => insertSoundsDefinition("music"));
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 soundsMusicProgress.addEventListener("input", () => seekSoundMusic(Number(soundsMusicProgress.value)));
 soundsMusicProgress.addEventListener("keydown", (event) => {
   if (event.key === "ArrowLeft" || event.key === "ArrowRight") {

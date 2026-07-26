@@ -1,4 +1,4 @@
-title = again_atomic
+const title = again_atomic
 
 puzzle board {
 layers {

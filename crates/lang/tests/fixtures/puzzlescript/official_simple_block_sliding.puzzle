@@ -1,6 +1,6 @@
-title = "Simple Block Sliding Game"
-author = "increpare"
-homepage = "www.increpare.com"
+const title = "Simple Block Sliding Game"
+const author = "increpare"
+const homepage = "www.increpare.com"
 
 scene title {
 layout {

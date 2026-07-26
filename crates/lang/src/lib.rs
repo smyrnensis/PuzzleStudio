@@ -38,9 +38,9 @@ mod workspace;
 
 use solver_surface::{SolverSurfacePatternArg, SolverSurfaceQueryArg};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
-use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 use puzzle_authoring::{SelectorMark, is_variable_update_operator};
 pub use puzzle_scene::{
@@ -145,7 +145,10 @@ pub use puzzle3_model::{
 pub use puzzle3_visual::{VoxelColor, VoxelFrame, VoxelVisual, VoxelVisualSet};
 pub use puzzle3_visual_fixture::{
     VisualFixtureExportError, export_visual_fixture_json, export_visual_fixture_json_with_scenes,
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     export_visual_fixture_json_with_title, export_visual_fixture_json_with_title_and_scenes,
+=======
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     runtime_puzzle3_cells, runtime_puzzle3_resources, runtime_puzzle3_size,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
@@ -156,8 +159,14 @@ use source::{
 };
 pub use visual_spatial::{SpatialVisualAffine, evaluate_spatial_visual_transforms};
 pub use workspace::{
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     WorkspacePresentationManifest, WorkspaceSourceDocument, loaded_document_presentation_manifest,
     workspace_presentation_manifest,
+=======
+    WorkspaceAnalysis, WorkspaceGraphDiagnostic, WorkspaceImportEdge, WorkspaceImportStatus,
+    WorkspaceIndex, WorkspaceIndexDocument, WorkspacePath, WorkspacePresentationManifest,
+    WorkspaceSourceDocument, workspace_presentation_manifest_from_document,
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 };
 
 pub fn parse_level_ascii_state(
@@ -172,15 +181,31 @@ pub fn parse_level_ascii_state(
         .enumerate()
         .map(|(index, line)| source::LogicalLine::new(line, index + 1))
         .collect::<Vec<_>>();
-    let parsed = parse_level(game, &lines, Some(empty), char_objects, variable_defaults).value?;
+    let source = lines
+        .first()
+        .cloned()
+        .unwrap_or_else(|| source::LogicalLine::new("level", 1));
+    let parsed = parse_level(
+        game,
+        &source,
+        &lines,
+        Some(empty),
+        char_objects,
+        variable_defaults,
+    )
+    .value?;
     Ok((parsed.state, parsed.regions))
 }
 pub use source_analysis::{
     SourceAnalysis, SourceAnalysisEdit, SourceAnalysisEditResult, analyze_source,
-    analyze_source_for_profile, analyze_source_json,
+    analyze_source_for_owner_dimension, analyze_source_json,
 };
+<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 pub use source_import::{SourceImportRange, SourceImportReference};
 pub use source_level_edit::{LevelLegendDraft, LevelSourceRequest, LevelSourceResponse};
+=======
+pub use source_import::{SourceImportDeclaration, SourceImportRange, SourceImportReference};
+>>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
 pub use source_sound_edit::{
     SoundDefinitionDraft, SoundDefinitionInspection, SoundDefinitionKind,
@@ -189,7 +214,7 @@ pub use source_sound_edit::{
 pub use source_target::{
     SoundSourceTargetKind, SourceTarget, SourceTargetKind, SourceVisualColorAsset,
     SourceVisualDocument, SourceVisualPaletteEntry, SourceVisualShapeAsset, SourceVisualStatus,
-    SourceVisualTarget, resolve_source_target, resolve_source_target_for_profile,
+    SourceVisualTarget, resolve_source_target, resolve_source_target_for_owner_dimension,
     source_entries_json, source_target_json,
 };
 pub use source_visual_edit::{VisualEditMutationResult, mutate_visual_source};
@@ -214,38 +239,8 @@ pub(crate) const THEME_PRESET_NAMES: &[&str] = &[
     "noir",
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PuzzleSourceProfile {
-    Puzzle2d,
-    Puzzle3d,
-}
-
-impl PuzzleSourceProfile {
-    pub fn canonical_extension(self) -> &'static str {
-        match self {
-            PuzzleSourceProfile::Puzzle2d => "puzzle",
-            PuzzleSourceProfile::Puzzle3d => "puzzle3",
-        }
-    }
-}
-
-pub fn puzzle_source_profile_for_extension(extension: &str) -> Option<PuzzleSourceProfile> {
-    match extension {
-        "puzzle" => Some(PuzzleSourceProfile::Puzzle2d),
-        "puzzle3" => Some(PuzzleSourceProfile::Puzzle3d),
-        _ => None,
-    }
-}
-
-pub fn puzzle_source_profile_for_path(path: impl AsRef<Path>) -> Option<PuzzleSourceProfile> {
-    path.as_ref()
-        .extension()
-        .and_then(|value| value.to_str())
-        .and_then(puzzle_source_profile_for_extension)
-}
-
 pub fn is_puzzle_source_path(path: impl AsRef<Path>) -> bool {
-    puzzle_source_profile_for_path(path).is_some()
+    path.as_ref().extension().and_then(|value| value.to_str()) == Some("puzzle")
 }
 
 pub(crate) struct ThemeSettingSpec {

@@ -21,25 +21,9 @@ cd "$REPO_ROOT" || {
   exit 1
 }
 
-choice="$(
-  osascript <<'APPLESCRIPT'
-try
-  set picked to button returned of (display dialog "Export a .puzzle file or a game folder?" buttons {"Cancel", "Folder", "Puzzle File"} default button "Puzzle File" cancel button "Cancel" with title "Puzzle HTML Exporter")
-  return picked
-on error number -128
-  return ""
-end try
-APPLESCRIPT
-)"
-
-if [[ -z "$choice" ]]; then
-  exit 0
-fi
-
 input_path="$(
-  EXPORT_KIND="$choice" DEFAULT_DIR="$DEFAULT_DIR" osascript <<'APPLESCRIPT'
+  DEFAULT_DIR="$DEFAULT_DIR" osascript <<'APPLESCRIPT'
 set defaultDir to system attribute "DEFAULT_DIR"
-set exportKind to system attribute "EXPORT_KIND"
 try
   set defaultAlias to POSIX file defaultDir as alias
 on error
@@ -47,11 +31,7 @@ on error
 end try
 
 try
-  if exportKind is "Folder" then
-    set picked to choose folder with prompt "Choose a PuzzleStudio game folder to export." default location defaultAlias
-  else
-    set picked to choose file with prompt "Choose a .puzzle file to export." default location defaultAlias
-  end if
+  set picked to choose file with prompt "Choose a .puzzle file to export." default location defaultAlias
   return POSIX path of picked
 on error number -128
   return ""
@@ -64,18 +44,13 @@ if [[ -z "$input_path" ]]; then
 fi
 
 input_path="${input_path%/}"
-if [[ ! -d "$input_path" && "${input_path:e}" != "puzzle" ]]; then
-  show_error "Choose a .puzzle file or a game folder."
+if [[ ! -f "$input_path" || "${input_path:e}" != "puzzle" ]]; then
+  show_error "Choose a .puzzle file."
   exit 1
 fi
 
-if [[ -d "$input_path" ]]; then
-  input_name="${input_path:t}"
-  output_dir="$input_path"
-else
-  input_name="${input_path:t:r}"
-  output_dir="${input_path:h}"
-fi
+input_name="${input_path:t:r}"
+output_dir="${input_path:h}"
 
 default_name="${input_name:-game}.html"
 output_path="$(

@@ -159,7 +159,7 @@ pub(crate) enum EffectAst {
     EmitVisual {
         name: String,
     },
-    PresentComponent {
+    Message {
         text: String,
         literal: bool,
     },

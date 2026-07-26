@@ -18,6 +18,7 @@ pub(crate) struct ParserRecognition {
     pub(crate) nodes: Vec<SurfaceNode>,
     pub(crate) token_dispositions: Vec<ParserTokenDisposition>,
     pub(crate) display_facts: Vec<SurfaceDisplayFact>,
+    pub(crate) imports: Vec<crate::SourceImportDeclaration>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
     pub(crate) visual_refs: SurfaceVisualRefs,
     pub(crate) sound_products: Vec<SurfaceSoundProduct>,
@@ -151,6 +152,8 @@ impl ParserRecognition {
             let span = fact.span();
             (span.start, span.end)
         });
+        self.imports
+            .sort_by_key(|import| (import.range.start, import.range.end));
         self
     }
 
@@ -158,6 +161,7 @@ impl ParserRecognition {
         self.nodes.extend(other.nodes);
         self.token_dispositions.extend(other.token_dispositions);
         self.display_facts.extend(other.display_facts);
+        self.imports.extend(other.imports);
         self.completion_symbols.merge(other.completion_symbols);
         self.visual_refs.merge(other.visual_refs);
         self.sound_products.extend(other.sound_products);
@@ -188,6 +192,9 @@ impl ParserRecognition {
                     shift_span(span, threshold, delta);
                 }
             }
+        }
+        for import in &mut self.imports {
+            import.shift_offsets(threshold, delta);
         }
         for product in &mut self.visual_products {
             shift_span(&mut product.span, threshold, delta);
@@ -325,7 +332,6 @@ pub(crate) struct SurfaceNode {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SurfaceDocument {
-    pub(crate) source_profile: Option<crate::PuzzleSourceProfile>,
     pub(crate) logical_lines: Vec<LogicalLine>,
     pub(crate) lines: Vec<SurfaceLine>,
     pub(crate) structural_blocks: Vec<SurfaceStructuralBlock>,
@@ -336,6 +342,7 @@ pub(crate) struct SurfaceDocument {
     pub(crate) unmatched_open_braces: BTreeSet<usize>,
     pub(crate) completion_symbols: SurfaceCompletionSymbols,
     pub(crate) highlight_ranges: SurfaceHighlightRanges,
+    pub(crate) imports: Vec<crate::SourceImportDeclaration>,
     pub(crate) visual_refs: SurfaceVisualRefs,
     pub(crate) sound_products: Vec<SurfaceSoundProduct>,
     pub(crate) level_products: Vec<SurfaceLevelProduct>,
@@ -363,6 +370,13 @@ pub(crate) struct SurfaceLine {
 pub(crate) enum SurfaceStructuralBlockRole {
     SourceTree,
     Statement,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SurfaceOutlinePolicy {
+    Hidden,
+    Visible,
+    CollapseChildren,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -543,6 +557,9 @@ impl SurfaceSink {
     }
 
     pub(crate) fn project_parser_source_targets(&mut self, recognition: &ParserRecognition) {
+        self.document
+            .imports
+            .extend(recognition.imports.iter().cloned());
         self.document
             .visual_refs
             .merge(recognition.visual_refs.clone());
