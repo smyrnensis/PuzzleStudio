@@ -3,7 +3,7 @@ const author = "Levels by David Skinner"
 
 theme {
 preset = "puzzlescript"
-background_color = #fffffff
+background_color = #ffffff
 text_color = #000
 }
 

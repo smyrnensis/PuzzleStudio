@@ -19,8 +19,8 @@ fn source_click_discards_stale_selection_anchor() {
 }
 
 #[test]
-fn visual_palette_mouse_click_preserves_pane_scroll() {
-    run_editor_browser_smoke(&["--visual-palette-only"]);
+fn visual_selection_waits_for_current_revision_entries() {
+    run_editor_browser_smoke(&["--visual-selection-revision-only"]);
 }
 
 #[test]

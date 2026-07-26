@@ -432,42 +432,27 @@ impl<Effect, LabelExpr, TextExpr, ConditionExpr>
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ComponentChoiceCell<'a, Effect> {
-    pub x: usize,
-    pub y: usize,
-    pub effect: &'a Effect,
-}
-
-pub fn component_choice_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
-    components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
-    mut condition_is_true: impl FnMut(&ConditionExpr) -> bool,
-) -> Vec<ComponentChoiceCell<'a, Effect>> {
-    component_column_footprint(components, &mut condition_is_true).cells
-}
-
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ComponentActionCell<'a, Effect> {
     pub ordinal: u32,
     pub effect: &'a Effect,
     pub active: bool,
 }
 
-pub fn component_action_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+pub fn component_action_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr, Error>(
     components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
-    mut condition_is_true: impl FnMut(&ConditionExpr) -> bool,
-) -> Vec<ComponentActionCell<'a, Effect>> {
+    mut condition_is_true: impl FnMut(&ConditionExpr) -> Result<bool, Error>,
+) -> Result<Vec<ComponentActionCell<'a, Effect>>, Error> {
     let mut cells = Vec::new();
-    collect_component_action_cells(components, &mut condition_is_true, true, &mut cells);
-    cells
+    collect_component_action_cells(components, &mut condition_is_true, true, &mut cells)?;
+    Ok(cells)
 }
 
-fn collect_component_action_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+fn collect_component_action_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr, Error>(
     components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
-    condition_is_true: &mut impl FnMut(&ConditionExpr) -> bool,
+    condition_is_true: &mut impl FnMut(&ConditionExpr) -> Result<bool, Error>,
     active: bool,
     cells: &mut Vec<ComponentActionCell<'a, Effect>>,
-) {
+) -> Result<(), Error> {
     for component in components {
         match component {
             ComponentNode::Button(button) | ComponentNode::Choice(button) => {
@@ -480,45 +465,60 @@ fn collect_component_action_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr
             }
             ComponentNode::Row(container)
             | ComponentNode::Column(container)
-            | ComponentNode::Box(container) => collect_component_action_cells(
-                &container.children,
-                condition_is_true,
-                active,
-                cells,
-            ),
+            | ComponentNode::Box(container) => {
+                collect_component_action_cells(
+                    &container.children,
+                    condition_is_true,
+                    active,
+                    cells,
+                )?;
+            }
             ComponentNode::Conditional(conditional) => {
-                let condition = condition_is_true(&conditional.condition);
+                let condition = condition_is_true(&conditional.condition)?;
                 collect_component_action_cells(
                     &conditional.children,
                     condition_is_true,
                     active && condition,
                     cells,
-                );
+                )?;
                 collect_component_action_cells(
                     &conditional.else_children,
                     condition_is_true,
                     active && !condition,
                     cells,
-                );
+                )?;
             }
             ComponentNode::Viewport(_) | ComponentNode::Frame(_) | ComponentNode::Text(_) => {}
         }
     }
+    Ok(())
 }
 
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComponentChoiceCell<'a, Effect> {
+    pub x: usize,
+    pub y: usize,
+    pub effect: &'a Effect,
+}
+
+pub fn component_choice_cells<'a, Effect, LabelExpr, TextExpr, ConditionExpr, Error>(
+    components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
+    mut condition_is_true: impl FnMut(&ConditionExpr) -> Result<bool, Error>,
+) -> Result<Vec<ComponentChoiceCell<'a, Effect>>, Error> {
+    Ok(component_column_footprint(components, &mut condition_is_true)?.cells)
+}
+
 struct ComponentChoiceFootprint<'a, Effect> {
     width: usize,
     height: usize,
     cells: Vec<ComponentChoiceCell<'a, Effect>>,
 }
 
-fn component_choice_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+fn component_choice_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr, Error>(
     component: &'a SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>,
-    condition_is_true: &mut impl FnMut(&ConditionExpr) -> bool,
-) -> ComponentChoiceFootprint<'a, Effect> {
-    match component {
+    condition_is_true: &mut impl FnMut(&ConditionExpr) -> Result<bool, Error>,
+) -> Result<ComponentChoiceFootprint<'a, Effect>, Error> {
+    Ok(match component {
         ComponentNode::Choice(choice) => ComponentChoiceFootprint {
             width: 1,
             height: 1,
@@ -529,19 +529,19 @@ fn component_choice_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
             }],
         },
         ComponentNode::Row(container) => {
-            component_row_footprint(&container.children, condition_is_true)
+            component_row_footprint(&container.children, condition_is_true)?
         }
         ComponentNode::Column(container) | ComponentNode::Box(container) => {
-            component_column_footprint(&container.children, condition_is_true)
+            component_column_footprint(&container.children, condition_is_true)?
         }
         ComponentNode::Conditional(conditional) => component_column_footprint(
-            if condition_is_true(&conditional.condition) {
+            if condition_is_true(&conditional.condition)? {
                 &conditional.children
             } else {
                 &conditional.else_children
             },
             condition_is_true,
-        ),
+        )?,
         ComponentNode::Viewport(_)
         | ComponentNode::Frame(_)
         | ComponentNode::Text(_)
@@ -550,18 +550,18 @@ fn component_choice_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
             height: 1,
             cells: Vec::new(),
         },
-    }
+    })
 }
 
-fn component_row_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+fn component_row_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr, Error>(
     components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
-    condition_is_true: &mut impl FnMut(&ConditionExpr) -> bool,
-) -> ComponentChoiceFootprint<'a, Effect> {
+    condition_is_true: &mut impl FnMut(&ConditionExpr) -> Result<bool, Error>,
+) -> Result<ComponentChoiceFootprint<'a, Effect>, Error> {
     let mut width = 0;
     let mut height = 0;
     let mut cells = Vec::new();
     for component in components {
-        let child = component_choice_footprint(component, condition_is_true);
+        let child = component_choice_footprint(component, condition_is_true)?;
         cells.extend(child.cells.into_iter().map(|cell| ComponentChoiceCell {
             x: cell.x + width,
             ..cell
@@ -569,22 +569,22 @@ fn component_row_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
         width += child.width;
         height = height.max(child.height);
     }
-    ComponentChoiceFootprint {
+    Ok(ComponentChoiceFootprint {
         width: width.max(1),
         height: height.max(1),
         cells,
-    }
+    })
 }
 
-fn component_column_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
+fn component_column_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr, Error>(
     components: &'a [SceneComponent<Effect, LabelExpr, TextExpr, ConditionExpr>],
-    condition_is_true: &mut impl FnMut(&ConditionExpr) -> bool,
-) -> ComponentChoiceFootprint<'a, Effect> {
+    condition_is_true: &mut impl FnMut(&ConditionExpr) -> Result<bool, Error>,
+) -> Result<ComponentChoiceFootprint<'a, Effect>, Error> {
     let mut width = 0;
     let mut height = 0;
     let mut cells = Vec::new();
     for component in components {
-        let child = component_choice_footprint(component, condition_is_true);
+        let child = component_choice_footprint(component, condition_is_true)?;
         cells.extend(child.cells.into_iter().map(|cell| ComponentChoiceCell {
             y: cell.y + height,
             ..cell
@@ -592,11 +592,11 @@ fn component_column_footprint<'a, Effect, LabelExpr, TextExpr, ConditionExpr>(
         width = width.max(child.width);
         height += child.height;
     }
-    ComponentChoiceFootprint {
+    Ok(ComponentChoiceFootprint {
         width: width.max(1),
         height: height.max(1),
         cells,
-    }
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -2171,7 +2171,10 @@ mod tests {
             }),
         ];
 
-        let cells = component_choice_cells(&components, |condition| condition == "visible");
+        let cells = component_choice_cells(&components, |condition| {
+            Ok::<_, &str>(condition == "visible")
+        })
+        .unwrap();
         assert_eq!(
             cells
                 .iter()
@@ -2187,7 +2190,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn action_ordinals_are_stable_when_the_active_conditional_branch_changes() {
         fn choice(name: &str) -> SceneComponent {
             SceneComponent::Choice(SceneButton {
@@ -2210,8 +2212,16 @@ mod tests {
             choice("after"),
         ];
 
-        let enabled = component_action_cells(&components, |condition| condition == "enabled");
-        let disabled = component_action_cells(&components, |_| false);
+        let enabled = component_action_cells(&components, |condition| {
+            Ok::<_, &str>(condition == "enabled")
+        })
+        .unwrap();
+        let disabled = component_action_cells(&components, |_| Ok::<_, &str>(false)).unwrap();
+        assert_eq!(
+            component_action_cells(&components, |_| Err::<bool, _>("unresolved condition"))
+                .unwrap_err(),
+            "unresolved condition"
+        );
         let project = |cells: &[ComponentActionCell<'_, SceneCommand>]| {
             cells
                 .iter()
@@ -2239,8 +2249,6 @@ mod tests {
     }
 
     #[test]
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     fn component_layout_helpers_expose_layout_owned_components() {
         let mut component = SceneComponent::<SceneCommand>::Frame(FrameComponent {
             kind: "puzzle3".to_string(),

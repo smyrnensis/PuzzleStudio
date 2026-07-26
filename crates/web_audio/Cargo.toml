@@ -20,12 +20,9 @@ web-sys = { version = "0.3", features = [
     "AudioWorkletNode",
     "AudioWorkletNodeOptions",
     "BaseAudioContext",
-    "Blob",
-    "BlobPropertyBag",
     "Event",
     "GainNode",
     "MessageEvent",
     "MessagePort",
-    "Url",
     "Window",
 ] }

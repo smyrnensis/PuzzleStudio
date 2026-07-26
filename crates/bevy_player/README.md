@@ -5,7 +5,7 @@ Bevy renderer. It does not serialize a runtime snapshot to JSON.
 
 The host owns the following adapter responsibilities:
 
-- loading a puzzle source into `RuntimeSession`;
+- loading a native workspace into a compiled document and `RuntimeSession`;
 - mapping native keyboard presses to typed `SessionAction` values;
 - preserving presentation-event order and scheduling authored waits;
 - resolving animation time with `puzzle-presentation`;
@@ -20,7 +20,7 @@ and GPU work remain in the Bevy renderer.
 Run the current 3D game fixture from the worktree root:
 
 ```bash
-cargo run -p puzzle-bevy-player -- games/TENETEN3D.puzzle3
+cargo run -p puzzle-bevy-player -- games/TENETEN3D.puzzle
 ```
 
 Run a directly playable 2D fixture:
@@ -47,7 +47,7 @@ bytes in the player snapshot.
 
 Progress persistence stays behind typed host operations. A platform resource
 may restore the runtime-owned save payload, inspect the pending
-`RuntimeProgressSaveRequest`, acknowledge only its exact request ID after a
-successful write, or confirm a successful clear. Each mutation refreshes the
-host snapshot and projected viewports; storage-device IO remains outside this
-crate.
+`RuntimeProgressSaveRequest`, execute its typed write or delete operation, and
+acknowledge only its exact request ID after success. Each mutation refreshes
+the host snapshot and projected viewports; storage-device IO remains outside
+this crate.

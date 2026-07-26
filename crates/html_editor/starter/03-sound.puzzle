@@ -26,7 +26,7 @@ all Player on Goal
 }
 
 rules {
-input once [ Player | no Wall ] -> [ | Player ]
+input [ Player | no Wall ] -> [ | Player ]
 }
 
 on_level_clear {

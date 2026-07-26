@@ -36,6 +36,13 @@ before the HTML is generated:
 tools/dev_export_html.sh games/fixban_tween.puzzle -o games/fixban_tween.html
 ```
 
+Regenerate every tracked standalone export, including the declared alias
+outputs, through the canonical mapping:
+
+```bash
+tools/generate_tracked_game_exports.sh
+```
+
 Direct crate command, useful when you intentionally do not want the wrapper:
 
 ```bash
@@ -91,3 +98,23 @@ Check through Cargo without relying on an installed CLI binary:
 ```bash
 cargo run -p puzzlestudio -- check games/animation_test.puzzle
 ```
+
+## Standalone Player Acceptance
+
+Regenerate the release WASM artifacts before validating an official export:
+
+```bash
+CARGO_TARGET_DIR=/private/tmp/puzzlebuilder-bevy-target tools/ensure_wasm_fresh.sh desktop
+```
+
+Run the committed browser acceptance suite for representative 2D and 3D
+exports plus visibility, progress persistence, external-image rendering, and
+missing-asset diagnostics:
+
+```bash
+CARGO_TARGET_DIR=/private/tmp/puzzlebuilder-bevy-target tools/check_standalone_browser_contracts.sh
+```
+
+The suite reads its performance thresholds from
+`tools/standalone_player_browser_baseline.json`; do not duplicate those limits
+in another runner.

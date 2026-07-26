@@ -143,13 +143,8 @@ pub(crate) fn analyze_visual_body_product(
             message: message.to_string(),
         });
     }
-    let recognition = recognize_visual_display(
-        &syntax,
-        Some(&shape),
-        header,
-        lines,
-        resolve_display_color,
-    );
+    let recognition =
+        recognize_visual_display(&syntax, Some(&shape), header, lines, resolve_display_color);
     crate::surface::ParseProduct::new(
         VisualBodyProduct {
             syntax,

@@ -1123,7 +1123,7 @@ pub(crate) const KIND_SPECS: &[KindSpec] = &[
         symbol_exports: NO_SYMBOL_EXPORTS,
         block_role: None,
         keyword_role: AuthoringSurfaceRole::Keyword,
-        outline_policy: AuthoringOutlinePolicy::Visible,
+        outline_policy: SurfaceOutlinePolicy::Visible,
         missing_close_message: "lighting block missing closing brace",
     },
     KindSpec {

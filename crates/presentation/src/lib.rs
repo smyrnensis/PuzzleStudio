@@ -1,4 +1,3 @@
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use puzzle_assets::{DecodedVisualImageAsset, DecodedVisualImageCatalog};
@@ -14,18 +13,6 @@ use puzzle_runtime_contract::{
     RuntimeResolvedView2d, RuntimeResolvedVisualClip, RuntimeResolvedVisualFrame,
     RuntimeResolvedVisualOrder, RuntimeScalarTween, RuntimeTheme, RuntimeUiControlStyle,
     RuntimeUiTextStyle, RuntimeUiTypography, RuntimeVisualComposition, RuntimeVisualSpace,
-=======
-use std::collections::{BTreeMap, HashMap};
-
-use puzzle_runtime_contract::{
-    RuntimeAnimationEvent, RuntimeLinearRgba, RuntimePresentationEvent,
-    RuntimePresentationEventKind, RuntimePuzzle3SpatialOp, RuntimePuzzle3VisualSpace,
-    RuntimeResolvedFitMode, RuntimeResolvedImageAsset, RuntimeResolvedPixelGeometry,
-    RuntimeResolvedPlayback, RuntimeResolvedRenderBatch, RuntimeResolvedRenderBatchContent,
-    RuntimeResolvedRenderFrame, RuntimeResolvedRenderInstance, RuntimeResolvedRenderMoment,
-    RuntimeResolvedRenderScene, RuntimeResolvedVisualClip, RuntimeResolvedVisualFrame,
-    RuntimeResolvedVisualOrder, RuntimeScalarTween, RuntimeVisualComposition, RuntimeVisualSpace,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     RuntimeVisualState, RuntimeVisualTransform, RuntimeVisualTween, RuntimeVisualTweenTransform,
 };
 
@@ -67,13 +54,10 @@ pub enum PresentationError {
     NonFiniteValue { label: &'static str },
     ZeroRotationAxis,
     InvalidColor(String),
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     InvalidThemePreset(String),
     InvalidThemeSetting(String),
     InvalidThemeContract(&'static str),
     InvalidViewSize,
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     UnknownPaletteToken(String),
     EmptyVisualClip(String),
     ZeroFrameDuration(String),
@@ -83,22 +67,15 @@ pub enum PresentationError {
     MixedCompositionTransforms,
     NonLatticeCompositionTransform,
     IncompatibleCompositionFrames,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     RasterImageComposition,
     MissingImageAsset(String),
     InvalidImageAssetReference(String),
-=======
-    ExternalImageComposition,
-    MissingImageAsset(String),
-    InvalidImageAsset(String),
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     ZeroAnimationDuration,
     MissingAnimationTarget { object_id: u16, cell: [i32; 3] },
     MissingRenderCell([i32; 3]),
     MissingResolvedAnimationVisual(String),
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 pub fn resolve_runtime_theme<'a>(
     preset: Option<&str>,
     variables: impl IntoIterator<Item = (&'a str, &'a str)>,
@@ -485,62 +462,6 @@ fn control_layout(
         border_width_px,
         corner_radius_px,
     }
-=======
-pub fn hydrate_external_images(
-    scene: &RuntimeResolvedRenderScene,
-    assets: &[RuntimeResolvedImageAsset],
-) -> Result<RuntimeResolvedRenderScene, PresentationError> {
-    let assets = assets
-        .iter()
-        .map(|asset| (asset.source.as_str(), asset))
-        .collect::<HashMap<_, _>>();
-    let mut hydrated = scene.clone();
-    for clip in &mut hydrated.clips {
-        for frame in &mut clip.frames {
-            let RuntimeResolvedVisualFrame::ExternalImage { source } = frame else {
-                continue;
-            };
-            let asset = assets
-                .get(source.as_str())
-                .copied()
-                .ok_or_else(|| PresentationError::MissingImageAsset(source.clone()))?;
-            let expected_len = usize::from(asset.width)
-                .checked_mul(usize::from(asset.height))
-                .and_then(|pixels| pixels.checked_mul(4));
-            if asset.width == 0 || asset.height == 0 || expected_len != Some(asset.rgba8_srgb.len())
-            {
-                return Err(PresentationError::InvalidImageAsset(source.clone()));
-            }
-            let pixels = asset
-                .rgba8_srgb
-                .chunks_exact(4)
-                .enumerate()
-                .filter_map(|(index, rgba)| {
-                    (rgba[3] > 0).then(|| puzzle_runtime_contract::RuntimeResolvedPixel {
-                        position: [
-                            i32::try_from(index % usize::from(asset.width))
-                                .expect("validated image width must fit i32"),
-                            i32::try_from(index / usize::from(asset.width))
-                                .expect("validated image height must fit i32"),
-                        ],
-                        color: RuntimeLinearRgba {
-                            red: srgb_channel_to_linear(rgba[0]),
-                            green: srgb_channel_to_linear(rgba[1]),
-                            blue: srgb_channel_to_linear(rgba[2]),
-                            alpha: f64::from(rgba[3]) / 255.0,
-                        },
-                    })
-                })
-                .collect();
-            *frame = RuntimeResolvedVisualFrame::Pixels {
-                width: asset.width,
-                height: asset.height,
-                pixels,
-            };
-        }
-    }
-    Ok(hydrated)
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 pub fn resolve_palette_color(color: &str) -> Result<RuntimeLinearRgba, PresentationError> {
@@ -660,15 +581,11 @@ pub fn resolve_voxel_frame(
                 let color = resolve_palette_color(color)?;
                 if color.alpha > 0.0 {
                     voxels.push(puzzle_runtime_contract::RuntimeResolvedVoxel {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
                         position: [
                             x as i32,
                             (depth - 1 - y) as i32,
                             (layers.len() - 1 - z) as i32,
                         ],
-=======
-                        position: [x as i32, y as i32, z as i32],
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                         color,
                     });
                 }
@@ -688,18 +605,12 @@ pub fn resolve_voxel_frame(
 
 pub fn resolve_render_frame(
     scene: &RuntimeResolvedRenderScene,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     assets: &DecodedVisualImageCatalog,
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     elapsed_ms: u64,
 ) -> Result<RuntimeResolvedRenderFrame, PresentationError> {
     resolve_render_moment(
         scene,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         assets,
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         &RuntimeResolvedRenderMoment {
             clip_elapsed_ms: elapsed_ms,
             animation_elapsed_ms: 0,
@@ -708,7 +619,6 @@ pub fn resolve_render_frame(
     )
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 pub fn resolve_image_free_render_frame(
     scene: &RuntimeResolvedRenderScene,
     elapsed_ms: u64,
@@ -719,10 +629,6 @@ pub fn resolve_image_free_render_frame(
 pub fn resolve_render_moment(
     scene: &RuntimeResolvedRenderScene,
     assets: &DecodedVisualImageCatalog,
-=======
-pub fn resolve_render_moment(
-    scene: &RuntimeResolvedRenderScene,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     moment: &RuntimeResolvedRenderMoment,
 ) -> Result<RuntimeResolvedRenderFrame, PresentationError> {
     let animation_progress = if moment.animations.is_empty() {
@@ -759,16 +665,12 @@ pub fn resolve_render_moment(
         match group.composition {
             RuntimeVisualComposition::Ordered => {
                 for instance in members {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
                     batches.push(instance_batch(
                         instance,
                         &clips,
                         assets,
                         moment.clip_elapsed_ms,
                     )?);
-=======
-                    batches.push(instance_batch(instance, &clips, moment.clip_elapsed_ms)?);
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                 }
             }
             RuntimeVisualComposition::Average => {
@@ -804,15 +706,11 @@ pub fn resolve_render_moment(
     });
     Ok(RuntimeResolvedRenderFrame {
         batches,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         decorations: scene.decorations.clone(),
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         continue_animation,
     })
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 pub fn resolve_image_free_render_moment(
     scene: &RuntimeResolvedRenderScene,
     moment: &RuntimeResolvedRenderMoment,
@@ -820,8 +718,6 @@ pub fn resolve_image_free_render_moment(
     resolve_render_moment(scene, &DecodedVisualImageCatalog::default(), moment)
 }
 
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 fn animated_scene(
     scene: &RuntimeResolvedRenderScene,
     moment: &RuntimeResolvedRenderMoment,
@@ -1048,10 +944,7 @@ fn selected_frame<'a>(
 fn instance_batch(
     instance: &RuntimeResolvedRenderInstance,
     clips: &HashMap<&str, &puzzle_runtime_contract::RuntimeResolvedVisualClip>,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     assets: &DecodedVisualImageCatalog,
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     elapsed_ms: u64,
 ) -> Result<RuntimeResolvedRenderBatch, PresentationError> {
     let clip = clips
@@ -1071,21 +964,14 @@ fn instance_batch(
         transform: instance.transform,
         opacity: instance.opacity,
         pixel_geometry: pixel_geometry(frame, clip),
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         content: frame_content(frame, clip, assets)?,
-=======
-        content: frame_content(frame)?,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     })
 }
 
 fn frame_content(
     frame: &RuntimeResolvedVisualFrame,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     clip: &RuntimeResolvedVisualClip,
     assets: &DecodedVisualImageCatalog,
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 ) -> Result<RuntimeResolvedRenderBatchContent, PresentationError> {
     Ok(match frame {
         RuntimeResolvedVisualFrame::Pixels {
@@ -1108,7 +994,6 @@ fn frame_content(
             height: *height,
             voxels: voxels.clone(),
         },
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         RuntimeResolvedVisualFrame::RasterImage { asset, sampling } => raster_content(
             asset,
             *sampling,
@@ -1137,14 +1022,6 @@ fn raster_content(
     }
 }
 
-=======
-        RuntimeResolvedVisualFrame::ExternalImage { source } => {
-            return Err(PresentationError::MissingImageAsset(source.clone()));
-        }
-    })
-}
-
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 fn pixel_geometry(
     frame: &RuntimeResolvedVisualFrame,
     clip: &RuntimeResolvedVisualClip,
@@ -1152,7 +1029,6 @@ fn pixel_geometry(
     let RuntimeResolvedVisualFrame::Pixels { width, height, .. } = frame else {
         return None;
     };
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     let fit = resolved_fit_geometry(*width, *height, clip);
     Some(RuntimeResolvedPixelGeometry {
         x: fit.logical_content.x,
@@ -1186,12 +1062,6 @@ fn resolved_fit_geometry(
         width: box_width,
         height: box_height,
     };
-=======
-    let source_width = f64::from(*width);
-    let source_height = f64::from(*height);
-    let box_width = f64::from(clip.layout.width);
-    let box_height = f64::from(clip.layout.height);
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     let scale_x = box_width / source_width;
     let scale_y = box_height / source_height;
     let scale = match clip.layout.fit {
@@ -1209,16 +1079,11 @@ fn resolved_fit_geometry(
     } else {
         source_height * scale
     };
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     let logical_content = RuntimeResolvedRect2d {
-=======
-    Some(RuntimeResolvedPixelGeometry {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         x: (1.0 - box_width) / 2.0 + (box_width - width) / 2.0,
         y: (1.0 - box_height) / 2.0 + (box_height - height) / 2.0,
         width,
         height,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     };
     let (raster_destination, uv) = if clip.layout.fit == RuntimeResolvedFitMode::Cover {
         (
@@ -1247,11 +1112,6 @@ fn resolved_fit_geometry(
         raster_destination,
         uv,
     }
-=======
-        sampling: clip.layout.sampling,
-        raster: clip.layout.raster,
-    })
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 fn average_batch(
@@ -1287,28 +1147,12 @@ fn average_batch(
             clip.layout.fit != first_clip.layout.fit
                 || clip.layout.width != first_clip.layout.width
                 || clip.layout.height != first_clip.layout.height
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
-                || clip.layout.sampling != first_clip.layout.sampling
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         })
     }) {
         return Err(PresentationError::IncompatibleCompositionFrames);
     }
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     let geometry = pixel_geometry(frames[0], first_clip);
     let content = average_frames(&frames, members, geometry)?;
-=======
-    let mut geometry = pixel_geometry(frames[0], first_clip);
-    let content = average_frames(&frames, members, geometry)?;
-    if let Some(geometry) = &mut geometry {
-        geometry.raster = members.iter().any(|member| {
-            clips
-                .get(member.visual.as_str())
-                .is_some_and(|clip| clip.layout.raster)
-        });
-    }
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     Ok(RuntimeResolvedRenderBatch {
         render_order,
         object_ids: members
@@ -1432,13 +1276,8 @@ fn average_frames(
                     .collect(),
             })
         }
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         Some(RuntimeResolvedVisualFrame::RasterImage { .. }) => {
             Err(PresentationError::RasterImageComposition)
-=======
-        Some(RuntimeResolvedVisualFrame::ExternalImage { .. }) => {
-            Err(PresentationError::ExternalImageComposition)
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         }
         None => Err(PresentationError::IncompatibleCompositionFrames),
     }
@@ -1769,17 +1608,10 @@ pub fn cell_render_order_3d(
         &[
             ("right", u64::from(x), u64::from(width)),
             ("left", u64::from(width - 1 - x), u64::from(width)),
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             ("front", u64::from(y), u64::from(depth)),
             ("back", u64::from(depth - 1 - y), u64::from(depth)),
             ("up", u64::from(z), u64::from(height)),
             ("down", u64::from(height - 1 - z), u64::from(height)),
-=======
-            ("back", u64::from(y), u64::from(depth)),
-            ("front", u64::from(depth - 1 - y), u64::from(depth)),
-            ("down", u64::from(z), u64::from(height)),
-            ("up", u64::from(height - 1 - z), u64::from(height)),
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         ],
     )
 }
@@ -1855,11 +1687,7 @@ pub fn resolve_presentation_events(
     order: &VisualOrderRef<'_>,
 ) -> Result<Vec<RuntimePresentationEvent>, PresentationError> {
     for event in &mut events {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         if let RuntimePresentationEvent::AnimationBatch { animations, .. } = event {
-=======
-        if let RuntimePresentationEventKind::AnimationBatch { animations } = &mut event.event {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             *animations = resolve_animation_channels(animations)?;
             for animation in animations {
                 if let RuntimeAnimationEvent::Animation {
@@ -2145,14 +1973,11 @@ fn sample_vector(start: [f64; 3], delta: [f64; 3], amount: f64) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     use image::{ImageEncoder, codecs::png::PngEncoder};
     use puzzle_assets::{
         EncodedVisualImageAsset, EncodedVisualImageBundle, VisualImageAssetManifestEntry,
         decode_visual_image_bundle,
     };
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     use puzzle_runtime_contract::{
         RuntimeCoord, RuntimeResolvedCompositionGroup, RuntimeResolvedPixel,
         RuntimeResolvedSampling, RuntimeResolvedVisualClip, RuntimeResolvedVisualLayout,
@@ -2163,7 +1988,6 @@ mod tests {
             fit: RuntimeResolvedFitMode::Contain,
             width: 1,
             height: 1,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         }
     }
 
@@ -2189,13 +2013,6 @@ mod tests {
         .unwrap()
     }
 
-=======
-            sampling: RuntimeResolvedSampling::Pixelated,
-            raster: false,
-        }
-    }
-
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     fn order_parts() -> (Vec<String>, Vec<(Vec<String>, Vec<String>, bool)>) {
         (
             vec!["down".to_string(), "right".to_string()],
@@ -2247,20 +2064,11 @@ mod tests {
             ("a".to_string(), "#ff0000".to_string()),
             ("b".to_string(), "#00ff00".to_string()),
             ("c".to_string(), "#0000ff".to_string()),
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         ]);
         let frame = resolve_voxel_frame(
             &[
                 vec!["a.".to_string(), ".b".to_string()],
                 vec!["c.".to_string(), "..".to_string()],
-=======
-            ("d".to_string(), "#ffffff".to_string()),
-        ]);
-        let frame = resolve_voxel_frame(
-            &[
-                vec!["ab".to_string(), "cd".to_string()],
-                vec!["a.".to_string(), "..".to_string()],
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             ],
             &palette,
         )
@@ -2281,11 +2089,7 @@ mod tests {
                 .into_iter()
                 .map(|voxel| voxel.position)
                 .collect::<Vec<_>>(),
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             vec![[0, 1, 1], [1, 0, 1], [0, 1, 0]]
-=======
-            vec![[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1]]
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         );
     }
 
@@ -2494,19 +2298,12 @@ mod tests {
                 instances: vec![1, 2],
             }],
             cells: Vec::new(),
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             decorations: Vec::new(),
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             render_priority_count: 1,
             animation_duration_ms: 250,
         };
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let frame = resolve_image_free_render_frame(&scene, 10).unwrap();
-=======
-        let frame = resolve_render_frame(&scene, 10).unwrap();
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let RuntimeResolvedRenderBatchContent::Pixels { pixels, .. } = &frame.batches[0].content
         else {
             panic!("averaged pixels must stay renderer-neutral pixels");
@@ -2525,7 +2322,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn average_rejects_raster_images_instead_of_entering_logical_pixel_composition() {
         let manifest = VisualImageAssetManifestEntry::from_path("sprite.png").unwrap();
         let scene = RuntimeResolvedRenderScene {
@@ -2534,23 +2330,10 @@ mod tests {
                 frames: vec![RuntimeResolvedVisualFrame::RasterImage {
                     asset: manifest.id,
                     sampling: RuntimeResolvedSampling::Smooth,
-=======
-    fn average_rejects_external_images_without_decoded_rgba() {
-        let scene = RuntimeResolvedRenderScene {
-            clips: vec![RuntimeResolvedVisualClip {
-                id: "image".to_string(),
-                frames: vec![RuntimeResolvedVisualFrame::ExternalImage {
-                    source: "sprite.png".to_string(),
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                 }],
                 frame_duration_ms: None,
                 layout: RuntimeResolvedVisualLayout {
                     width: 2,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
-                    sampling: RuntimeResolvedSampling::Smooth,
-                    raster: true,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                     ..test_layout()
                 },
             }],
@@ -2571,16 +2354,12 @@ mod tests {
                 instances: vec![1],
             }],
             cells: Vec::new(),
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             decorations: Vec::new(),
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             render_priority_count: 1,
             animation_duration_ms: 250,
         };
 
         assert_eq!(
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             resolve_image_free_render_frame(&scene, 0),
             Err(PresentationError::RasterImageComposition)
         );
@@ -2738,36 +2517,10 @@ mod tests {
         assert_eq!(
             *uv,
             RuntimeResolvedRect2d {
-=======
-            resolve_render_frame(&scene, 0),
-            Err(PresentationError::ExternalImageComposition)
-        );
-
-        let hydrated = hydrate_external_images(
-            &scene,
-            &[RuntimeResolvedImageAsset {
-                source: "sprite.png".to_string(),
-                width: 1,
-                height: 1,
-                rgba8_srgb: vec![255, 0, 255, 255],
-            }],
-        )
-        .unwrap();
-        let frame = resolve_render_frame(&hydrated, 0).unwrap();
-        let RuntimeResolvedRenderBatchContent::Pixels { pixels, .. } = &frame.batches[0].content
-        else {
-            panic!("decoded external image must enter pixel composition");
-        };
-        assert_eq!(pixels[0].color.blue, 1.0);
-        assert_eq!(
-            frame.batches[0].pixel_geometry,
-            Some(RuntimeResolvedPixelGeometry {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                 x: 0.0,
                 y: 0.0,
                 width: 1.0,
                 height: 1.0,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             }
         );
         assert_eq!(*sampling, RuntimeResolvedSampling::Pixelated);
@@ -2785,16 +2538,10 @@ mod tests {
         assert_eq!(
             pixels.iter().map(|pixel| pixel.color).collect::<Vec<_>>(),
             decoded_colors
-=======
-                sampling: RuntimeResolvedSampling::Smooth,
-                raster: true,
-            })
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         );
     }
 
     #[test]
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn cover_crops_raster_uv_to_the_same_visible_edges_as_logical_clip() {
         let assets = decoded_png_catalog("visuals/wide.png", &[[255, 0, 0, 255]; 8], 4, 2);
         let asset_id = VisualImageAssetManifestEntry::from_path("visuals/wide.png")
@@ -2848,8 +2595,6 @@ mod tests {
     }
 
     #[test]
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     fn average_normalizes_grid_preserving_affines_before_color_composition() {
         let red = RuntimeLinearRgba {
             red: 1.0,
@@ -2907,19 +2652,12 @@ mod tests {
                 instances: vec![1, 2],
             }],
             cells: Vec::new(),
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             decorations: Vec::new(),
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             render_priority_count: 1,
             animation_duration_ms: 250,
         };
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let frame = resolve_image_free_render_frame(&scene, 0).unwrap();
-=======
-        let frame = resolve_render_frame(&scene, 0).unwrap();
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let RuntimeResolvedRenderBatchContent::Pixels { pixels, .. } = &frame.batches[0].content
         else {
             panic!("pixel composition must remain pixels");
@@ -2984,19 +2722,12 @@ mod tests {
                 instances: vec![1, 2],
             }],
             cells: Vec::new(),
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             decorations: Vec::new(),
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             render_priority_count: 1,
             animation_duration_ms: 250,
         };
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let frame = resolve_image_free_render_frame(&scene, 0).unwrap();
-=======
-        let frame = resolve_render_frame(&scene, 0).unwrap();
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let RuntimeResolvedRenderBatchContent::Pixels { pixels, .. } = &frame.batches[0].content
         else {
             panic!("translated average must stay pixels");
@@ -3058,18 +2789,11 @@ mod tests {
                 render_order: 2,
                 object_ids: vec![7],
             }],
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             decorations: Vec::new(),
             render_priority_count: 2,
             animation_duration_ms: 30,
         };
         let frame = resolve_image_free_render_moment(
-=======
-            render_priority_count: 2,
-            animation_duration_ms: 30,
-        };
-        let frame = resolve_render_moment(
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             &scene,
             &RuntimeResolvedRenderMoment {
                 clip_elapsed_ms: 0,
@@ -3118,7 +2842,6 @@ mod tests {
         };
         assert_eq!(pixels[0].color.blue, 1.0);
     }
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 
     #[test]
     fn resolves_paged_and_centered_2d_views_without_adapter_state() {
@@ -3317,6 +3040,4 @@ mod tests {
         theme.accent.alpha = 1.1;
         assert_eq!(theme.validate(), Err("theme.accent"));
     }
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }

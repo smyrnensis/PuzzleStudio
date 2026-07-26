@@ -2,16 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 use puzzle_assets::VisualImageAssetManifestEntry;
 
-use crate::{
-    AssetKind, DiagnosticReport, LoadedDocument, LoadedDocumentModel, VisualKind,
-    expand_game_imports_from_documents_with_origins, parse_game_for_path,
-};
-=======
 use crate::{AssetKind, DiagnosticReport, LoadedDocumentModel, VisualKind};
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -533,21 +526,20 @@ pub struct WorkspacePresentationManifest {
     pub visual_image_assets: Vec<VisualImageAssetManifestEntry>,
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 pub fn workspace_presentation_manifest(
     entry_path: &str,
     documents: &[WorkspaceSourceDocument],
 ) -> Result<WorkspacePresentationManifest, DiagnosticReport> {
-    let expanded = expand_game_imports_from_documents_with_origins(entry_path, documents)?;
-    let document = parse_game_for_path(&expanded.source, entry_path)
-        .map_err(|report| expanded.remap_diagnostic_report(report))?;
+    let document = WorkspaceAnalysis::new(documents)?.compile_game(entry_path)?;
     loaded_document_presentation_manifest(&document)
 }
 
 pub fn loaded_document_presentation_manifest(
-    document: &LoadedDocument,
+    document: &crate::LoadedDocument,
 ) -> Result<WorkspacePresentationManifest, DiagnosticReport> {
-=======
+    Ok(workspace_presentation_manifest_from_document(document))
+}
+
 impl WorkspaceAnalysis {
     pub fn presentation_manifest(
         &self,
@@ -561,7 +553,6 @@ impl WorkspaceAnalysis {
 pub fn workspace_presentation_manifest_from_document(
     document: &crate::LoadedDocument,
 ) -> WorkspacePresentationManifest {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     let mut css_paths = Vec::new();
     let mut script_paths = Vec::new();
     let mut file_paths = Vec::new();
@@ -592,20 +583,12 @@ pub fn workspace_presentation_manifest_from_document(
         }
     }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-    Ok(WorkspacePresentationManifest {
-=======
     WorkspacePresentationManifest {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         theme_name: document.theme.name.clone(),
         css_paths,
         script_paths,
         file_paths,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         visual_image_assets,
-    })
-=======
-        visual_image_paths,
     }
 }
 
@@ -780,7 +763,14 @@ mod tests {
             .presentation_manifest("games/game.puzzle")
             .expect("workspace manifest");
 
-        assert_eq!(manifest.visual_image_paths, ["models/images/player.png"]);
+        assert_eq!(
+            manifest
+                .visual_image_assets
+                .iter()
+                .map(|asset| asset.path.as_str())
+                .collect::<Vec<_>>(),
+            ["models/images/player.png"]
+        );
     }
 
     #[test]
@@ -854,5 +844,4 @@ mod tests {
         .expect_err("nested import must fail");
         assert!(nested.to_string().contains("document-scoped"), "{nested}");
     }
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }

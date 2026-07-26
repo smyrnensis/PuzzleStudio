@@ -487,8 +487,10 @@ fn qualify_loaded_model_resource_paths(
         LoweredModel::Puzzle3d { game, .. } => &mut game.visuals,
     };
     for visual in &mut visuals.entries {
-        if let VisualKind::Image { source } = &mut visual.kind {
-            *source = qualify_workspace_resource_path(owner_path, source)?;
+        if let VisualKind::Image { asset } = &mut visual.kind {
+            let path = qualify_workspace_resource_path(owner_path, &asset.path)?;
+            *asset = puzzle_assets::VisualImageAssetManifestEntry::from_path(path)
+                .map_err(|error| DiagnosticReport::error(error.to_string()))?;
         }
     }
     Ok(())

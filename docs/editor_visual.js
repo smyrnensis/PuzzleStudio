@@ -472,17 +472,6 @@ function moveVisualAnimationFrame(delta) {
   moveSharedVisualAnimationFrame("visual", delta);
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-function updateVisualAnimationFrameCount(value) {
-  const before = visualEditSnapshot("visual");
-  visual.animationFrameCount = normalizedVisualAnimationFrameCount(value);
-  ensureVisualAnimationFrames();
-  renderVisualBuilder();
-  pushVisualEditUndoSnapshot("visual", before);
-}
-
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 function insertVisualAnimationFrameAt(index) {
   return insertSharedVisualAnimationFrameAt("visual", index);
 }
@@ -4568,14 +4557,4 @@ visualRotateLeftButton.addEventListener("click", rotateVisualLeft);
 visualRotateRightButton.addEventListener("click", rotateVisualRight);
 visualFlipHorizontalButton.addEventListener("click", flipVisualHorizontal);
 visualFlipVerticalButton.addEventListener("click", flipVisualVertical);
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-visualGridButton?.addEventListener("click", () => {
-  if (currentVisualPaneMode === "visual3d" && typeof toggleVisual3dGrid === "function") {
-    toggleVisual3dGrid();
-    return;
-  }
-  toggleVisualGrid();
-});
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 resetVisualBuilder();

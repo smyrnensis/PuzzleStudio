@@ -953,17 +953,7 @@ fn collect_condition_inputs<const D: usize>(
                 collect_guard_inputs(branch, inputs);
             }
         }
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         GridRuleCondition::RuleMatches { guards, .. } => collect_guard_inputs(guards, inputs),
-=======
-        GridRuleCondition::RuleMatches { guards, .. } => {
-            for guard in guards {
-                if let GridGuard::InputIs(input) = guard {
-                    inputs.insert(*input);
-                }
-            }
-        }
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         GridRuleCondition::AnyMatches(_) | GridRuleCondition::NoMatches(_) => {}
     }
 }
@@ -1001,7 +991,6 @@ mod tests {
     use super::*;
 
     #[test]
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn search_request_requires_a_positive_stored_node_limit() {
         let mut service = SolverService::new();
         let error = service
@@ -1032,23 +1021,13 @@ mod tests {
     fn rule_matches_guard_inputs_are_solver_inputs() {
         let condition = GridRuleCondition::<2>::RuleMatches {
             guards: vec![GridGuard::InputIs(InputId(7))],
-=======
-    fn rule_match_condition_contributes_guard_inputs() {
-        let expected = InputId(7);
-        let condition = GridRuleCondition::<2>::RuleMatches {
-            guards: vec![GridGuard::InputIs(expected)],
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             pattern: puzzle_core::GridPattern::from_components(Vec::new()),
         };
         let mut inputs = BTreeSet::new();
 
         collect_condition_inputs(&condition, &mut inputs);
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         assert_eq!(inputs, BTreeSet::from([InputId(7)]));
-=======
-        assert_eq!(inputs, BTreeSet::from([expected]));
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     #[test]

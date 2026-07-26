@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -20,8 +20,8 @@ use puzzle_runtime_contract::{
 
 use super::{
     BevyRenderError, PuzzleBevyFramebufferRect, PuzzleBevyRenderView, PuzzleBevyRendererSystems,
-    PuzzleBevyViewDimension, PuzzleBevyViewId, RENDER_LAYER_STRIDE, camera_order,
-    checked_transform, finite_unit, resolved_color, runtime_affine,
+    PuzzleBevyViewDimension, PuzzleBevyViewId, checked_transform, finite_unit, resolved_color,
+    runtime_affine,
 };
 
 const MESH_Z_STEP: f32 = 0.001;
@@ -697,16 +697,22 @@ pub fn remove_render_view_2d(
 #[derive(Resource, Default)]
 pub struct BevyResolvedFrameQueue2d {
     next_generation: u64,
-    next_layer_slot: usize,
-    free_layers: Vec<usize>,
-    view_layers: HashMap<PuzzleBevyViewId, usize>,
-    view_orders: HashMap<PuzzleBevyViewId, isize>,
-    order_owners: HashMap<isize, PuzzleBevyViewId>,
-    registered_views: HashSet<PuzzleBevyViewId>,
+    registry: super::BevyViewRegistry,
     pending: HashMap<PuzzleBevyViewId, PendingViewChange2d>,
 }
 
 impl BevyResolvedFrameQueue2d {
+    pub fn reconcile_camera_orders(
+        &mut self,
+        desired: &BTreeMap<PuzzleBevyViewId, isize>,
+    ) -> Result<(), BevyRenderError> {
+        for view_id in desired.keys() {
+            view_id.validate()?;
+            view_id.validate_dimension(PuzzleBevyViewDimension::TwoD)?;
+        }
+        self.registry.reconcile_camera_orders(desired)
+    }
+
     pub fn submit(
         &mut self,
         view_id: PuzzleBevyViewId,
@@ -731,18 +737,9 @@ impl BevyResolvedFrameQueue2d {
         view_id.validate_dimension(PuzzleBevyViewDimension::TwoD)?;
         view.validate()?;
         let generation = self.next_generation()?;
-        let allocated_layer = !self.view_layers.contains_key(&view_id);
-        let render_layer = self.render_layer(&view_id)?;
-        let camera_order = match self.reserve_camera_order(&view_id, view.order) {
-            Ok(order) => order,
-            Err(error) => {
-                if allocated_layer && let Some(layer) = self.view_layers.remove(&view_id) {
-                    self.free_layers.push(layer);
-                }
-                return Err(error);
-            }
-        };
-        self.registered_views.insert(view_id.clone());
+        let (render_layer, camera_order) =
+            self.registry
+                .reserve(&view_id, view.order, FIRST_2D_RENDER_LAYER)?;
         self.pending.insert(
             view_id.clone(),
             PendingViewChange2d::Submit(SubmittedFrame2d {
@@ -760,67 +757,12 @@ impl BevyResolvedFrameQueue2d {
 
     pub fn remove(&mut self, view_id: &PuzzleBevyViewId) -> Result<u64, BevyRenderError> {
         view_id.validate_dimension(PuzzleBevyViewDimension::TwoD)?;
-        if !self.registered_views.contains(view_id) {
-            return Err(BevyRenderError::UnknownView {
-                view_id: view_id.clone(),
-            });
-        }
+        self.registry.validate_removal(view_id)?;
         let generation = self.next_generation()?;
-        self.registered_views.remove(view_id);
+        self.registry.release_registered(view_id);
         self.pending
             .insert(view_id.clone(), PendingViewChange2d::Remove);
         Ok(generation)
-    }
-
-    fn render_layer(&mut self, view_id: &PuzzleBevyViewId) -> Result<usize, BevyRenderError> {
-        if let Some(layer) = self.view_layers.get(view_id) {
-            return Ok(*layer);
-        }
-        let layer = if let Some(layer) = self.free_layers.pop() {
-            layer
-        } else {
-            let layer = self
-                .next_layer_slot
-                .checked_mul(RENDER_LAYER_STRIDE)
-                .and_then(|offset| FIRST_2D_RENDER_LAYER.checked_add(offset))
-                .ok_or(BevyRenderError::ViewLayerExhausted)?;
-            self.next_layer_slot = self
-                .next_layer_slot
-                .checked_add(1)
-                .ok_or(BevyRenderError::ViewLayerExhausted)?;
-            layer
-        };
-        self.view_layers.insert(view_id.clone(), layer);
-        Ok(layer)
-    }
-
-    fn reserve_camera_order(
-        &mut self,
-        view_id: &PuzzleBevyViewId,
-        logical_order: isize,
-    ) -> Result<isize, BevyRenderError> {
-        let order = camera_order(logical_order, PuzzleBevyViewDimension::TwoD)?;
-        if let Some(owner) = self.order_owners.get(&order)
-            && owner != view_id
-        {
-            return Err(BevyRenderError::DuplicateCameraOrder { order });
-        }
-        if let Some(previous) = self.view_orders.insert(view_id.clone(), order)
-            && previous != order
-        {
-            self.order_owners.remove(&previous);
-        }
-        self.order_owners.insert(order, view_id.clone());
-        Ok(order)
-    }
-
-    fn release_view(&mut self, view_id: &PuzzleBevyViewId) {
-        if let Some(layer) = self.view_layers.remove(view_id) {
-            self.free_layers.push(layer);
-        }
-        if let Some(order) = self.view_orders.remove(view_id) {
-            self.order_owners.remove(&order);
-        }
     }
 
     fn next_generation(&mut self) -> Result<u64, BevyRenderError> {
@@ -934,7 +876,7 @@ fn apply_pending_frame_2d(
                     }
                     commands.entity(view.camera).despawn();
                 }
-                queue.release_view(&view_id);
+                queue.registry.finish_removal(&view_id);
             }
             PendingViewChange2d::Submit(submitted) => {
                 let render_layers = RenderLayers::none().with(submitted.render_layer);
@@ -1301,6 +1243,25 @@ mod tests {
     };
 
     use super::*;
+
+    const GPU_FRAMEBUFFER_PREREQUISITE_DIAGNOSTIC: &str = "GPU framebuffer contract test requires a native wgpu adapter; no compatible adapter was available";
+
+    fn gpu_framebuffer_prerequisite<T, E>(probe: Result<T, E>) -> Result<T, &'static str> {
+        probe.map_err(|_| GPU_FRAMEBUFFER_PREREQUISITE_DIAGNOSTIC)
+    }
+
+    fn require_gpu_framebuffer_adapter() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let options = wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::from_env().unwrap_or_default(),
+            force_fallback_adapter: std::env::var("WGPU_FORCE_FALLBACK_ADAPTER")
+                .is_ok_and(|value| !(value.is_empty() || value == "0" || value == "false")),
+            compatible_surface: None,
+        };
+        let probe = bevy::tasks::block_on(instance.request_adapter(&options));
+        gpu_framebuffer_prerequisite(probe).unwrap_or_else(|diagnostic| panic!("{diagnostic}"));
+    }
 
     fn identity() -> [[f64; 4]; 4] {
         [
@@ -2065,8 +2026,8 @@ mod tests {
         app.update();
         {
             let queue = app.world().resource::<BevyResolvedFrameQueue2d>();
-            assert!(!queue.view_layers.contains_key(&left));
-            assert_eq!(queue.free_layers.len(), 1);
+            assert!(!queue.registry.view_layers.contains_key(&left));
+            assert_eq!(queue.registry.free_layers.len(), 1);
         }
 
         let remaining = app
@@ -2113,7 +2074,103 @@ mod tests {
     }
 
     #[test]
+    fn removal_releases_2d_view_reservations_before_deferred_ecs_cleanup() {
+        let mut queue = BevyResolvedFrameQueue2d::default();
+        let outgoing = PuzzleBevyViewId::two_d("outgoing", "main");
+        let incoming = PuzzleBevyViewId::two_d("incoming", "main");
+        let catalog = Arc::new(empty_catalog());
+
+        queue
+            .submit(
+                outgoing.clone(),
+                view_2d(UVec2::ZERO),
+                catalog.clone(),
+                &pixel_frame(),
+            )
+            .unwrap();
+        queue.remove(&outgoing).unwrap();
+        queue
+            .submit(
+                incoming.clone(),
+                view_2d(UVec2::ZERO),
+                catalog,
+                &pixel_frame(),
+            )
+            .unwrap();
+
+        assert!(!queue.registry.registered_views.contains(&outgoing));
+        assert!(queue.registry.registered_views.contains(&incoming));
+        assert_eq!(
+            queue.registry.order_owners.get(&1),
+            Some(&incoming),
+            "the accepted removal must end logical camera ownership immediately"
+        );
+    }
+
+    #[test]
+    fn retained_2d_views_can_swap_camera_orders_in_one_submission() {
+        let mut queue = BevyResolvedFrameQueue2d::default();
+        let left = PuzzleBevyViewId::two_d("left", "main");
+        let right = PuzzleBevyViewId::two_d("right", "main");
+        let catalog = Arc::new(empty_catalog());
+        queue
+            .submit(
+                left.clone(),
+                view_2d(UVec2::ZERO),
+                catalog.clone(),
+                &pixel_frame(),
+            )
+            .unwrap();
+        queue
+            .submit(
+                right.clone(),
+                PuzzleBevy2dView {
+                    order: 1,
+                    ..view_2d(UVec2::new(320, 0))
+                },
+                catalog.clone(),
+                &pixel_frame(),
+            )
+            .unwrap();
+
+        queue
+            .reconcile_camera_orders(&BTreeMap::from([(left.clone(), 1), (right.clone(), 0)]))
+            .unwrap();
+        queue
+            .submit(
+                left.clone(),
+                PuzzleBevy2dView {
+                    order: 1,
+                    ..view_2d(UVec2::ZERO)
+                },
+                catalog.clone(),
+                &pixel_frame(),
+            )
+            .unwrap();
+        queue
+            .submit(
+                right.clone(),
+                view_2d(UVec2::new(320, 0)),
+                catalog,
+                &pixel_frame(),
+            )
+            .unwrap();
+        assert_eq!(queue.registry.order_owners.get(&1), Some(&right));
+        assert_eq!(queue.registry.order_owners.get(&3), Some(&left));
+    }
+
+    #[test]
+    fn gpu_framebuffer_prerequisite_reports_a_stable_missing_adapter_diagnostic() {
+        assert_eq!(
+            gpu_framebuffer_prerequisite::<(), ()>(Err(())),
+            Err(GPU_FRAMEBUFFER_PREREQUISITE_DIAGNOSTIC)
+        );
+    }
+
+    #[test]
     fn gpu_framebuffer_matches_for_png_and_the_same_ascii_colors_under_cover() {
+        require_gpu_framebuffer_adapter();
+
         const VIEW_SIZE: u32 = 8;
         const TARGET_WIDTH: u32 = VIEW_SIZE * 2;
         const TARGET_HEIGHT: u32 = VIEW_SIZE;

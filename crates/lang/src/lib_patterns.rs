@@ -875,6 +875,7 @@ fn resolve_relative_selector(
                     source_token,
                     source_binding: None,
                     projects_source: true,
+                    relative_projection: true,
                     mapped_objects: selector
                         .relative_constraints
                         .first()
@@ -888,6 +889,7 @@ fn resolve_relative_selector(
                         .unwrap_or_default(),
                     preserves_once_group: false,
                 });
+            transform.relative_projection = true;
             for constraint in &selector.relative_constraints {
                 let absolute = resolve_relative_direction(
                     constraint.relative,
@@ -910,11 +912,11 @@ fn resolve_relative_selector(
             }
             selector.alternatives = transform.mapped_objects.values().copied().collect();
             dedup_objects(&mut selector.alternatives);
-            if selector.alternatives.len() == 1 {
-                selector.transform = None;
-            } else {
-                selector.transform = Some(transform);
-            }
+            // A relative RHS is a projection of the matched LHS occurrence even when
+            // one oriented expansion collapses every source variant to one target.
+            // Retaining the transform preserves occurrence identity so same-cell
+            // lowering emits Replace instead of unrelated Remove + Add writes.
+            selector.transform = Some(transform);
         }
     }
     selector.relative_constraints.clear();
@@ -1240,6 +1242,36 @@ struct OccurrencePlacement {
     require_object_set_mark: Vec<ObjectSetMarkPatternTemplate>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct OrderedOccurrencePlacements(Vec<(OccurrenceKey, OccurrencePlacement)>);
+
+impl OrderedOccurrencePlacements {
+    fn insert(
+        &mut self,
+        key: OccurrenceKey,
+        placement: OccurrencePlacement,
+    ) -> Option<OccurrencePlacement> {
+        if let Some((_, existing)) = self.0.iter_mut().find(|(existing, _)| *existing == key) {
+            return Some(std::mem::replace(existing, placement));
+        }
+        self.0.push((key, placement));
+        None
+    }
+
+    fn remove(&mut self, key: &OccurrenceKey) -> Option<OccurrencePlacement> {
+        let index = self.0.iter().position(|(existing, _)| existing == key)?;
+        Some(self.0.remove(index).1)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&OccurrenceKey, &OccurrencePlacement)> {
+        self.0.iter().map(|(key, placement)| (key, placement))
+    }
+
+    fn values(&self) -> impl Iterator<Item = &OccurrencePlacement> {
+        self.0.iter().map(|(_, placement)| placement)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RewritePosition2 {
     component: u16,
@@ -1257,6 +1289,7 @@ struct SelectorTransform {
     source_token: String,
     source_binding: Option<u16>,
     projects_source: bool,
+    relative_projection: bool,
     mapped_objects: HashMap<ObjectId, ObjectId>,
     preserves_once_group: bool,
 }
@@ -1788,6 +1821,7 @@ fn resolve_object_selector_syntax(
                 source_token,
                 source_binding: None,
                 projects_source: true,
+                relative_projection: false,
                 mapped_objects,
                 preserves_once_group,
             }),
@@ -2477,6 +2511,7 @@ fn schema_selector_rhs_assignment_transform(
         source_token,
         source_binding: None,
         projects_source: true,
+        relative_projection: false,
         mapped_objects,
         preserves_once_group: false,
     }))
@@ -3267,8 +3302,8 @@ fn compile_before_after_blocks(
                 let mut writes = Vec::new();
                 let mut before_token_counts = HashMap::<String, usize>::new();
                 let mut after_token_counts = HashMap::<String, usize>::new();
-                let mut before_placements = HashMap::<OccurrenceKey, OccurrencePlacement>::new();
-                let mut after_placements = HashMap::<OccurrenceKey, OccurrencePlacement>::new();
+                let mut before_placements = OrderedOccurrencePlacements::default();
+                let mut after_placements = OrderedOccurrencePlacements::default();
                 let mut duplicate_after_keys = HashSet::<OccurrenceKey>::new();
 
                 for (component_index, (before_component, after_component)) in
@@ -4189,8 +4224,8 @@ fn occurrence_key_has_label(key: &OccurrenceKey) -> bool {
 
 fn normalize_occurrence_writes(
     writes: Vec<WriteOpTemplate>,
-    before_placements: &HashMap<OccurrenceKey, OccurrencePlacement>,
-    after_placements: &HashMap<OccurrenceKey, OccurrencePlacement>,
+    before_placements: &OrderedOccurrencePlacements,
+    after_placements: &OrderedOccurrencePlacements,
     _line: &str,
 ) -> Result<Vec<WriteOpTemplate>, DiagnosticReport> {
     let before_occurrences = before_placements
@@ -5347,7 +5382,29 @@ fn resolve_rewrite_assignment_bindings(
                     let Some(transform) = selector.transform.as_ref() else {
                         continue;
                     };
-                    let (source_index, projects_source) = if before_by_token
+                    let has_projection_source = before_by_token
+                        .contains_key(&transform.source_token)
+                        || before_by_token.contains_key(&selector.token)
+                        || before_occurrences.iter().any(|occurrence| {
+                            (selector.occurrence_label.is_none()
+                                || selector.occurrence_label == occurrence.occurrence_label)
+                                && occurrence.alternatives.iter().any(|object| {
+                                    transform.mapped_objects.contains_key(object)
+                                })
+                        });
+                    if !has_projection_source && selector.alternatives.len() == 1 {
+                        // A source-free relative RHS names the one object selected by
+                        // this oriented expansion. It is a construction, not an
+                        // occurrence projection, so it intentionally has no key.
+                        selector.transform = None;
+                        continue;
+                    }
+                    let transform = selector
+                        .transform
+                        .as_ref()
+                        .expect("projection source check retained the selector transform");
+                    let (source_index, projects_source) = if !transform.relative_projection
+                        && before_by_token
                         .contains_key(&selector.token)
                         && !before_by_token.contains_key(&transform.source_token)
                     {

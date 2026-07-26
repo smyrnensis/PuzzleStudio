@@ -8,21 +8,12 @@ use crate::{
 use puzzle_core::{GridState, ObjectId, Size3};
 use puzzle_presentation::{
     VisualComposition, VisualOrderRef, VisualPriorityRef, cell_render_order_3d,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     resolve_object_priority, resolve_palette_color,
 };
 use puzzle_runtime_contract::{
     RuntimeCoord, RuntimePuzzle3AnimationRender, RuntimePuzzle3Camera,
     RuntimePuzzle3CameraProjection, RuntimePuzzle3Cell, RuntimePuzzle3Input,
     RuntimePuzzle3Lighting, RuntimePuzzle3Object, RuntimePuzzle3ObjectRef,
-=======
-    resolve_object_priority,
-};
-use puzzle_runtime_contract::{
-    RuntimeCoord, RuntimePuzzle3AnimationRender, RuntimePuzzle3Camera,
-    RuntimePuzzle3CameraProjection, RuntimePuzzle3Cell, RuntimePuzzle3GridRender,
-    RuntimePuzzle3Input, RuntimePuzzle3Object, RuntimePuzzle3ObjectRef,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     RuntimePuzzle3PixelateRender, RuntimePuzzle3Render, RuntimePuzzle3Resources,
     RuntimePuzzle3Size, RuntimePuzzle3SpatialOp, RuntimePuzzle3TweenRender, RuntimePuzzle3Viewport,
     RuntimePuzzle3ViewportFollow, RuntimePuzzle3ViewportFraming, RuntimePuzzle3ViewportHeight,
@@ -39,10 +30,7 @@ pub enum VisualFixtureExportError {
     MissingObjectLayer { object: ObjectId },
     InvalidVisualOrder { detail: String },
     UnsupportedInputDirection { input: String },
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     InvalidLightingColor { color: String },
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 pub fn runtime_puzzle3_resources(
@@ -223,14 +211,11 @@ pub fn runtime_puzzle3_resources(
             })
             .collect(),
     };
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     let lighting_color = resolve_palette_color(&game.render.lighting.color).map_err(|_| {
         VisualFixtureExportError::InvalidLightingColor {
             color: game.render.lighting.color.clone(),
         }
     })?;
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     Ok(RuntimePuzzle3Resources {
         layer_count: game.game.layer_count,
         inputs,
@@ -253,18 +238,12 @@ pub fn runtime_puzzle3_resources(
                 interactive_look: camera.interactive_look,
                 interactive_zoom: camera.interactive_zoom,
             },
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             lighting: RuntimePuzzle3Lighting {
                 intensity: f64::from(game.render.lighting.intensity_milli) / 1000.0,
                 ambient: f64::from(game.render.lighting.ambient_milli) / 1000.0,
                 yaw_degrees: game.render.lighting.yaw_degrees,
                 pitch_degrees: game.render.lighting.pitch_degrees,
                 color: lighting_color,
-=======
-            grid: RuntimePuzzle3GridRender {
-                visibility: u8::from(game.render.grid.occupied_cells),
-                occupied_cells: game.render.grid.occupied_cells,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             },
             visual: RuntimePuzzle3VisualRender {
                 shade: game.render.visual.shade,
@@ -390,16 +369,24 @@ pub fn export_visual_fixture_json(
     game: &LoadedGridGame<3, Size3>,
     presentation: &SpatialPresentation,
 ) -> Result<String, VisualFixtureExportError> {
-    export_visual_fixture_json_with_scenes(game, presentation, None, &[])
+    export_visual_fixture_json_with_title(game, presentation, None)
 }
 
-pub fn export_visual_fixture_json_with_scenes(
+pub fn export_visual_fixture_json_with_title(
     game: &LoadedGridGame<3, Size3>,
     presentation: &SpatialPresentation,
+    title: Option<&str>,
+) -> Result<String, VisualFixtureExportError> {
+    export_visual_fixture_json_with_title_and_scenes(game, presentation, title, None, &[])
+}
+
+pub fn export_visual_fixture_json_with_title_and_scenes(
+    game: &LoadedGridGame<3, Size3>,
+    presentation: &SpatialPresentation,
+    title: Option<&str>,
     scene_fields_json: Option<&str>,
     level_bundle_names: &[String],
 ) -> Result<String, VisualFixtureExportError> {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     let mut output = export_visual_fixture_json_with_scenes(
         game,
         presentation,
@@ -419,8 +406,6 @@ pub fn export_visual_fixture_json_with_scenes(
     scene_fields_json: Option<&str>,
     level_bundle_names: &[String],
 ) -> Result<String, VisualFixtureExportError> {
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     let resources = runtime_puzzle3_resources(game, presentation)?;
     let mut out = String::new();
     out.push_str("{\n");

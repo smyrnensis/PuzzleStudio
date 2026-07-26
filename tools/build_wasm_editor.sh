@@ -3,6 +3,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+source tools/wasm_build_environment.sh
+configure_reproducible_wasm_build "$repo_root"
 editor_target_dir="${CARGO_TARGET_DIR:-target}"
 wasm_profile="${1:-release}"
 if (($# > 1)) || [[ "$wasm_profile" != "debug" && "$wasm_profile" != "release" ]]; then
@@ -18,31 +20,18 @@ else
   cargo build --target wasm32-unknown-unknown -p puzzle-wasm
 fi
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-editor_target_dir="${CARGO_TARGET_DIR:-/private/tmp/puzzlebuilder-bevy-target}"
-cargo build \
-  --target wasm32-unknown-unknown \
-  --target-dir "$editor_target_dir" \
-  --release \
-  -p puzzle-wasm
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 mkdir -p crates/html_editor/static/wasm
 wasm-bindgen \
   --target web \
   --out-dir crates/html_editor/static/wasm \
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-  "$editor_target_dir/wasm32-unknown-unknown/release/puzzle_wasm.wasm"
-=======
   "$editor_target_dir/wasm32-unknown-unknown/$target_profile_dir/puzzle_wasm.wasm"
 
-if ! grep -q "export function activate_source_analysis" crates/html_editor/static/wasm/puzzle_wasm.js; then
+if ! grep -Fq "export function activate_source_analysis(" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated WASM bindings are missing activate_source_analysis" >&2
   exit 1
 fi
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
-if grep -q "export function activate_source_analysis_with_profile" crates/html_editor/static/wasm/puzzle_wasm.js; then
+if grep -Fq "export function activate_source_analysis_with_profile(" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated WASM bindings still expose the removed file-level source profile" >&2
   exit 1
 fi
@@ -82,7 +71,6 @@ if ! grep -q "export class WasmSolverService" crates/html_editor/static/wasm/puz
   exit 1
 fi
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 if ! grep -q "export class WasmEditorAudio" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated editor WASM bindings are missing WasmEditorAudio" >&2
   exit 1
@@ -109,12 +97,8 @@ if grep -q "WasmEditorAudioPreview" crates/html_editor/static/wasm/puzzle_wasm.j
   exit 1
 fi
 
-if ! grep -q "export function workspace_presentation_manifest" crates/html_editor/static/wasm/puzzle_wasm.js; then
-  echo "generated WASM bindings are missing workspace_presentation_manifest" >&2
-=======
 if ! grep -q "export class WasmWorkspaceSession" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated WASM bindings are missing WasmWorkspaceSession" >&2
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   exit 1
 fi
 
@@ -138,7 +122,7 @@ if grep -Eq "compile_solver_rules_json|compile_workspace_solver_rules_json|edito
   exit 1
 fi
 
-if grep -Eq "export class WasmSourceAnalysis|export function activate_source_analysis\\(|export function analyze_source|export function highlight_source_html|export function highlight_source_json|export function active_source_analysis_highlight_json|export function source_outline_json|export function suggest_source_completions|export function resolve_source_target|export function source_entries_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
+if grep -Eq "export class WasmSourceAnalysis|export function analyze_source|export function highlight_source_html|export function highlight_source_json|export function active_source_analysis_highlight_json|export function source_outline_json|export function suggest_source_completions|export function resolve_source_target|export function source_entries_json" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated editor WASM bindings include old source analysis exports" >&2
   exit 1
 fi
@@ -149,3 +133,8 @@ if grep -Eq "WasmCoreRuntime|WasmPuzzle3Runtime|WasmStandaloneSession|transition
 fi
 
 node tools/check_wasm_editor_preview.mjs
+verify_wasm_artifacts_have_no_local_paths \
+  crates/html_editor/static/wasm/puzzle_wasm.js \
+  crates/html_editor/static/wasm/puzzle_wasm.d.ts \
+  crates/html_editor/static/wasm/puzzle_wasm_bg.wasm \
+  crates/html_editor/static/wasm/puzzle_wasm_bg.wasm.d.ts

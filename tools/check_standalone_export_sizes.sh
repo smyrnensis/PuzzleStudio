@@ -31,7 +31,7 @@ check_export_size() {
     -o "$output_path"
 
   raw_bytes="$(wc -c < "$output_path" | tr -d '[:space:]')"
-  gzip_bytes="$(gzip -c "$output_path" | wc -c | tr -d '[:space:]')"
+  gzip_bytes="$(gzip -n -c "$output_path" | wc -c | tr -d '[:space:]')"
   if (( raw_bytes > max_raw_html_bytes )); then
     echo "$source_path export is $raw_bytes bytes, exceeding the $max_raw_html_bytes-byte raw HTML budget" >&2
     exit 1
@@ -44,4 +44,4 @@ check_export_size() {
 }
 
 check_export_size games/TENETEN.puzzle teneten-2d
-check_export_size games/TENETEN3D.puzzle3 teneten-3d
+check_export_size games/TENETEN3D.puzzle teneten-3d

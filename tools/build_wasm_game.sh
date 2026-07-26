@@ -3,6 +3,8 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+source tools/wasm_build_environment.sh
+configure_reproducible_wasm_build "$repo_root"
 game_target_dir="${CARGO_TARGET_DIR:-target}"
 wasm_profile="${1:-release}"
 if (($# > 1)) || [[ "$wasm_profile" != "debug" && "$wasm_profile" != "release" ]]; then
@@ -18,24 +20,11 @@ else
   cargo build --target wasm32-unknown-unknown -p puzzle-wasm-game
 fi
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-game_target_dir="${CARGO_TARGET_DIR:-/private/tmp/puzzlebuilder-bevy-target}"
-cargo build \
-  --target wasm32-unknown-unknown \
-  --target-dir "$game_target_dir" \
-  --release \
-  -p puzzle-wasm-game
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 mkdir -p crates/html_play/static/wasm_game
 wasm-bindgen \
   --target web \
   --out-dir crates/html_play/static/wasm_game \
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-  "$game_target_dir/wasm32-unknown-unknown/release/puzzle_wasm_game.wasm"
-=======
   "$game_target_dir/wasm32-unknown-unknown/$target_profile_dir/puzzle_wasm_game.wasm"
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
 if ! grep -q "export class WasmStandaloneSession" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
   echo "generated game WASM bindings are missing WasmStandaloneSession" >&2
@@ -71,6 +60,12 @@ if ! grep -aFq "debug_transition_value" crates/html_play/static/wasm_game/puzzle
   echo "generated editor game WASM binary is missing the editor debug endpoint" >&2
   exit 1
 fi
+
+verify_wasm_artifacts_have_no_local_paths \
+  crates/html_play/static/wasm_game/puzzle_wasm_game.js \
+  crates/html_play/static/wasm_game/puzzle_wasm_game.d.ts \
+  crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm \
+  crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm.d.ts
 
 mkdir -p crates/html_editor/static/wasm_game
 cp crates/html_play/static/wasm_game/puzzle_wasm_game.js crates/html_editor/static/wasm_game/puzzle_wasm_game.js

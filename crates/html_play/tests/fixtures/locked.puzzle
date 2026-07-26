@@ -135,8 +135,8 @@ routine @display_locked_frame {
 [ @LockedCorner:* ] -> [  ]
 [ Room:close | no Room:close ] 
 -> [ Room:close @LockedFrame:> |  ]
-[ Room:close | @LockedFrame:v ; @LockedFrame:> |  ] 
--> [ Room:close @LockedCorner:> | @LockedFrame:v ; @LockedFrame:> |  ] 
+[ Room:close | @LockedFrame:down ; @LockedFrame:right |  ]
+-> [ Room:close @LockedCorner:right | @LockedFrame:down ; @LockedFrame:right |  ]
 }
 
 routine move {

@@ -191,6 +191,7 @@ ensure_static_asset_copies_match() {
 workspace_sources=(
   Cargo.toml
   Cargo.lock
+  tools/wasm_build_environment.sh
 )
 
 if ! command -v jq >/dev/null 2>&1; then

@@ -129,7 +129,7 @@ const level3dOriginZScrub = document.querySelector("#level3dOriginZScrub");
 const level3dPalette = document.querySelector("#level3dPalette");
 const level3dStageViewButton = document.querySelector("#level3dStageViewButton");
 const level3dLayerViewButton = document.querySelector("#level3dLayerViewButton");
-const level3dRuntimeFrame = document.querySelector("#level3dRuntimeFrame");
+let level3dRuntimeFrame = document.querySelector("#level3dRuntimeFrame");
 const level3dStageCanvas = document.querySelector("#level3dStageCanvas");
 const level3dLayerPalette = document.querySelector("#level3dLayerPalette");
 const level3dLayerBoard = document.querySelector("#level3dLayerBoard");
@@ -301,15 +301,6 @@ const solverThemeRoot = solverBoard?.closest(".solver-board-wrap") || solverBoar
 const levelRenderer = window.PuzzleAuthoringRenderer
   ? new window.PuzzleAuthoringRenderer(levelBoard, { themeRoot: levelThemeRoot })
   : null;
-const solverRenderer = window.PuzzleRenderer && window.PuzzleStudioRuntime
-  ? new window.PuzzleRenderer(solverBoard, {
-      renderMode: "canvas",
-      themeRoot: solverThemeRoot,
-      prepareRenderScene: (renderScene) => window.PuzzleStudioRuntime.prepareRenderScene(renderScene),
-      resolveRenderMoment: (renderScene, moment) => window.PuzzleStudioRuntime.resolveRenderMoment(renderScene, moment),
-      onError: (error) => {
-        console.error(error);
-        setLevelSolveStatus(`Solver render failed: ${userFacingRuntimeError(error)}`, "is-error");
-      },
-    })
+const solverRenderer = window.PuzzleRenderer
+  ? new window.PuzzleRenderer(solverBoard, { renderMode: "canvas", themeRoot: solverThemeRoot })
   : null;

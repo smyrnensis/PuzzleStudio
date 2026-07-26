@@ -117,7 +117,7 @@ impl WasmWorkspaceSession {
             .map_err(|error| diagnostic_report_js_value(&error))?;
         let entry_source = workspace_entry_source(entry_path, &self.documents)
             .map_err(|error| JsValue::from_str(&error))?;
-        html_play::export_editor_preview_html_from_document(
+        html_play::export_editor_preview_build_from_document(
             &document,
             entry_source,
             entry_path,
@@ -333,7 +333,18 @@ impl WasmEditorAudio {
 
     pub async fn unlock(&mut self, now_ms: f64) -> Result<(), JsValue> {
         let now_frame = editor_audio_frame(now_ms)?;
-        let capability = self.backend.unlock().await.map_err(editor_audio_error)?;
+        let capability = match self.backend.begin_unlock().map_err(editor_audio_error)? {
+            puzzle_web_audio::BrowserAudioUnlockStart::Started(task) => self
+                .backend
+                .finish_unlock(task.await)
+                .map_err(editor_audio_error)?,
+            puzzle_web_audio::BrowserAudioUnlockStart::Ready(capability) => capability,
+            puzzle_web_audio::BrowserAudioUnlockStart::InFlight => {
+                return Err(JsValue::from_str(
+                    "editor audio unlock is already in progress",
+                ));
+            }
+        };
         let commands = self.runtime.set_capability(capability, now_frame);
         self.consume(commands, now_frame)
     }
@@ -813,32 +824,16 @@ impl SourceAnalysisStore {
         revision
     }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-    fn activate(
-        &mut self,
-        source: &str,
-        source_profile: puzzle_lang::PuzzleSourceProfile,
-    ) -> SourceAnalysisRevision {
-        if let Some(active) = &self.active {
-            if active.analysis.source() == source
-                && active.analysis.source_profile() == Some(source_profile)
-            {
-=======
     fn activate(&mut self, source: &str) -> SourceAnalysisRevision {
         if let Some(active) = &self.active {
             if active.analysis.source() == source {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
                 return active.revision;
             }
         }
         let revision = self.allocate_revision();
         self.active = Some(ActiveSourceAnalysis {
             revision,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-            analysis: puzzle_lang::SourceAnalysis::new_for_profile(source, Some(source_profile)),
-=======
             analysis: puzzle_lang::SourceAnalysis::new(source),
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         });
         revision
     }
@@ -948,25 +943,8 @@ fn source_target_with_utf16_offsets(
 }
 
 #[wasm_bindgen]
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-pub fn activate_source_analysis_with_profile(
-    source: &str,
-    source_profile: &str,
-) -> Result<SourceAnalysisRevision, JsValue> {
-    let profile = match source_profile {
-        "puzzle2d" => puzzle_lang::PuzzleSourceProfile::Puzzle2d,
-        "puzzle3d" => puzzle_lang::PuzzleSourceProfile::Puzzle3d,
-        _ => {
-            return Err(JsValue::from_str(
-                "source analysis profile must be `puzzle2d` or `puzzle3d`",
-            ));
-        }
-    };
-    Ok(SOURCE_ANALYSES.with(|store| store.borrow_mut().activate(source, profile)))
-=======
 pub fn activate_source_analysis(source: &str) -> SourceAnalysisRevision {
     SOURCE_ANALYSES.with(|store| store.borrow_mut().activate(source))
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 #[wasm_bindgen]
@@ -1295,8 +1273,16 @@ pub fn compile_preview(
     } else {
         puzzle_path
     };
-    html_play::export_editor_preview_html_from_source(source, path, game_css, game_visuals_js)
-        .map_err(|error| diagnostic_report_js_value(&error))
+    let document = puzzle_lang::parse_game_for_path(source, path)
+        .map_err(|error| diagnostic_report_js_value(&error))?;
+    html_play::export_editor_preview_build_from_document(
+        &document,
+        source,
+        path,
+        game_css,
+        game_visuals_js,
+    )
+    .map_err(|error| diagnostic_report_js_value(&error))
 }
 
 fn workspace_entry_source<'a>(
@@ -1495,19 +1481,16 @@ fn set_js_optional_string(payload: &js_sys::Object, key: &str, value: Option<&st
 #[cfg(test)]
 mod tests {
     use super::{
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-        SourceAnalysisRevision, activate_source_analysis_with_profile,
-        active_source_analysis_entries_json, active_source_analysis_highlight_range_json,
-        active_source_analysis_json, active_source_analysis_outline_json,
-        active_source_analysis_suggest_source_completions, apply_source_analysis_edit,
-        compile_preview, compile_workspace_preview_from_documents, diagnostic_report_json,
+        SourceAnalysisRevision, activate_source_analysis, active_source_analysis_entries_json,
+        active_source_analysis_highlight_range_json, active_source_analysis_json,
+        active_source_analysis_outline_json, active_source_analysis_suggest_source_completions,
+        apply_source_analysis_edit, compile_preview, diagnostic_report_json,
         editor_audio_diagnostic_json, encode_wav, utf8_offset_from_utf16, utf16_offset_from_utf8,
         with_source_analysis,
     };
 
     fn activate_puzzle2d_source_analysis(source: &str) -> SourceAnalysisRevision {
-        activate_source_analysis_with_profile(source, "puzzle2d")
-            .expect("activate profile-aware source analysis")
+        activate_source_analysis(source)
     }
 
     #[test]
@@ -1532,44 +1515,10 @@ mod tests {
         assert_eq!(wav.len(), 50);
     }
 
-    fn invalid_workspace_game(statement: &str) -> String {
-        format!(
-            r#"title = "Diagnostic origin"
-
-puzzle main {{
-layers {{
-base = Floor
-}}
-visuals {{
-}}
-rules {{
-{statement}
-}}
-levels {{
-legend {{
-. = empty
-}}
-level "first"
-.
-}}
-}}
-"#
-        )
-    }
-
-=======
-        activate_source_analysis, active_source_analysis_entries_json,
-        active_source_analysis_highlight_range_json, active_source_analysis_json,
-        active_source_analysis_outline_json, active_source_analysis_suggest_source_completions,
-        apply_source_analysis_edit, compile_preview, diagnostic_report_json,
-        utf8_offset_from_utf16, utf16_offset_from_utf8, with_source_analysis,
-    };
-
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     #[test]
     fn compile_preview_accepts_at_prefixed_object_single_color_visual() {
         let source = r##"
-title at_prefixed_object_single_color_preview
+const title = at_prefixed_object_single_color_preview
 
 puzzle default {
 layers {
@@ -1592,14 +1541,15 @@ level "start"
 }
 "##;
 
-        let html = compile_preview(source, "game.puzzle", "", "").expect("compile preview");
+        let build = compile_preview(source, "game.puzzle", "", "").expect("compile preview");
+        let build: serde_json::Value = serde_json::from_str(&build).unwrap();
+        let html = build["html"].as_str().unwrap();
 
         assert!(html.contains("<!doctype html>"));
         assert!(html.contains("#eeeeee"));
         assert!(html.contains("PuzzleStudioPreviewState"));
         assert!(html.contains("PuzzleRuntimeWasmLoader"));
-        assert!(html.contains("ui-tap"));
-        assert!(html.contains("buildSelectLayers"));
+        assert_eq!(build["models"]["default"]["kind"], "puzzle2d");
     }
 
     #[test]
@@ -1624,11 +1574,6 @@ level "start"
         let cursor = source.find("    ").unwrap() + 4;
         let revision = activate_puzzle2d_source_analysis(source);
         assert_eq!(activate_puzzle2d_source_analysis(source), revision);
-        let puzzle3_revision = activate_source_analysis_with_profile(source, "puzzle3d")
-            .expect("activate 3D source profile");
-        assert_ne!(puzzle3_revision, revision);
-        let revision = activate_puzzle2d_source_analysis(source);
-        assert_ne!(revision, puzzle3_revision);
 
         let analysis = active_source_analysis_json(revision).expect("analysis json");
         assert!(analysis.contains(r#""version":2"#));
@@ -1667,7 +1612,7 @@ level "start"
 
     #[test]
     fn active_source_analysis_boundary_uses_browser_utf16_offsets() {
-        let source = "const title = \"😀\"\npuzzle Demo {\n  sounds {\n    \n  }\n}\n";
+        let source = "title = \"😀\"\npuzzle Demo {\n  sounds {\n    \n  }\n}\n";
         let cursor_byte = source.find("    ").unwrap() + 4;
         let cursor_utf16 = source[..cursor_byte].encode_utf16().count();
         let revision = activate_puzzle2d_source_analysis(source);

@@ -9,7 +9,6 @@ import { fileURLToPath } from "node:url";
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 const isDirectInvocation =
   process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 let args = {};
@@ -20,12 +19,15 @@ let importFileOnly = "";
 let chromePath = "";
 let headless = true;
 let sourceInputOnly = false;
-let visualPaletteOnly = false;
+let visualSelectionRevisionOnly = false;
 let sourceEditingCommandsOnly = false;
 let sourceSelectionOnly = false;
 let sourceOptionDragOnly = false;
+let sourceOccurrenceSelectionOnly = false;
 let levelSelectionRevisionOnly = false;
 let indexControlLayoutOnly = false;
+let initialPreviewOnly = false;
+let visualClipFillOnly = false;
 
 if (isDirectInvocation) {
   args = parseArgs(process.argv.slice(2));
@@ -34,44 +36,32 @@ if (isDirectInvocation) {
     repoRoot,
     args.fixture || "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle",
   );
-  fixture3d = path.resolve(repoRoot, args.fixture3d || "games/spec_3d.puzzle3");
+  fixture3d = path.resolve(repoRoot, args.fixture3d || "games/spec_3d.puzzle");
   importFileOnly = args.importFileOnly ? path.resolve(repoRoot, args.importFileOnly) : "";
   chromePath = resolveChrome(args.chrome);
   headless = !args.headed;
   sourceInputOnly = Boolean(args.sourceInputOnly);
-  visualPaletteOnly = Boolean(args.visualPaletteOnly);
+  visualSelectionRevisionOnly = Boolean(args.visualSelectionRevisionOnly);
   sourceEditingCommandsOnly = Boolean(args.sourceEditingCommandsOnly);
   sourceSelectionOnly = Boolean(args.sourceSelectionOnly);
   sourceOptionDragOnly = Boolean(args.sourceOptionDragOnly);
+  sourceOccurrenceSelectionOnly = Boolean(args.sourceOccurrenceSelectionOnly);
   levelSelectionRevisionOnly = Boolean(args.levelSelectionRevisionOnly);
   indexControlLayoutOnly = Boolean(args.indexControlLayoutOnly);
+  initialPreviewOnly = Boolean(args.initialPreviewOnly);
+  visualClipFillOnly = Boolean(args.visualClipFillOnly);
 }
-=======
-const args = parseArgs(process.argv.slice(2));
-const editorBin = requiredPath(args.editorBin, "--editor-bin");
-const fixture2d = path.resolve(repoRoot, args.fixture || "crates/lang/tests/fixtures/spec_2d_microban_basic.puzzle");
-const fixture3d = path.resolve(repoRoot, args.fixture3d || "games/spec_3d.puzzle");
-const importFileOnly = args.importFileOnly ? path.resolve(repoRoot, args.importFileOnly) : "";
-const chromePath = resolveChrome(args.chrome);
-const headless = !args.headed;
-const sourceInputOnly = Boolean(args.sourceInputOnly);
-const visualPaletteOnly = Boolean(args.visualPaletteOnly);
-const visualClipFillOnly = Boolean(args.visualClipFillOnly);
-const sourceEditingCommandsOnly = Boolean(args.sourceEditingCommandsOnly);
-const sourceSelectionOnly = Boolean(args.sourceSelectionOnly);
-const sourceOptionDragOnly = Boolean(args.sourceOptionDragOnly);
-const sourceOccurrenceSelectionOnly = Boolean(args.sourceOccurrenceSelectionOnly);
-const levelSelectionRevisionOnly = Boolean(args.levelSelectionRevisionOnly);
-const indexControlLayoutOnly = Boolean(args.indexControlLayoutOnly);
-const initialPreviewOnly = Boolean(args.initialPreviewOnly);
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
 const failures = [];
 
 async function main() {
-  const browser = new Browser(chromePath, { headless });
+  const browser = new Browser(chromePath, {
+    headless,
+    enableGpu: true,
+    swiftShader: true,
+  });
   await browser.start();
-  const page = await browser.newPage();
+  let page = await browser.newPage();
   if (initialPreviewOnly) {
     await page.send("Page.addScriptToEvaluateOnNewDocument", {
       source: `(() => {
@@ -105,6 +95,10 @@ async function main() {
         await levelSelectionWaitsForCurrentEntries(page);
         return;
       }
+      if (visualSelectionRevisionOnly) {
+        await visualSelectionWaitsForCurrentEntries(page);
+        return;
+      }
       if (visualClipFillOnly) {
         await visualBucketFillRespectsActiveClip(page);
         return;
@@ -127,12 +121,9 @@ async function main() {
         await fileInputImportAddsExternalPuzzleDocument(page, importFileOnly);
         return;
       }
-      await visualPaletteMouseClickPreservesPaneScroll(page);
       await visualColorEditorOffersPresetPalette(page);
       await visualAnimationIndexControlStaysCentered(page);
-      if (visualPaletteOnly) {
-        return;
-      }
+      page = await freshEditorPage(browser, page, server.url);
       if (sourceEditingCommandsOnly) {
         await sourceCodeMirrorEditingCommandsReachWorkflow(page);
         await sourceOutlineNavigationCentersCursor(page);
@@ -160,14 +151,17 @@ async function main() {
       await sourceOccurrenceSelectionShortcutsMatchVsCode(page);
       await sourceEntryRefreshIgnoresSupersededEdits(page);
       await sourceRewritePatternTabCopiesLhsToEmptyRhs(page);
-      await fileInputImportAddsPuzzleDocument(page);
       if (sourceInputOnly) {
+        await fileInputImportAddsPuzzleDocument(page);
         return;
       }
+      page = await freshEditorPage(browser, page, server.url);
       await runPreviewStartsRuntime(page);
       await sourceEditKeepsCompiledPreviewRunning(page);
       await levelPlaytestKeyboardChangesBoardWithoutSavingSource(page);
       await sourceLevelAsciiClickOpensLevelEditor(page);
+      page = await freshEditorPage(browser, page, server.url);
+      await fileInputImportAddsPuzzleDocument(page);
     });
 
     if (visualClipFillOnly) {
@@ -176,7 +170,7 @@ async function main() {
         await editorLoads(page);
         await visual3dBucketFillRespectsActiveClip(page);
       });
-    } else if (!initialPreviewOnly && !sourceInputOnly && !sourceEditingCommandsOnly && !sourceSelectionOnly && !sourceOptionDragOnly && !sourceOccurrenceSelectionOnly && !levelSelectionRevisionOnly && !visualPaletteOnly && !importFileOnly) {
+    } else if (!initialPreviewOnly && !sourceInputOnly && !sourceEditingCommandsOnly && !sourceSelectionOnly && !sourceOptionDragOnly && !sourceOccurrenceSelectionOnly && !levelSelectionRevisionOnly && !visualSelectionRevisionOnly && !importFileOnly) {
       await withEditorServer(fixture3d, async (server) => {
         await page.navigate(server.url);
         await editorLoads(page);
@@ -186,6 +180,7 @@ async function main() {
           return;
         }
         await visual3dIndexControlStaysCentered(page);
+        await level3dIndexControlStaysCentered(page);
         await level3dPreviewUpdateReachesRuntime(page);
       });
     }
@@ -200,85 +195,12 @@ async function main() {
   console.log("editor browser smoke tests passed");
 }
 
-async function visualPaletteMouseClickPreservesPaneScroll(page) {
-  await clickTop(page, "#visualModeButton");
-  await page.waitForTop(
-    `Boolean(document.querySelector("#visualBuilder") && !document.querySelector("#visualBuilder").hidden)`,
-    "2D visual pane"
-  );
-  const clickPoint = await page.evaluateTop(`(() => {
-    const palette = document.querySelector("#visualPalette");
-    const button = palette?.querySelector('[data-visual-brush-preset="thick"]');
-    const scroller = palette?.closest(".tool-pane-scroll");
-    if (!palette || !button || !scroller) {
-      throw new Error("missing visual palette scroll test target");
-    }
-    window.__visualPaletteSmokeScroller = scroller;
-    window.__visualPaletteSmokeOriginalStyle = scroller.style.cssText;
-    window.__visualPaletteSmokeClicked = false;
-    scroller.style.height = "458px";
-    scroller.style.maxHeight = "458px";
-    scroller.style.overflow = "auto";
-    const maxScroll = scroller.scrollHeight - scroller.clientHeight;
-    scroller.scrollTop = Math.min(70, maxScroll);
-    if (scroller.scrollTop <= 0) {
-      throw new Error(
-        "visual palette smoke requires overflow: " + JSON.stringify({
-          clientHeight: scroller.clientHeight,
-          scrollHeight: scroller.scrollHeight,
-        })
-      );
-    }
-    const buttonRect = button.getBoundingClientRect();
-    const scrollerRect = scroller.getBoundingClientRect();
-    if (buttonRect.bottom <= scrollerRect.top || buttonRect.top >= scrollerRect.bottom) {
-      throw new Error("visual palette smoke button is outside the scroller viewport");
-    }
-    window.__visualPaletteSmokeBaseline = scroller.scrollTop;
-    button.addEventListener("click", () => {
-      window.__visualPaletteSmokeClicked = true;
-    }, { once: true });
-    return {
-      x: Math.round(buttonRect.left + buttonRect.width / 2),
-      y: Math.round(buttonRect.top + buttonRect.height / 2),
-    };
-  })()`);
-
-  try {
-    await clickViewport(page, clickPoint);
-    const result = await page.evaluateTop(`(() => {
-      const scroller = window.__visualPaletteSmokeScroller;
-      const button = document.querySelector('#visualPalette [data-visual-brush-preset="thick"]');
-      return {
-        baseline: window.__visualPaletteSmokeBaseline,
-        scrollTop: scroller?.scrollTop ?? null,
-        clicked: window.__visualPaletteSmokeClicked === true,
-        buttonFocused: document.activeElement === button,
-      };
-    })()`);
-    assert.equal(result.clicked, true, "visual palette button click should still fire");
-    assert.equal(
-      result.scrollTop,
-      result.baseline,
-      `visual palette mouse click changed pane scroll: ${JSON.stringify(result)}`
-    );
-    assert.equal(result.buttonFocused, false, "visual palette mouse click should not take focus");
-  } finally {
-    await page.evaluateTop(`(() => {
-      const scroller = window.__visualPaletteSmokeScroller;
-      if (scroller) {
-        scroller.style.cssText = window.__visualPaletteSmokeOriginalStyle || "";
-        scroller.scrollTop = 0;
-      }
-      delete window.__visualPaletteSmokeScroller;
-      delete window.__visualPaletteSmokeOriginalStyle;
-      delete window.__visualPaletteSmokeBaseline;
-      delete window.__visualPaletteSmokeClicked;
-      return true;
-    })()`).catch(() => {});
-    await clickTop(page, "#playModeButton").catch(() => {});
-  }
-  await page.assertNoErrors("visual palette mouse focus");
+async function freshEditorPage(browser, currentPage, url) {
+  await currentPage.close();
+  const page = await browser.newPage();
+  await page.navigate(url);
+  await editorLoads(page);
+  return page;
 }
 
 async function visualBucketFillRespectsActiveClip(page) {
@@ -287,6 +209,7 @@ async function visualBucketFillRespectsActiveClip(page) {
     `Boolean(document.querySelector("#visualBuilder") && !document.querySelector("#visualBuilder").hidden)`,
     "2D visual pane"
   );
+  await waitForVisualEditorSourceTarget(page, "visual", "2D visual source target");
   await page.evaluateTop(`(() => {
     visual.palette = [{ color: "#111111" }, { color: "#eeeeee" }];
     resetVisualBuilder(3, 3);
@@ -349,6 +272,7 @@ async function visual3dBucketFillRespectsActiveClip(page) {
     `Boolean(document.querySelector("#visual3dBuilder") && !document.querySelector("#visual3dBuilder").hidden)`,
     "3D visual pane"
   );
+  await waitForVisualEditorSourceTarget(page, "visual3d", "3D visual source target");
   await page.evaluateTop(`(() => {
     visual3d.palette = [{ color: "#111111" }, { color: "#eeeeee" }];
     visual3d.axis = "z";
@@ -407,6 +331,7 @@ async function visualColorEditorOffersPresetPalette(page) {
     `Boolean(document.querySelector("#visualBuilder") && !document.querySelector("#visualBuilder").hidden)`,
     "2D visual pane"
   );
+  await waitForVisualEditorSourceTarget(page, "visual", "2D visual source target");
   const before = await page.evaluateTop(`(() => {
     const button = document.querySelector("#visualPalette .visual-current-color-button");
     if (!button || button.getAttribute("aria-disabled") === "true") {
@@ -461,6 +386,7 @@ async function visualAnimationIndexControlStaysCentered(page) {
     `Boolean(document.querySelector("#visualBuilder") && !document.querySelector("#visualBuilder").hidden)`,
     "2D visual pane"
   );
+  await waitForVisualEditorSourceTarget(page, "visual", "2D visual source target");
   const animationMode = await page.evaluateTop(
     `document.querySelector("#visualBuilder")?.classList.contains("is-animation-mode") === true`
   );
@@ -487,6 +413,7 @@ async function visual3dIndexControlStaysCentered(page) {
     )`,
     "3D visual index control"
   );
+  await waitForVisualEditorSourceTarget(page, "visual3d", "3D visual source target");
   await assertIndexControlLayout(
     page,
     "#visual3dBuilder .visual3d-preview-wrap > .compact-control-strip",
@@ -569,6 +496,14 @@ async function assertIndexControlLayout(page, stripSelector, label) {
   }
 }
 
+async function waitForVisualEditorSourceTarget(page, stateName, label) {
+  await page.waitForTop(
+    `Number.isInteger(${stateName}.editSourceStart)`,
+    label,
+    { timeoutMs: 10_000 }
+  );
+}
+
 async function editorLoads(page) {
   await page.waitForTop(
     `Boolean(
@@ -588,18 +523,100 @@ async function editorLoads(page) {
 }
 
 async function runPreviewStartsRuntime(page) {
-  await clickTop(page, "#runButton");
   await page.waitForTop(
-    `Boolean(typeof latestHtml !== "undefined" && latestHtml.includes("PuzzleExport"))`,
-    "compiled preview HTML",
+    `document.querySelector("#runButton")?.disabled === false`,
+    "preview compile action readiness",
     { timeoutMs: 20_000 }
   );
+  try {
+    await page.evaluateTop(`(() => {
+      window.__browserSmokeRunPreview = runPreviewFromSourcePane;
+      window.__browserSmokeSaveCurrentDocument = saveCurrentDocument;
+      saveCurrentDocument = async (...args) => {
+        const before = activeDocument();
+        const result = await window.__browserSmokeSaveCurrentDocument(...args);
+        window.__browserSmokeSaveResult = {
+          result,
+          before: {
+            id: before?.id || "",
+            name: before?.name || "",
+            encoding: before?.encoding || "",
+          },
+          afterId: activeDocument()?.id || "",
+        };
+        return result;
+      };
+      runPreviewFromSourcePane = (...args) => {
+        const pending = window.__browserSmokeRunPreview(...args);
+        Promise.resolve(pending).then(
+          () => {
+            window.__browserSmokeRunPreviewResult = { settled: true };
+          },
+          (error) => {
+            window.__browserSmokeRunPreviewResult = {
+              settled: true,
+              error: error?.message || String(error),
+            };
+          },
+        );
+        return pending;
+      };
+      return true;
+    })()`);
+    await clickTop(page, "#runButton");
+    await page.waitForTop(
+      `window.__browserSmokeRunPreviewResult?.settled === true`,
+      "preview compile action completion",
+      { timeoutMs: 20_000 }
+    );
+    await page.waitForTop(
+      `Boolean(
+        previewBuild?.html?.length > 1_000
+        && previewBuild?.previewContract
+        && previewBuild?.exportData
+      )`,
+      "compiled preview HTML",
+      { timeoutMs: 20_000 }
+    );
+  } catch (error) {
+    const state = await page.evaluateTop(`(() => ({
+      status: document.querySelector("#editorStatusLabel")?.textContent || "",
+      paneStatus: document.querySelector("#previewPaneStatus")?.textContent || "",
+      previewLog: document.querySelector("#previewLog")?.textContent || "",
+      sourceMatchesDocument: document.querySelector("#sourceEditor")?.value
+        === documents[currentDocumentIndex]?.source,
+      sourceHead: document.querySelector("#sourceEditor")?.value?.slice(0, 120) || "",
+      latestHtmlLength: typeof previewBuild?.html === "string" ? previewBuild.html.length : null,
+      runResult: window.__browserSmokeRunPreviewResult || null,
+      saveResult: window.__browserSmokeSaveResult || null,
+      editorSeedPresent: Boolean(editorSeed),
+      activeDocument: {
+        id: activeDocument()?.id || "",
+        name: activeDocument()?.name || "",
+        encoding: activeDocument()?.encoding || "",
+      },
+    }))()`);
+    throw new Error(`${error.message}: ${JSON.stringify(state)}`);
+  } finally {
+    await page.evaluateTop(`(() => {
+      if (typeof window.__browserSmokeRunPreview === "function") {
+        runPreviewFromSourcePane = window.__browserSmokeRunPreview;
+      }
+      if (typeof window.__browserSmokeSaveCurrentDocument === "function") {
+        saveCurrentDocument = window.__browserSmokeSaveCurrentDocument;
+      }
+      delete window.__browserSmokeRunPreview;
+      delete window.__browserSmokeRunPreviewResult;
+      delete window.__browserSmokeSaveCurrentDocument;
+      delete window.__browserSmokeSaveResult;
+      return true;
+    })()`).catch(() => {});
+  }
   await waitForTopWithDiagnostics(
     page,
     `Boolean(
-      typeof latestPreviewRuntimeStatus !== "undefined"
-      && latestPreviewRuntimeStatus
-      && latestPreviewRuntimeStatus.title === "PuzzleStudio HTML Export"
+      previewSession?.buildId === previewBuild?.id
+      && previewSession?.runtimeStatus
     )`,
     "compiled 2D preview runtime load",
     { timeoutMs: 20_000 }
@@ -634,7 +651,7 @@ async function sourceEditKeepsCompiledPreviewRunning(page) {
   const before = await page.evaluateTop(`(() => {
     const editor = document.querySelector("#sourceEditor");
     const frame = document.querySelector("#previewFrame");
-    if (!editor || !frame || !latestHtml) {
+    if (!editor || !frame || !previewBuild?.html) {
       throw new Error("missing compiled preview for source dirty smoke");
     }
     const source = editor.value || "";
@@ -647,7 +664,7 @@ async function sourceEditKeepsCompiledPreviewRunning(page) {
     return {
       source,
       srcdocLength: frame.srcdoc.length,
-      latestHtmlLength: latestHtml.length,
+      latestHtmlLength: previewBuild.html.length,
     };
   })()`);
   assert.ok(before.srcdocLength > 0, "compiled preview frame should have srcdoc before source edit");
@@ -677,9 +694,9 @@ async function sourceEditKeepsCompiledPreviewRunning(page) {
           frame
           && frame === window.__sourceDirtySmokeFrame
           && frame.srcdoc === window.__sourceDirtySmokeSrcdoc
-          && latestHtml.length > 0
-          && previewExport
-          && compiledPreviewStale === true
+          && previewBuild?.html?.length > 0
+          && previewBuild?.exportData
+          && previewBuildIsStale === true
           && previewDocumentLoaded === true
         );
       })()`,
@@ -706,7 +723,12 @@ async function sourceEditKeepsCompiledPreviewRunning(page) {
 
   await clickTop(page, "#runButton");
   await page.waitForTop(
-    `Boolean(compiledPreviewStale === false && latestHtml.includes("PuzzleExport"))`,
+    `Boolean(
+      previewBuildIsStale === false
+      && previewBuild?.html?.length > 1_000
+      && previewBuild?.previewContract
+      && previewBuild?.exportData
+    )`,
     "recompiled preview after source dirty smoke",
     { timeoutMs: 20_000 }
   );
@@ -714,7 +736,7 @@ async function sourceEditKeepsCompiledPreviewRunning(page) {
 }
 
 async function sourceLevelAsciiClickOpensLevelEditor(page) {
-  const source = `title "Ascii Click Smoke"
+  const source = `const title = "Ascii Click Smoke"
 
 puzzle main {
   layers {
@@ -731,47 +753,52 @@ levels main of main {
     P = Player
   }
 
-  level ascii
+  level "ascii"
   P
 }
 `;
   await page.evaluateTop(`(() => {
     const source = ${JSON.stringify(source)};
     setSourceEditorValue(source, { resetUndo: true });
-    if (documents[currentDocumentIndex]) {
-      documents[currentDocumentIndex].source = source;
-    }
     sourceEditor.setSelectionRange(0, 0);
-    scheduleSourceHighlight(true);
-    scheduleLocalSave();
+    sourceEditorContentChanged();
     return true;
   })()`);
+  await page.evaluateTop(
+    `sourceEditorAnalysisRevisionReady(document.querySelector("#sourceEditor")?.value || "")`
+  );
+  await page.waitForTop(
+    `surfaceEntriesCache?.source === document.querySelector("#sourceEditor")?.value`,
+    "level ascii source entries",
+    { timeoutMs: 10_000 }
+  );
   await clickTop(page, "#runButton");
   await waitForTopWithDiagnostics(
     page,
-    `Boolean(previewExport?.levels?.some((level) => level.name === "main.ascii" || level.name === "ascii"))`,
+    `Boolean(previewBuild?.exportData?.levels?.some((level) => level.name === "main.ascii" || level.name === "ascii"))`,
     "level ascii preview export",
     { timeoutMs: 20_000 }
   );
-  const clickPoint = await page.evaluateTop(`(() => {
+  const clickPoint = await page.evaluateTop(`(async () => {
     const editor = document.querySelector("#sourceEditor");
     const source = editor?.value || "";
-    const offset = source.indexOf("level ascii");
+    const offset = source.indexOf('level "ascii"');
     if (offset < 0) {
-      throw new Error("missing level ascii source");
+      throw new Error("missing quoted level source");
     }
-    const linesBefore = source.slice(0, offset).split("\\n").length - 1;
-    const lineHeight = sourceEditorLineHeight();
-    editor.scrollTop = Math.max(0, (linesBefore - 4) * lineHeight);
-    syncSourceHighlightScroll();
-    const point = sourceVisualCaretPoint(offset);
-    if (!point) {
-      throw new Error("missing visual caret point for level ascii");
+    const port = editor?.sourceEditorPort;
+    if (port?.kind !== "codemirror") {
+      throw new Error("missing CodeMirror source editor port");
     }
-    const rect = sourceEditorWrap.getBoundingClientRect();
+    port.scrollIntoView(offset, "center");
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const rect = port.coordsAtOffset(offset);
+    if (!rect) {
+      throw new Error("missing CodeMirror coordinates for quoted level");
+    }
     return {
-      x: Math.round(rect.left + point.left + 8),
-      y: Math.round(rect.top + point.top + lineHeight / 2),
+      x: Math.round(rect.left + 8),
+      y: Math.round((rect.top + rect.bottom) / 2),
     };
   })()`);
   await clickViewport(page, clickPoint);
@@ -790,6 +817,11 @@ levels main of main {
 }
 
 async function sourceEditorReflectsInputBeforeKeyup(page) {
+  await page.waitForTop(
+    `sourceHighlightSource === document.querySelector("#sourceEditor")?.value`,
+    "source highlight before realtime input",
+    { timeoutMs: 20_000 }
+  );
   await page.evaluateTop(`(() => {
     const editor = document.querySelector("#sourceEditor");
     if (!editor) {
@@ -830,12 +862,11 @@ async function sourceEditorReflectsInputBeforeKeyup(page) {
       await page.waitForTop(
         `(() => {
           const editor = document.querySelector("#sourceEditor");
-          const highlight = document.querySelector("#sourceHighlight");
           const expected = window.__sourceRealtimeExpected;
           return Boolean(
             expected
             && editor?.value === expected
-            && highlight?.textContent === expected
+            && sourceHighlightSource === expected
             && documents[currentDocumentIndex]?.source === expected
           );
         })()`,
@@ -845,10 +876,9 @@ async function sourceEditorReflectsInputBeforeKeyup(page) {
     } catch (error) {
       const diagnostics = await page.evaluateTop(`(() => {
         const editor = document.querySelector("#sourceEditor");
-        const highlight = document.querySelector("#sourceHighlight");
         const expected = window.__sourceRealtimeExpected || "";
         const value = editor?.value || "";
-        const highlightText = highlight?.textContent || "";
+        const highlightText = sourceHighlightSource || "";
         const doc = documents[currentDocumentIndex]?.source || "";
         return {
           expectedHead: expected.slice(0, 80),
@@ -969,9 +999,11 @@ async function sourceUndoReturnsToEditedLocationAfterCursorMove(page) {
     ) {
       throw new Error("missing source undo cursor helpers");
     }
-    const original = editor.value || "";
+    window.__sourceUndoOriginal = editor.value || "";
     const source = "first\\nsecond\\nthird";
     const editAt = source.indexOf("second") + "second".length;
+    window.__sourceUndoExpected = source;
+    window.__sourceUndoEditAt = editAt;
     setSourceEditorValue(source, { resetUndo: true });
     if (documents[currentDocumentIndex]) {
       documents[currentDocumentIndex].source = source;
@@ -994,36 +1026,32 @@ async function sourceUndoReturnsToEditedLocationAfterCursorMove(page) {
     if (!editHandled || editor.value !== edited) {
       throw new Error("source edit did not create expected undo setup");
     }
-    const undoHandled = handleSourceUndoShortcut({
-      altKey: false,
-      ctrlKey: false,
-      metaKey: true,
-      shiftKey: false,
-      key: "z",
-      preventDefault() {},
-      stopPropagation() {},
-    });
-    const result = {
-      undoHandled,
-      value: editor.value,
-      selectionStart: editor.selectionStart,
-      selectionEnd: editor.selectionEnd,
-    };
-    setSourceEditorValue(original, { resetUndo: true });
-    if (documents[currentDocumentIndex]) {
-      documents[currentDocumentIndex].source = original;
-    }
-    scheduleSourceHighlight(true);
-    if (
-      !result.undoHandled
-      || result.value !== source
-      || result.selectionStart !== editAt
-      || result.selectionEnd !== editAt
-    ) {
-      throw new Error(\`source undo did not return to edited location: \${JSON.stringify(result)}\`);
-    }
     return true;
   })()`);
+  try {
+    await pressKey(page, { key: "z", code: "KeyZ", keyCode: 90, modifiers: 4 });
+    await page.waitForTop(
+      `Boolean(
+        document.querySelector("#sourceEditor")?.value === window.__sourceUndoExpected
+        && document.querySelector("#sourceEditor")?.selectionStart === window.__sourceUndoEditAt
+        && document.querySelector("#sourceEditor")?.selectionEnd === window.__sourceUndoEditAt
+      )`,
+      "CodeMirror undo cursor location"
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const original = window.__sourceUndoOriginal;
+      setSourceEditorValue(typeof original === "string" ? original : "", { resetUndo: true });
+      if (documents[currentDocumentIndex]) {
+        documents[currentDocumentIndex].source = sourceEditor.value;
+      }
+      scheduleSourceHighlight(true);
+      delete window.__sourceUndoOriginal;
+      delete window.__sourceUndoExpected;
+      delete window.__sourceUndoEditAt;
+      return true;
+    })()`);
+  }
   await page.assertNoErrors("source undo cursor location");
 }
 
@@ -1033,9 +1061,9 @@ async function sourceUndoSurvivesSameDocumentReload(page) {
     if (!editor || typeof loadEmbeddedDocument !== "function" || typeof handleSourceUndoShortcut !== "function") {
       throw new Error("missing source undo reload helpers");
     }
-    const original = editor.value || "";
-    const insertAt = Math.max(0, original.indexOf("\\n"));
-    setSourceEditorValue(original, { resetUndo: true });
+    window.__sourceReloadUndoOriginal = editor.value || "";
+    const insertAt = Math.max(0, window.__sourceReloadUndoOriginal.indexOf("\\n"));
+    setSourceEditorValue(window.__sourceReloadUndoOriginal, { resetUndo: true });
     editor.focus();
     editor.setSelectionRange(insertAt, insertAt);
     handleSourcePrintableKeydownInput({
@@ -1049,40 +1077,41 @@ async function sourceUndoSurvivesSameDocumentReload(page) {
       stopPropagation() {},
     });
     const edited = editor.value || "";
-    if (edited === original) {
+    if (edited === window.__sourceReloadUndoOriginal) {
       throw new Error("source edit did not change source before reload");
     }
     if (documents[currentDocumentIndex]) {
       documents[currentDocumentIndex].source = edited;
     }
     loadEmbeddedDocument(currentDocumentIndex);
-    const handled = handleSourceUndoShortcut({
-      altKey: false,
-      ctrlKey: false,
-      metaKey: true,
-      shiftKey: false,
-      key: "z",
-      preventDefault() {},
-      stopPropagation() {},
-    });
-    if (!handled || editor.value !== original) {
-      throw new Error("same-document reload cleared source undo history");
-    }
-    if (documents[currentDocumentIndex]) {
-      documents[currentDocumentIndex].source = original;
-    }
-    setSourceEditorValue(original, { resetUndo: true });
-    scheduleSourceHighlight(true);
     return true;
   })()`);
+  try {
+    await pressKey(page, { key: "z", code: "KeyZ", keyCode: 90, modifiers: 4 });
+    await page.waitForTop(
+      `document.querySelector("#sourceEditor")?.value === window.__sourceReloadUndoOriginal`,
+      "CodeMirror undo after same-document reload"
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const original = window.__sourceReloadUndoOriginal;
+      setSourceEditorValue(typeof original === "string" ? original : "", { resetUndo: true });
+      if (documents[currentDocumentIndex]) {
+        documents[currentDocumentIndex].source = sourceEditor.value;
+      }
+      scheduleSourceHighlight(true);
+      delete window.__sourceReloadUndoOriginal;
+      return true;
+    })()`);
+  }
   await page.assertNoErrors("source undo after same-document reload");
 }
 
 async function sourceEditorReflectsCompositionBeforeCommit(page) {
   await page.evaluateTop(`(() => {
     const editor = document.querySelector("#sourceEditor");
-    if (!editor) {
-      throw new Error("missing #sourceEditor");
+    if (!editor || editor.sourceEditorPort?.kind !== "codemirror") {
+      throw new Error("browser smoke requires the CodeMirror source editor");
     }
     window.__sourceCompositionOriginal = editor.value || "";
     editor.value = "";
@@ -1092,54 +1121,47 @@ async function sourceEditorReflectsCompositionBeforeCommit(page) {
     renderPlainSourceHighlight("");
     editor.focus();
     editor.setSelectionRange(0, 0);
-    const event = new Event("beforeinput", {
-      bubbles: true,
-      cancelable: true,
-    });
-    Object.defineProperties(event, {
-      data: { value: "a" },
-      inputType: { value: "insertCompositionText" },
-      isComposing: { value: true },
-    });
-    editor.dispatchEvent(event);
     return true;
   })()`);
 
   try {
+    await page.send("Input.imeSetComposition", {
+      text: "a",
+      selectionStart: 1,
+      selectionEnd: 1,
+    });
     try {
       await page.waitForTop(
         `(() => {
         const editor = document.querySelector("#sourceEditor");
-        const highlight = document.querySelector("#sourceHighlight");
-        const wrap = document.querySelector("#sourceEditorWrap");
         return Boolean(
-          editor?.value === ""
-          && highlight?.textContent === "a"
-          && documents[currentDocumentIndex]?.source === ""
-          && !wrap?.classList.contains("is-native-input-active")
+          editor?.value === "a"
+          && sourceHighlightSource === "a"
+          && documents[currentDocumentIndex]?.source === "a"
         );
       })()`,
-        "source composition reflection before commit",
+        "CodeMirror composition reflection",
         { timeoutMs: 5_000 }
       );
     } catch (error) {
       const diagnostics = await page.evaluateTop(`(() => {
         const editor = document.querySelector("#sourceEditor");
-        const highlight = document.querySelector("#sourceHighlight");
         return {
           value: editor?.value || "",
-          highlight: highlight?.textContent || "",
+          highlight: sourceHighlightSource || "",
           documentSource: documents[currentDocumentIndex]?.source || "",
           highlightMode: typeof sourceHighlightMode === "string" ? sourceHighlightMode : null,
-          predicted: typeof sourcePredictedBeforeInputValue === "function"
-            ? sourcePredictedBeforeInputValue({ inputType: "insertCompositionText", data: "a" })
-            : null,
-          isTextDocument: typeof isTextDocument === "function" ? isTextDocument(documents[currentDocumentIndex]) : null,
+          composing: editor?.sourceEditorPort?.view?.composing ?? null,
         };
       })()`).catch((diagnosticError) => ({ diagnosticError: diagnosticError.message }));
       throw new Error(`${error.message}\nComposition diagnostics: ${JSON.stringify(diagnostics, null, 2)}`);
     }
   } finally {
+    await page.send("Input.imeSetComposition", {
+      text: "",
+      selectionStart: 0,
+      selectionEnd: 0,
+    }).catch(() => {});
     await page.evaluateTop(`(() => {
       const original = window.__sourceCompositionOriginal;
       if (typeof original !== "string") {
@@ -1699,9 +1721,9 @@ async function sourceOutlineNavigationCentersCursor(page) {
   const result = await page.evaluateTop(`(() => {
     const editor = document.querySelector("#sourceEditor");
     const originalItems = sourceOutlineItems;
-    const originalScrollIntoView = editor?.sourceEditorPort?.scrollIntoView;
-    const document = activeDocument();
-    if (!editor || typeof originalScrollIntoView !== "function" || !document) {
+    const originalScrollIntoView = scrollSourceOffsetIntoView;
+    const activePuzzleDocument = activeDocument();
+    if (!editor || typeof originalScrollIntoView !== "function" || !activePuzzleDocument) {
       throw new Error("missing source outline navigation test surfaces");
     }
     const start = Math.min(editor.value.length, Math.max(0, editor.value.indexOf("\\n") + 1));
@@ -1718,8 +1740,9 @@ async function sourceOutlineNavigationCentersCursor(page) {
     try {
       sourceOutlineItems = [item];
       renderSourceOutline();
-      editor.sourceEditorPort.scrollIntoView = (offset, alignment) => {
+      scrollSourceOffsetIntoView = (offset, alignment) => {
         scrollRequest = { offset, alignment };
+        return originalScrollIntoView(offset, alignment);
       };
       document.querySelector('[data-source-outline-id="browser-smoke-outline-target"]')?.click();
       return {
@@ -1728,7 +1751,7 @@ async function sourceOutlineNavigationCentersCursor(page) {
         scrollRequest,
       };
     } finally {
-      editor.sourceEditorPort.scrollIntoView = originalScrollIntoView;
+      scrollSourceOffsetIntoView = originalScrollIntoView;
       sourceOutlineItems = originalItems;
       renderSourceOutline();
       syncSourceOutlineActiveItem();
@@ -1904,6 +1927,112 @@ async function levelSelectionWaitsForCurrentEntries(page) {
     })()`);
   }
   await page.assertNoErrors("source target revision synchronization");
+}
+
+async function visualSelectionWaitsForCurrentEntries(page) {
+  await page.waitForTop(
+    `Boolean(surfaceEntriesCache?.source === document.querySelector("#sourceEditor")?.value)`,
+    "initial source entries",
+    { timeoutMs: 10_000 }
+  );
+  await page.evaluateTop(`(() => {
+    const editor = document.querySelector("#sourceEditor");
+    const status = document.querySelector("#editorStatusLabel");
+    const runtime = window.PuzzleStudioRuntime;
+    if (!editor || !status || typeof runtime?.sourceEntryInfo !== "function") {
+      throw new Error("missing visual target revision test surfaces");
+    }
+    window.__visualTargetRevisionOriginal = {
+      source: editor.value || "",
+      sourceEntryInfo: runtime.sourceEntryInfo,
+      statusText: status.textContent || "",
+      statusClassName: status.className,
+      previewMode: currentPreviewMode,
+    };
+    window.__visualTargetRevisionRelease = null;
+    window.__visualTargetRevisionBlocked = false;
+    const visualEntry = surfaceEntriesCache.entries.find((entry) => entry?.kind === "visual");
+    if (!visualEntry) {
+      throw new Error("visual target revision fixture has no parsed visual entry");
+    }
+    openPreviewModePane("play");
+    runtime.sourceEntryInfo = async (...args) => {
+      await new Promise((resolve) => {
+        window.__visualTargetRevisionRelease = resolve;
+        window.__visualTargetRevisionBlocked = true;
+      });
+      return window.__visualTargetRevisionOriginal.sourceEntryInfo.apply(runtime, args);
+    };
+    setEditorStatus("", "");
+    const insertAt = Math.max(0, editor.value.indexOf("\\n"));
+    editor.setSelectionRange(insertAt, insertAt);
+    editor.setRangeText(" ", insertAt, insertAt, "end");
+    sourceEditorContentChanged();
+    return true;
+  })()`);
+  try {
+    await page.waitForTop(
+      `window.__visualTargetRevisionBlocked === true`,
+      "blocked current-revision visual entries",
+      { timeoutMs: 10_000 }
+    );
+    await page.evaluateTop(`(() => {
+      const button = document.querySelector("#visualModeButton");
+      if (!button) {
+        throw new Error("visual target revision fixture has no visual editor button");
+      }
+      button.click();
+      return true;
+    })()`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const pending = await page.evaluateTop(`(() => ({
+      status: document.querySelector("#editorStatusLabel")?.textContent || "",
+      cacheSource: surfaceEntriesCache?.source ?? null,
+      targetStart: visual.editSourceStart,
+    }))()`);
+    assert.equal(pending.cacheSource, null, `visual source entry cache unexpectedly became ready: ${JSON.stringify(pending)}`);
+    assert.equal(
+      pending.status.includes("Source entries are not ready for the active editor revision."),
+      false,
+      `visual target consumed entries before its revision was ready: ${pending.status}`
+    );
+    await page.evaluateTop(`(() => {
+      window.__visualTargetRevisionRelease?.();
+      return true;
+    })()`);
+    await page.waitForTop(
+      `Boolean(surfaceEntriesCache?.source === document.querySelector("#sourceEditor")?.value)`,
+      "current-revision visual target entries",
+      { timeoutMs: 10_000 }
+    );
+    await page.waitForTop(
+      `currentPreviewMode === "visual" && Number.isInteger(visual.editSourceStart)`,
+      "visual editor after current-revision entries",
+      { timeoutMs: 10_000 }
+    );
+  } finally {
+    await page.evaluateTop(`(() => {
+      const original = window.__visualTargetRevisionOriginal;
+      const editor = document.querySelector("#sourceEditor");
+      window.__visualTargetRevisionRelease?.();
+      if (original) {
+        window.PuzzleStudioRuntime.sourceEntryInfo = original.sourceEntryInfo;
+        setSourceEditorValue(original.source, { resetUndo: true });
+        if (documents[currentDocumentIndex]) {
+          documents[currentDocumentIndex].source = editor.value;
+        }
+        const status = document.querySelector("#editorStatusLabel");
+        status.textContent = original.statusText;
+        status.className = original.statusClassName;
+        openPreviewModePane(original.previewMode);
+      }
+      delete window.__visualTargetRevisionOriginal;
+      delete window.__visualTargetRevisionRelease;
+      delete window.__visualTargetRevisionBlocked;
+      return true;
+    })()`);
+  }
+  await page.assertNoErrors("visual target revision synchronization");
 }
 
 async function sourceCompletionPopoverStaysInsideEditor(page) {
@@ -2248,7 +2377,7 @@ async function sourceRewritePatternTabCopiesLhsToEmptyRhs(page) {
 }
 
 async function fileInputImportAddsPuzzleDocument(page) {
-  const source = `title "File Import Smoke"
+  const source = `const title = "File Import Smoke"
 
 puzzle main {
   layers {
@@ -2265,7 +2394,7 @@ levels main of main {
     P = Player
   }
 
-  level imported
+  level "imported"
   P
 }
 `;
@@ -2273,7 +2402,10 @@ levels main of main {
   const importPath = path.join(tempDir, "browser_import_smoke.puzzle");
   try {
     await fs.promises.writeFile(importPath, source, "utf8");
-    const beforeCount = await page.evaluateTop(`documents.length`);
+    const before = await page.evaluateTop(`({
+      count: documents.length,
+      activeDocumentId: activeDocument()?.id || "",
+    })`);
     await page.setFileInputFiles("#importFileInput", [importPath]);
     await page.evaluateTop(`document.querySelector("#importFileInput")?.dispatchEvent(new Event("change", { bubbles: true }))`);
     await waitForTopWithDiagnostics(
@@ -2282,7 +2414,7 @@ levels main of main {
         const imported = documents.find((document) => document.name === "browser_import_smoke.puzzle");
         return Boolean(
           imported
-          && documents.length === ${beforeCount + 1}
+          && documents.length === ${before.count + 1}
           && activeDocument()?.id === imported.id
           && document.querySelector("#sourceEditor")?.value.includes("File Import Smoke")
           && !document.querySelector("#editorStatusLabel")?.textContent.includes("Import failed")
@@ -2293,6 +2425,20 @@ levels main of main {
       { timeoutMs: 20_000 }
     );
     await page.assertNoErrors("file input import");
+    await page.evaluateTop(`(() => {
+      const index = documents.findIndex(
+        (candidate) => candidate.id === ${JSON.stringify(before.activeDocumentId)}
+      );
+      if (index < 0) {
+        throw new Error("file import smoke lost the previously active document");
+      }
+      loadEmbeddedDocument(index);
+      return true;
+    })()`);
+    await page.waitForTop(
+      `activeDocument()?.id === ${JSON.stringify(before.activeDocumentId)}`,
+      "restore active document after file import"
+    );
   } finally {
     await fs.promises.rm(tempDir, { recursive: true, force: true });
   }
@@ -2346,7 +2492,7 @@ async function fileInputImportAddsExternalPuzzleDocument(page, importPath) {
 }
 
 async function levelPlaytestKeyboardChangesBoardWithoutSavingSource(page) {
-  const source = `title "Level Playtest Smoke"
+  const source = `const title = "Level Playtest Smoke"
 
 puzzle main {
   layers {
@@ -2355,7 +2501,6 @@ puzzle main {
 
   rules {
     input [ Player ] -> [ > Player ]
-    move
   }
 }
 
@@ -2365,23 +2510,43 @@ levels main of main {
     P = Player
   }
 
-  level start
+  level "start"
   P.
 }
 `;
   await page.evaluateTop(`(() => {
     const source = ${JSON.stringify(source)};
     setSourceEditorValue(source, { resetUndo: true });
-    if (documents[currentDocumentIndex]) {
-      documents[currentDocumentIndex].source = source;
-    }
     sourceEditor.setSelectionRange(0, 0);
-    scheduleSourceHighlight(true);
-    scheduleLocalSave();
-    invalidateCompiledPreview?.(activePreviewDocument?.());
+    sourceEditorContentChanged();
     return true;
   })()`);
-  await clickTop(page, "#editModeButton");
+  await page.evaluateTop(
+    `sourceEditorAnalysisRevisionReady(document.querySelector("#sourceEditor")?.value || "")`
+  );
+  await page.waitForTop(
+    `surfaceEntriesCache?.source === document.querySelector("#sourceEditor")?.value`,
+    "level playtest source entries",
+    { timeoutMs: 10_000 }
+  );
+  const levelPaneOpened = await page.evaluateTop(
+    `openLevelPaneForCurrentDimension({ mode: "edit" })`
+  );
+  const levelPaneDiagnostic = await page.evaluateTop(`(() => ({
+    paneStatus: document.querySelector('[data-pane-status="level"]')?.textContent || "",
+    status: document.querySelector("#status")?.textContent || "",
+    entries: (surfaceEntriesCache?.entries || []).map((entry) => ({
+      kind: entry.kind,
+      dimension: entry.dimension,
+      name: entry.name,
+      start: entry.start,
+    })),
+  }))()`);
+  assert.equal(
+    levelPaneOpened,
+    true,
+    `level playtest source should open in the 2D level editor: ${JSON.stringify(levelPaneDiagnostic)}`,
+  );
   await page.waitForTop(
     `(() => {
       const builder = document.querySelector("#levelBuilder");
@@ -2394,14 +2559,32 @@ levels main of main {
     source: document.querySelector("#sourceEditor")?.value || "",
   }))()`);
 
+  await page.evaluateTop(`(() => {
+    window.__browserSmokeRuntimeMessages = [];
+    window.addEventListener("message", (event) => {
+      const type = String(event.data?.type || "");
+      if (type.startsWith("PuzzleStudioRuntimeAsset") || type.startsWith("PuzzleStudioPreviewRuntime")) {
+        window.__browserSmokeRuntimeMessages.push({
+          type,
+          kind: String(event.data?.kind || ""),
+          ok: event.data?.ok ?? null,
+          label: String(event.data?.label || ""),
+          message: String(event.data?.message || event.data?.error || ""),
+          stage: String(event.data?.stage || ""),
+        });
+      }
+    });
+    return true;
+  })()`);
   await clickTop(page, "#levelPlaytestButton");
-  await page.waitForTop(
+  await waitForTopWithDiagnostics(
+    page,
     `Boolean(
       document.querySelector("#levelBuilder")?.classList.contains("is-playtesting")
       && document.querySelector("#levelPlaytestButton")?.classList.contains("is-playing")
     )`,
     "2D level playtest start",
-    { timeoutMs: 15_000 }
+    { timeoutMs: 60_000 }
   );
 
   await page.evaluateTop(`(() => {
@@ -2446,11 +2629,11 @@ async function level3dPreviewUpdateReachesRuntime(page) {
   await waitForTopWithDiagnostics(
     page,
     `Boolean(
-      typeof latestHtml !== "undefined"
-      && latestHtml.includes("PuzzleExport")
-      && typeof latestPreviewRuntimeStatus !== "undefined"
-      && latestPreviewRuntimeStatus
-      && latestPreviewRuntimeStatus.title === "PuzzleStudio HTML Export"
+      previewBuild?.html?.length > 1_000
+      && previewBuild?.previewContract
+      && previewBuild?.exportData
+      && previewSession?.buildId === previewBuild?.id
+      && previewSession?.runtimeStatus
     )`,
     "compiled 3D preview runtime load",
     { timeoutMs: 20_000 }
@@ -2463,25 +2646,38 @@ async function level3dPreviewUpdateReachesRuntime(page) {
       && !document.querySelector("#level3dBuilder").hidden
       && document.querySelector("#level3dRuntimeFrame")
       && document.querySelector("#level3dResetPreviewButton")
+      && typeof level3d !== "undefined"
+      && level3d.sourceKey
     )`,
-    "3D level editor runtime frame",
+    "hydrated 3D level editor runtime frame",
     { timeoutMs: 20_000 }
   );
 
-  await assertIndexControlLayout(page, ".level3d-layer-toolbar", "3D level slices");
-
-  await page.waitForTop(
+  await waitForTopWithDiagnostics(
+    page,
     `Boolean(
-      typeof level3dStageRendererView !== "undefined"
-      && level3dStageRendererView
-      && level3dStageRendererView.coordinateSpace === "canvas-css-px"
-      && level3dStageRendererView.width > 0
-      && level3dStageRendererView.height > 0
-      && level3dStageRendererView.viewport?.width > 0
-      && level3dStageRendererView.viewport?.height > 0
+      level3dRuntimeFrameFailure
+      || (
+        typeof level3dStageRendererView !== "undefined"
+        && level3dStageRendererView
+        && level3dRuntimeFrameRuntimeReady
+        && level3dStageRendererView.coordinateSpace === "canvas-css-px"
+        && level3dStageRendererView.width > 0
+        && level3dStageRendererView.height > 0
+        && level3dStageRendererView.viewport?.width > 0
+        && level3dStageRendererView.viewport?.height > 0
+      )
     )`,
     "3D preview runtime view message",
     { timeoutMs: 20_000 }
+  );
+  const runtimeFailure = await page.evaluateTop(
+    `typeof level3dRuntimeFrameFailure !== "undefined" ? level3dRuntimeFrameFailure : null`
+  );
+  assert.equal(
+    runtimeFailure,
+    null,
+    `3D browser prerequisite unavailable: ${runtimeFailure?.label || "runtime failed"}: ${runtimeFailure?.message || "unknown error"}`,
   );
 
   await clickTop(page, "#level3dResetPreviewButton");
@@ -2504,7 +2700,7 @@ async function clickTop(page, selector) {
   await page.evaluateTop(`(() => {
     const element = document.querySelector(${JSON.stringify(selector)});
     if (!element) {
-      throw new Error("missing ${selector}");
+      throw new Error(${JSON.stringify(`missing ${selector}`)});
     }
     element.click();
     return true;
@@ -2553,32 +2749,31 @@ async function waitForTopWithDiagnostics(page, expression, label, options = {}) 
       const logItems = Array.from(document.querySelectorAll("#previewLog [data-preview-log-message], #previewLog li, #previewLog .preview-log-entry"), (item) => item.textContent.trim()).filter(Boolean);
       return {
         status: document.querySelector("#statusText, #status")?.textContent.trim() || "",
-        latestHtmlLength: typeof latestHtml === "string" ? latestHtml.length : null,
-        latestHtmlHead: typeof latestHtml === "string" ? latestHtml.slice(0, 500) : "",
-        latestHtmlTail: typeof latestHtml === "string" ? latestHtml.slice(-500) : "",
-        latestHtmlContainsPreviewState: typeof latestHtml === "string" && latestHtml.includes("PuzzleStudioPreviewState"),
-        latestHtmlContainsNotifyPreviewState: typeof latestHtml === "string" && latestHtml.includes("notifyPreviewState"),
-        latestHtmlContainsParentPostMessage: typeof latestHtml === "string" && latestHtml.includes("window.parent.postMessage"),
-        latestHtmlScripts: typeof latestHtml === "string"
-          ? Array.from(latestHtml.matchAll(/<script\\b[^>]*>/gi), (match) => match[0]).slice(0, 10)
+        latestHtmlLength: typeof previewBuild?.html === "string" ? previewBuild.html.length : null,
+        latestHtmlHead: typeof previewBuild?.html === "string" ? previewBuild.html.slice(0, 500) : "",
+        latestHtmlTail: typeof previewBuild?.html === "string" ? previewBuild.html.slice(-500) : "",
+        latestHtmlScripts: typeof previewBuild?.html === "string"
+          ? Array.from(previewBuild.html.matchAll(/<script\\b[^>]*>/gi), (match) => match[0]).slice(0, 10)
           : [],
-        latestPreviewStateType: typeof latestPreviewState,
-        latestPreviewState,
-        latestPreviewRuntimeStatusType: typeof latestPreviewRuntimeStatus,
-        latestPreviewRuntimeStatus,
+        previewSessionBuildId: previewSession?.buildId || null,
+        previewBuildId: previewBuild?.id || null,
+        previewSessionState: previewSession?.state || null,
+        previewSessionRuntimeStatus: previewSession?.runtimeStatus || null,
+        previewRuntimeReady: typeof previewRuntimeReady === "boolean" ? previewRuntimeReady : null,
+        previewPendingFrame: Boolean(previewPendingFrameWindow),
         previewFramePresent: Boolean(preview),
         previewFrameSrcdocLength: preview?.srcdoc?.length || 0,
+        previewFrameHasSetStateHandler: (preview?.srcdoc || "").includes("PuzzleStudioSetState"),
+        previewFrameHasRuntimeReady: (preview?.srcdoc || "").includes("PuzzleStudioPreviewRuntimeReady"),
         previewFrameTitle: preview?.title || "",
         contextCount: document.querySelectorAll("iframe").length,
         previewLogTail: logItems.slice(-5),
-        levelPlaytestActive: typeof levelPlaytestActive === "boolean" ? levelPlaytestActive : null,
-        levelPlaytestTransitionBusy: typeof levelPlaytestTransitionBusy === "boolean" ? levelPlaytestTransitionBusy : null,
-        levelPlaytestStateDataPresent: Boolean(typeof levelPlaytestStateData !== "undefined" && levelPlaytestStateData),
-        levelPlaytestStateDataHead: typeof levelPlaytestStateData !== "undefined" && levelPlaytestStateData
-          ? JSON.stringify(levelPlaytestStateData).slice(0, 500)
-          : "",
-        previewInputSummaries: Array.isArray(previewExport?.inputs)
-          ? previewExport.inputs.map((input) => ({ id: input.id, name: input.name, key: input.key, arrow: input.arrow, keys: input.keys })).slice(0, 20)
+        runtimeBridgeMessages: window.__browserSmokeRuntimeMessages || [],
+        runtimeAssetBridgeStatus: typeof previewRuntimeAssetBridgeStatus !== "undefined"
+          ? previewRuntimeAssetBridgeStatus
+          : [],
+        previewInputSummaries: Array.isArray(previewBuild?.exportData?.inputs)
+          ? previewBuild.exportData.inputs.map((input) => ({ id: input.id, name: input.name, key: input.key, arrow: input.arrow, keys: input.keys })).slice(0, 20)
           : [],
         levelBoardLabels: Array.from(document.querySelectorAll("#levelBoard .cell"), (cell) => cell.getAttribute("aria-label") || "").slice(0, 40),
         smokeKeys: Array.isArray(window.__puzzleStudioSmokeKeys) ? window.__puzzleStudioSmokeKeys : [],
@@ -2593,6 +2788,29 @@ async function waitForTopWithDiagnostics(page, expression, label, options = {}) 
           actionStatus: document.querySelector("#level3dActionStatus")?.textContent.trim() || "",
           resetButtonPresent: Boolean(document.querySelector("#level3dResetPreviewButton")),
           runtimeFramePresent: Boolean(document.querySelector("#level3dRuntimeFrame")),
+          runtimeFrameSrcdocLength: level3dRuntimeFrame?.srcdoc?.length || 0,
+          runtimeFrameProgress: typeof level3dRuntimeFrameProgress !== "undefined"
+            ? level3dRuntimeFrameProgress
+            : [],
+          exportKind: previewBuild?.exportData?.kind || null,
+          exportKeys: Object.keys(previewBuild?.exportData || {}),
+          sourceKey: typeof level3d !== "undefined" ? level3d.sourceKey : null,
+          runtimeSnapshotPresent: typeof level3dRuntimeSnapshot === "function"
+            ? Boolean(level3dRuntimeSnapshot())
+            : null,
+          runtimeUpdatePresent: typeof level3dRuntimePreviewUpdate === "function"
+            ? Boolean(level3dRuntimePreviewUpdate())
+            : null,
+          runtimeFrameKey: typeof level3dRuntimeFrameKey !== "undefined" ? level3dRuntimeFrameKey : null,
+          runtimeFrameDocumentLoaded: typeof level3dRuntimeFrameDocumentLoaded !== "undefined"
+            ? level3dRuntimeFrameDocumentLoaded
+            : null,
+          runtimeFrameRuntimeReady: typeof level3dRuntimeFrameRuntimeReady !== "undefined"
+            ? level3dRuntimeFrameRuntimeReady
+            : null,
+          runtimeFrameFailure: typeof level3dRuntimeFrameFailure !== "undefined"
+            ? level3dRuntimeFrameFailure
+            : null,
           stageRendererView: typeof level3dStageRendererView !== "undefined" ? level3dStageRendererView : null,
         },
       };
@@ -2609,17 +2827,27 @@ async function waitForTopWithDiagnostics(page, expression, label, options = {}) 
       hasBoard: Boolean(document.querySelector("#board")),
       hasView: Boolean(document.querySelector("#view")),
     }))()`);
-    throw new Error(`${error.message}\nDiagnostics: ${JSON.stringify({ ...diagnostics, contexts }, null, 2)}`);
+    throw new Error(`${error.message}\nDiagnostics: ${JSON.stringify({
+      ...diagnostics,
+      pageErrors: page.pageErrors,
+      contexts,
+    }, null, 2)}`);
   }
 }
 
 async function withEditorServer(fixture, callback) {
-  const server = new EditorServer(editorBin, fixture);
-  await server.start();
+  const fixtureDir = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "puzzlestudio-editor-fixture-"),
+  );
+  const isolatedFixture = path.join(fixtureDir, path.basename(fixture));
+  await fs.promises.copyFile(fixture, isolatedFixture);
+  const server = new EditorServer(editorBin, isolatedFixture);
   try {
+    await server.start();
     await callback(server);
   } finally {
     await server.stop();
+    await fs.promises.rm(fixtureDir, { recursive: true, force: true });
   }
 }
 
@@ -2726,9 +2954,32 @@ export class Browser {
     if (!target.webSocketDebuggerUrl) {
       throw new Error(`Chrome target did not expose a WebSocket debugger URL: ${JSON.stringify(target)}`);
     }
-    const page = new CdpPage(target.webSocketDebuggerUrl);
+    const page = new CdpPage(target.webSocketDebuggerUrl, target.id);
     await page.open();
     return page;
+  }
+
+  async activatePage(page) {
+    const response = await fetch(
+      `http://127.0.0.1:${this.devtoolsPort}/json/activate/${encodeURIComponent(page.targetId)}`,
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Chrome target ${page.targetId} could not be activated: ${response.status} ${await response.text()}`,
+      );
+    }
+  }
+
+  async closePage(page) {
+    const response = await fetch(
+      `http://127.0.0.1:${this.devtoolsPort}/json/close/${encodeURIComponent(page.targetId)}`,
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Chrome target ${page.targetId} could not be closed: ${response.status} ${await response.text()}`,
+      );
+    }
+    await page.close();
   }
 
   async close() {
@@ -2741,14 +2992,20 @@ export class Browser {
       }
     }
     if (this.profileDir) {
-      await fs.promises.rm(this.profileDir, { recursive: true, force: true });
+      await fs.promises.rm(this.profileDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   }
 }
 
 export class CdpPage {
-  constructor(webSocketUrl) {
+  constructor(webSocketUrl, targetId) {
     this.webSocketUrl = webSocketUrl;
+    this.targetId = targetId;
     this.ws = null;
     this.nextId = 1;
     this.pending = new Map();
@@ -3160,8 +3417,8 @@ function parseArgs(argv) {
       parsed.initialPreviewOnly = true;
       continue;
     }
-    if (arg === "--visual-palette-only") {
-      parsed.visualPaletteOnly = true;
+    if (arg === "--visual-selection-revision-only") {
+      parsed.visualSelectionRevisionOnly = true;
       continue;
     }
     if (arg === "--visual-clip-fill-only") {

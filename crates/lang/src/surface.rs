@@ -53,6 +53,16 @@ pub(crate) struct SurfaceLevelProduct {
     pub(crate) pack: Option<String>,
     pub(crate) puzzle: Option<String>,
     pub(crate) level_index: usize,
+    pub(crate) rows: Vec<String>,
+    pub(crate) shared_legends: Vec<SurfaceLevelLegendProduct>,
+    pub(crate) local_legends: Vec<SurfaceLevelLegendProduct>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SurfaceLevelLegendProduct {
+    pub(crate) symbol: char,
+    pub(crate) selectors: Vec<String>,
+    pub(crate) objects: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

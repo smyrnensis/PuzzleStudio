@@ -20,19 +20,11 @@ use puzzle_lang::{
     parse_scene_expression, standard_message_effect,
 };
 use puzzle_runtime_contract::{
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     AudioCommand, RuntimeAnimationEvent, RuntimeChoiceDirection, RuntimeCoord, RuntimeEffect,
     RuntimePresentationEvent, RuntimeSceneActionId, RuntimeSceneActionToken, RuntimeVisualSpace,
     RuntimeVisualState, RuntimeVisualTransform, RuntimeVisualTween,
 };
 use puzzle_scene::{ComponentChoiceCell, component_action_cells, component_choice_cells};
-=======
-    RuntimeAnimationEvent, RuntimeChoiceDirection, RuntimeCoord, RuntimePresentationEvent,
-    RuntimePresentationEventKind, RuntimeVisualSpace, RuntimeVisualState, RuntimeVisualTransform,
-    RuntimeVisualTween,
-};
-use puzzle_scene::{ComponentChoiceCell, component_choice_cells};
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 use serde::{Deserialize, Serialize};
 
 mod session_history;
@@ -66,6 +58,11 @@ pub enum SoundEvent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WaitEvent {
     Wait { milliseconds: u64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresentationContinuation {
+    pub sequence: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -140,6 +137,7 @@ pub struct PresentationEvent {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PresentationContext {
+    pub model: String,
     pub scene: String,
     pub puzzle: String,
     pub level_index: Option<usize>,
@@ -226,6 +224,7 @@ pub fn presentation_events_contract<const D: usize>(
                 PresentationEventKind::AnimationBatch(animations) => {
                     RuntimePresentationEvent::AnimationBatch {
                         source: puzzle_runtime_contract::RuntimeViewportSourceId {
+                            model: event.context.model.clone(),
                             component: event.context.scene.clone(),
                             source: event.context.puzzle.clone(),
                         },
@@ -261,6 +260,19 @@ impl<const D: usize, Size: GridSize<D>> Default for GridSceneRuntimeState<D, Siz
 }
 
 pub type SceneRuntimeState = GridSceneRuntimeState<2, Size2>;
+
+#[derive(Clone, Debug)]
+pub struct SharedSceneRuntimeState {
+    surface: SurfaceState,
+    scene_states: HashMap<String, SharedSceneComponentState>,
+    session_values: HashMap<String, SceneValue>,
+}
+
+#[derive(Clone, Debug)]
+struct SharedSceneComponentState {
+    values: HashMap<String, SceneValue>,
+    choice_cursor: usize,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SurfaceComponentInstance {
@@ -629,6 +641,8 @@ pub struct GridGameSession<const D: usize, Size: GridSize<D>> {
     input_execution_mode: InputExecutionMode,
     last_level_completion: Option<GridLevelCompletion<D, Size>>,
     pending_input: Option<GridPendingInput<D, Size>>,
+    presentation_continuation: Option<PresentationContinuation>,
+    next_presentation_continuation_sequence: u64,
     progress_clear_requested: bool,
 }
 
@@ -803,6 +817,12 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         Self::new_with_mode(game, InputExecutionMode::Player)
     }
 
+    pub fn try_new_scene_replica(
+        game: &LoadedGridGame<D, Size>,
+    ) -> Result<Self, GridTransitionError<D>> {
+        Self::new_with_mode_and_lifecycle(game, InputExecutionMode::Player, true, false)
+    }
+
     pub fn new_headless(game: &LoadedGridGame<D, Size>) -> Self {
         Self::try_new_headless(game).expect("initial headless lifecycle must start successfully")
     }
@@ -822,13 +842,22 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         game: &LoadedGridGame<D, Size>,
         mode: InputExecutionMode,
     ) -> Result<Self, GridTransitionError<D>> {
-        Self::new_with_mode_and_initial_start(game, mode, true)
+        Self::new_with_mode_and_lifecycle(game, mode, true, true)
     }
 
     fn new_with_mode_and_initial_start(
         game: &LoadedGridGame<D, Size>,
         mode: InputExecutionMode,
         start_initial_world: bool,
+    ) -> Result<Self, GridTransitionError<D>> {
+        Self::new_with_mode_and_lifecycle(game, mode, start_initial_world, true)
+    }
+
+    fn new_with_mode_and_lifecycle(
+        game: &LoadedGridGame<D, Size>,
+        mode: InputExecutionMode,
+        start_initial_world: bool,
+        apply_scene_lifecycle: bool,
     ) -> Result<Self, GridTransitionError<D>> {
         let focused_scene = initial_scene_name(game).to_string();
         let routed_world = initial_world_instance(game, &focused_scene)
@@ -850,6 +879,8 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             input_execution_mode: mode,
             last_level_completion: None,
             pending_input: None,
+            presentation_continuation: None,
+            next_presentation_continuation_sequence: 1,
             progress_clear_requested: false,
         };
         session.create_scene(game, &routed_world.scene);
@@ -857,9 +888,9 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             session.create_scene(game, &focused_scene);
         }
         if start_initial_world && routed_world.scene == focused_scene {
-            session.start_current_world(game, true)?;
+            session.start_current_world(game, apply_scene_lifecycle)?;
         }
-        if mode.materializes_presentation() {
+        if mode.materializes_presentation() && apply_scene_lifecycle {
             session.apply_scene_start_transition(game)?;
             session.apply_level_start_transition(game)?;
         }
@@ -1066,6 +1097,60 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
 
     pub fn surface_state(&self) -> &SurfaceState {
         &self.surface
+    }
+
+    pub fn shared_scene_runtime_state(&self) -> SharedSceneRuntimeState {
+        SharedSceneRuntimeState {
+            surface: self.surface.clone(),
+            scene_states: self
+                .scene_states
+                .iter()
+                .map(|(name, state)| {
+                    (
+                        name.clone(),
+                        SharedSceneComponentState {
+                            values: state.values.clone(),
+                            choice_cursor: state.choice_cursor,
+                        },
+                    )
+                })
+                .collect(),
+            session_values: self.session_values.clone(),
+        }
+    }
+
+    pub fn synchronize_shared_scene_runtime_state(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        shared: &SharedSceneRuntimeState,
+    ) -> Result<(), GridTransitionError<D>> {
+        let mut local_states = std::mem::take(&mut self.scene_states);
+        self.surface = shared.surface.clone();
+        self.session_values = shared.session_values.clone();
+        local_states.retain(|instance, _| {
+            !instance.starts_with("component:") || shared.scene_states.contains_key(instance)
+        });
+        for (instance, shared_state) in &shared.scene_states {
+            let definition = self
+                .surface
+                .components
+                .iter()
+                .find(|component| component.id == *instance)
+                .map(|component| component.definition.as_str())
+                .unwrap_or(instance);
+            let mut local = local_states
+                .remove(instance)
+                .unwrap_or_else(|| self.default_scene_state(game, definition));
+            local.values = shared_state.values.clone();
+            local.choice_cursor = shared_state.choice_cursor;
+            local_states.insert(instance.clone(), local);
+        }
+        self.scene_states = local_states;
+        self.route_inputs_to_focused_scene(game);
+        if self.routed_world.scene == self.surface.focused_component {
+            self.start_current_world(game, false)?;
+        }
+        Ok(())
     }
 
     pub fn apply_component_event(
@@ -1283,6 +1368,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         let world = self.current_world_id().clone();
         self.presentation_events.push(PresentationEvent {
             context: PresentationContext {
+                model: self.model.clone(),
                 scene: world.scene,
                 puzzle: world.puzzle,
                 level_index: self.active_level_index,
@@ -1296,6 +1382,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             return;
         }
         let context = PresentationContext {
+            model: self.model.clone(),
             scene: self.current_world_id().scene.clone(),
             puzzle: self.current_world_id().puzzle.clone(),
             level_index: self.active_level_index,
@@ -1466,20 +1553,38 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         self.pending_input.is_some() || self.surface.active_modal_component().is_some()
     }
 
-    pub fn resume_wait(
+    pub fn presentation_continuation(&self) -> Option<PresentationContinuation> {
+        self.presentation_continuation
+    }
+
+    pub fn validate_presentation_continuation(
+        &self,
+        continuation: PresentationContinuation,
+    ) -> Result<(), GridTransitionError<D>> {
+        match self.presentation_continuation {
+            Some(expected) if expected == continuation => Ok(()),
+            Some(expected) => Err(GridTransitionError::<D>::InvalidCommand(format!(
+                "presentation continuation {} is stale; pending continuation is {}",
+                continuation.sequence, expected.sequence
+            ))),
+            None if self.surface.active_modal_component().is_some() => {
+                Err(GridTransitionError::<D>::InvalidCommand(
+                    "an awaited component event cannot be completed as a presentation timeline"
+                        .to_string(),
+                ))
+            }
+            None => Err(GridTransitionError::<D>::InvalidCommand(
+                "no presentation timeline is waiting".to_string(),
+            )),
+        }
+    }
+
+    pub fn complete_presentation(
         &mut self,
         game: &LoadedGridGame<D, Size>,
+        continuation: PresentationContinuation,
     ) -> Result<(), GridTransitionError<D>> {
-        if self.surface.active_modal_component().is_some() {
-            return Err(GridTransitionError::<D>::InvalidCommand(
-                "cannot resume a component event wait with a timeline resume".to_string(),
-            ));
-        }
-        if self.pending_input.is_none() {
-            return Err(GridTransitionError::<D>::InvalidCommand(
-                "cannot resume because no turn is waiting".to_string(),
-            ));
-        }
+        self.validate_presentation_continuation(continuation)?;
         self.run_pending_input(game)
     }
 
@@ -1707,6 +1812,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         &mut self,
         game: &LoadedGridGame<D, Size>,
     ) -> Result<(), GridTransitionError<D>> {
+        self.presentation_continuation = None;
         let pending = self.pending_input.take().ok_or_else(|| {
             GridTransitionError::<D>::InvalidCommand(
                 "cannot resume because no turn is waiting".to_string(),
@@ -1826,6 +1932,13 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             pending.started = true;
             if emitted_wait {
                 self.pending_input = Some(pending);
+                if self.surface.active_modal_component().is_none() {
+                    let sequence = self.next_presentation_continuation_sequence;
+                    self.next_presentation_continuation_sequence = sequence
+                        .checked_add(1)
+                        .expect("presentation continuation sequence exhausted");
+                    self.presentation_continuation = Some(PresentationContinuation { sequence });
+                }
                 return Ok(());
             }
             if pending.continuation.is_some() {
@@ -1839,7 +1952,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             }
             match pending.phase {
                 GridPendingInputPhase::Rules => {
-                    if self.prepare_segmented_level_clear(game, &mut pending) {
+                    if self.prepare_segmented_level_clear(game, &mut pending)? {
                         continue;
                     }
                     return self.finish_segmented_input(game, pending);
@@ -1855,7 +1968,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         &mut self,
         game: &LoadedGridGame<D, Size>,
         pending: &mut GridPendingInput<D, Size>,
-    ) -> bool {
+    ) -> Result<bool, GridTransitionError<D>> {
         let win_targets = pending
             .semantic_items
             .iter()
@@ -1870,7 +1983,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             .collect::<Vec<_>>();
         let force_clear = !win_targets.is_empty() && self.can_force_clear_state(game, &self.state);
         let forced_win_targets: &[Option<String>] = if force_clear { &win_targets } else { &[] };
-        pending.condition_effect = self.condition_transition_effect(game, forced_win_targets);
+        pending.condition_effect = self.condition_transition_effect(game, forced_win_targets)?;
         let clears = force_clear || self.can_clear_state(game, &self.state);
         if clears
             && self.last_level_completion.is_none()
@@ -1882,7 +1995,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             });
         }
         if !clears || game.is_lose_complete(&self.state) {
-            return false;
+            return Ok(false);
         }
         self.mark_current_level_cleared();
         let model_clear_program = if self
@@ -1902,7 +2015,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             .cloned()
             .collect::<Vec<_>>();
         if programs.is_empty() {
-            return false;
+            return Ok(false);
         }
         pending.lifecycle_item_base = pending.semantic_items.len();
         pending.phase = GridPendingInputPhase::LevelClear;
@@ -1912,7 +2025,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         pending.started = false;
         pending.program_input = None;
         pending.program_start_state = self.state.clone();
-        true
+        Ok(true)
     }
 
     fn finish_segmented_input(
@@ -2194,7 +2307,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             .collect::<Vec<_>>();
         let force_clear = !win_targets.is_empty() && self.can_force_clear_state(game, &self.state);
         let forced_win_targets: &[Option<String>] = if force_clear { &win_targets } else { &[] };
-        let condition_effect = self.condition_transition_effect(game, forced_win_targets);
+        let condition_effect = self.condition_transition_effect(game, forced_win_targets)?;
         if (force_clear || self.can_clear_state(game, &self.state))
             && self.last_level_completion.is_none()
             && let Some(level_index) = self.active_level_index
@@ -2559,7 +2672,6 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         self.apply_screen_effect(game, effect, &HashMap::new())
     }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     pub fn apply_scene_action(
         &mut self,
         game: &LoadedGridGame<D, Size>,
@@ -2622,6 +2734,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 component_action_cells(&definition.components, |condition| {
                     self.is_screen_condition_true(game, condition, condition_context)
                 })
+                .map_err(GridTransitionError::<D>::InvalidCommand)?
                 .into_iter()
                 .find(|cell| cell.ordinal == ordinal && cell.active)
                 .map(|cell| cell.effect)
@@ -2644,60 +2757,44 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         self.apply_screen_effect(game, &effect, &HashMap::new())
     }
 
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     pub fn choice_cursor_for(&self, component: &str) -> usize {
         self.scene_states
             .get(component)
             .map_or(0, |state| state.choice_cursor)
     }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     pub fn focused_choice_cursor(
         &self,
         game: &LoadedGridGame<D, Size>,
         condition_context: SceneConditionContext,
-    ) -> Option<usize> {
-        let cells = self.focused_choice_cells(game, condition_context)?;
-=======
-    pub fn focused_choice_cursor(&self, game: &LoadedGridGame<D, Size>) -> Option<usize> {
-        let cells = self.focused_choice_cells(game)?;
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
-        (!cells.is_empty()).then(|| {
+    ) -> Result<Option<usize>, GridTransitionError<D>> {
+        let Some(cells) = self.focused_choice_cells(game, condition_context)? else {
+            return Ok(None);
+        };
+        Ok((!cells.is_empty()).then(|| {
             self.choice_cursor_for(self.surface.focused_component())
                 .min(cells.len() - 1)
-        })
+        }))
     }
 
     pub fn apply_choice_move(
         &mut self,
         game: &LoadedGridGame<D, Size>,
         direction: RuntimeChoiceDirection,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         condition_context: SceneConditionContext,
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     ) -> Result<(), GridTransitionError<D>> {
         if self.is_waiting() {
             return Err(GridTransitionError::<D>::InvalidCommand(
                 "cannot move scene choice while a turn is waiting".to_string(),
             ));
         }
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let cells = self
-            .focused_choice_cells(game, condition_context)
+            .focused_choice_cells(game, condition_context)?
             .ok_or_else(|| {
                 GridTransitionError::<D>::InvalidCommand(
                     "focused component definition is unavailable".to_string(),
                 )
             })?;
-=======
-        let cells = self.focused_choice_cells(game).ok_or_else(|| {
-            GridTransitionError::<D>::InvalidCommand(
-                "focused component definition is unavailable".to_string(),
-            )
-        })?;
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         if cells.is_empty() {
             return Err(GridTransitionError::<D>::InvalidCommand(
                 "focused component has no choices".to_string(),
@@ -2717,74 +2814,33 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         Ok(())
     }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn focused_choice_cells<'a>(
         &self,
         game: &'a LoadedGridGame<D, Size>,
         condition_context: SceneConditionContext,
-=======
-    pub fn apply_choice_activate(
-        &mut self,
-        game: &LoadedGridGame<D, Size>,
-        requested_index: Option<usize>,
-    ) -> Result<(), GridTransitionError<D>> {
-        if self.is_waiting() {
-            return Err(GridTransitionError::<D>::InvalidCommand(
-                "cannot activate scene choice while a turn is waiting".to_string(),
-            ));
-        }
-        let cells = self.focused_choice_cells(game).ok_or_else(|| {
-            GridTransitionError::<D>::InvalidCommand(
-                "focused component definition is unavailable".to_string(),
-            )
-        })?;
-        if cells.is_empty() {
-            return Err(GridTransitionError::<D>::InvalidCommand(
-                "focused component has no choices".to_string(),
-            ));
-        }
-        let index = requested_index.unwrap_or_else(|| {
-            self.choice_cursor_for(self.surface.focused_component())
-                .min(cells.len() - 1)
-        });
-        let Some(cell) = cells.get(index) else {
-            return Err(GridTransitionError::<D>::InvalidCommand(format!(
-                "scene choice index is out of range: {index}"
-            )));
-        };
-        let effect = cell.effect.clone();
-        let focused = self.surface.focused_component().to_string();
-        self.scene_states
-            .get_mut(&focused)
-            .expect("focused component must own scene runtime state")
-            .choice_cursor = index;
-        self.apply_screen_effect(game, &effect, &HashMap::new())
-    }
-
-    fn focused_choice_cells<'a>(
-        &self,
-        game: &'a LoadedGridGame<D, Size>,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
-    ) -> Option<Vec<ComponentChoiceCell<'a, SceneEffect>>> {
+    ) -> Result<Option<Vec<ComponentChoiceCell<'a, SceneEffect>>>, GridTransitionError<D>> {
         let focused = self.surface.focused_component();
-        let definition = self
+        let Some(definition) = self
             .surface
             .components()
             .iter()
-            .find(|component| component.id == focused)?
-            .definition
-            .as_str();
-        let component = game
+            .find(|component| component.id == focused)
+            .map(|component| component.definition.as_str())
+        else {
+            return Ok(None);
+        };
+        let Some(component) = game
             .scenes
             .iter()
-            .find(|component| component.name == definition)?;
-        Some(component_choice_cells(&component.components, |condition| {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+            .find(|component| component.name == definition)
+        else {
+            return Ok(None);
+        };
+        component_choice_cells(&component.components, |condition| {
             self.is_screen_condition_true(game, condition, condition_context)
-=======
-            self.is_screen_condition_true(game, condition)
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
-        }))
+        })
+        .map(Some)
+        .map_err(GridTransitionError::<D>::InvalidCommand)
     }
 
     fn apply_scene_input_command(
@@ -2854,30 +2910,35 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         &self,
         game: &LoadedGridGame<D, Size>,
         forced_win_targets: &[Option<String>],
-    ) -> Option<SceneEffect> {
+    ) -> Result<Option<SceneEffect>, GridTransitionError<D>> {
         let Some(screen) = game
             .scenes
             .iter()
             .find(|screen| screen.name == self.surface.focused_component)
         else {
-            return None;
+            return Ok(None);
         };
-        screen.transitions.iter().find_map(|transition| {
+        for transition in &screen.transitions {
             let condition = match &transition.trigger {
                 SceneTransitionTrigger::Condition(condition)
                 | SceneTransitionTrigger::Signal(condition) => condition,
                 SceneTransitionTrigger::SceneStart | SceneTransitionTrigger::LevelStart => {
-                    return None;
+                    continue;
                 }
             };
-            self.is_screen_condition_true_with_forced_win(
-                game,
-                condition,
-                forced_win_targets,
-                SceneConditionContext::default(),
-            )
-            .then(|| transition.effect.clone())
-        })
+            if self
+                .is_screen_condition_true_with_forced_win(
+                    game,
+                    condition,
+                    forced_win_targets,
+                    SceneConditionContext::default(),
+                )
+                .map_err(GridTransitionError::<D>::InvalidCommand)?
+            {
+                return Ok(Some(transition.effect.clone()));
+            }
+        }
+        Ok(None)
     }
 
     fn apply_focused_scene_input_transition(
@@ -2885,7 +2946,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         game: &LoadedGridGame<D, Size>,
         undo_base_len: usize,
     ) -> Result<(), GridTransitionError<D>> {
-        let condition_effect = self.condition_transition_effect(game, &[]);
+        let condition_effect = self.condition_transition_effect(game, &[])?;
         self.resolve_turn_effects(game, Vec::new(), condition_effect, undo_base_len)
     }
 
@@ -3090,7 +3151,9 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 Ok(())
             }
             SceneEffect::Conditional { condition, effect } => {
-                if self.is_screen_condition_true(game, condition, SceneConditionContext::default())
+                if self
+                    .is_screen_condition_true(game, condition, SceneConditionContext::default())
+                    .map_err(GridTransitionError::<D>::InvalidCommand)?
                 {
                     self.apply_screen_effect_during_turn(
                         game,
@@ -3169,8 +3232,18 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         game: &LoadedGridGame<D, Size>,
         condition: &SceneExpr,
         condition_context: SceneConditionContext,
-    ) -> bool {
-        self.is_screen_condition_true_with_forced_win(game, condition, &[], condition_context)
+    ) -> Result<bool, String> {
+        self.eval_screen_condition_bool(game, condition, &[], condition_context, &HashMap::new())
+    }
+
+    pub fn resolve_scene_condition(
+        &self,
+        game: &LoadedGridGame<D, Size>,
+        condition: &SceneExpr,
+        condition_context: SceneConditionContext,
+        values: &HashMap<String, SceneValue>,
+    ) -> Result<bool, String> {
+        self.eval_screen_condition_bool(game, condition, &[], condition_context, values)
     }
 
     fn is_screen_condition_true_with_forced_win(
@@ -3179,9 +3252,14 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         condition: &SceneExpr,
         forced_win_targets: &[Option<String>],
         condition_context: SceneConditionContext,
-    ) -> bool {
-        self.eval_screen_condition_bool(game, condition, forced_win_targets, condition_context)
-            .unwrap_or(false)
+    ) -> Result<bool, String> {
+        self.eval_screen_condition_bool(
+            game,
+            condition,
+            forced_win_targets,
+            condition_context,
+            &HashMap::new(),
+        )
     }
 
     fn eval_screen_condition_bool(
@@ -3190,9 +3268,10 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         condition: &SceneExpr,
         forced_win_targets: &[Option<String>],
         condition_context: SceneConditionContext,
-    ) -> Option<bool> {
+        values: &HashMap<String, SceneValue>,
+    ) -> Result<bool, String> {
         match condition {
-            SceneExpr::Bool(value) => Some(*value),
+            SceneExpr::Bool(value) => Ok(*value),
             SceneExpr::Binary { op, left, right } => match op {
                 SceneBinaryOp::And => {
                     if !self.eval_screen_condition_bool(
@@ -3200,29 +3279,51 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                         left,
                         forced_win_targets,
                         condition_context,
+                        values,
                     )? {
-                        return Some(false);
+                        return Ok(false);
                     }
                     self.eval_screen_condition_bool(
                         game,
                         right,
                         forced_win_targets,
                         condition_context,
+                        values,
                     )
                 }
                 SceneBinaryOp::Eq => {
-                    let left = self.screen_condition_value(game, left, condition_context)?;
-                    let right = self.screen_condition_value(game, right, condition_context)?;
-                    Some(left == right)
+                    let Some(left) =
+                        self.screen_condition_value(game, left, condition_context, values)?
+                    else {
+                        return Ok(false);
+                    };
+                    let Some(right) =
+                        self.screen_condition_value(game, right, condition_context, values)?
+                    else {
+                        return Ok(false);
+                    };
+                    Ok(left == right)
                 }
                 SceneBinaryOp::In => {
-                    let left = self.screen_condition_value(game, left, condition_context)?;
+                    let Some(left) =
+                        self.screen_condition_value(game, left, condition_context, values)?
+                    else {
+                        return Ok(false);
+                    };
                     self.screen_condition_set_contains(game, right, &left)
                 }
                 SceneBinaryOp::NotEq => {
-                    let left = self.screen_condition_value(game, left, condition_context)?;
-                    let right = self.screen_condition_value(game, right, condition_context)?;
-                    Some(left != right)
+                    let Some(left) =
+                        self.screen_condition_value(game, left, condition_context, values)?
+                    else {
+                        return Ok(false);
+                    };
+                    let Some(right) =
+                        self.screen_condition_value(game, right, condition_context, values)?
+                    else {
+                        return Ok(false);
+                    };
+                    Ok(left != right)
                 }
             },
             SceneExpr::If {
@@ -3235,12 +3336,14 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                     condition,
                     forced_win_targets,
                     condition_context,
+                    values,
                 )? {
                     self.eval_screen_condition_bool(
                         game,
                         then_branch,
                         forced_win_targets,
                         condition_context,
+                        values,
                     )
                 } else {
                     self.eval_screen_condition_bool(
@@ -3248,30 +3351,51 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                         else_branch,
                         forced_win_targets,
                         condition_context,
+                        values,
                     )
                 }
             }
             SceneExpr::Path(path) => {
                 if let Some(value) = condition_context.value(path) {
-                    return scene_value_bool(&value);
+                    return scene_value_bool(&value).ok_or_else(|| {
+                        format!("scene condition resolved to a non-boolean value: {value:?}")
+                    });
+                }
+                if let Some(value) = self.owned_level_progress_value(game, path) {
+                    let value = value.ok_or_else(|| {
+                        format!("scene condition references unknown level progress path: {path:?}")
+                    })?;
+                    return scene_value_bool(&value).ok_or_else(|| {
+                        format!("scene condition resolved to a non-boolean value: {value:?}")
+                    });
+                }
+                if let Some(value) = values.get(&path.join(".")) {
+                    return scene_value_bool(value).ok_or_else(|| {
+                        format!("scene condition resolved to a non-boolean value: {value:?}")
+                    });
                 }
                 let condition = path.join(".");
                 if self.forced_win_condition_atom_true(game, &condition, forced_win_targets) {
-                    return Some(true);
+                    return Ok(true);
                 }
-                if let Some((state, condition_name)) = self
-                    .active_level_index
-                    .is_some()
-                    .then_some((&self.state, condition_name(&condition)))
-                {
-                    return Some(self.is_model_condition_true(game, state, condition_name));
+                if let Some(value) = self.model_condition_path_value(game, path) {
+                    return value;
                 }
-                self.screen_condition_value(game, &SceneExpr::Path(path.clone()), condition_context)
-                    .and_then(|value| value.parse::<bool>().ok())
+                Err(format!(
+                    "scene condition references unknown value: {}",
+                    path.join(".")
+                ))
             }
-            _ => self
-                .eval_effect_value(game, condition, &HashMap::new())
-                .and_then(|value| scene_value_bool(&value)),
+            _ => {
+                let value = self
+                    .eval_scene_value(game, condition, values)
+                    .ok_or_else(|| {
+                        format!("scene condition could not be resolved: {condition:?}")
+                    })?;
+                scene_value_bool(&value).ok_or_else(|| {
+                    format!("scene condition resolved to a non-boolean value: {value:?}")
+                })
+            }
         }
     }
 
@@ -3309,7 +3433,54 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         })
     }
 
-    fn is_model_condition_true(
+    fn model_condition_path_value(
+        &self,
+        game: &LoadedGridGame<D, Size>,
+        path: &[String],
+    ) -> Option<Result<bool, String>> {
+        let condition_name = path.last()?;
+        if !is_model_condition_name(game, condition_name) {
+            return None;
+        }
+        let state = match path {
+            [_] => {
+                if self.active_level_index.is_none() {
+                    return Some(Err(format!(
+                        "scene condition `{condition_name}` requires an active puzzle level"
+                    )));
+                }
+                &self.state
+            }
+            [target, _] => match self.puzzle_target_state(game, target) {
+                Some(state) => state,
+                None => {
+                    return Some(Err(format!(
+                        "scene condition references unknown puzzle target: {target}"
+                    )));
+                }
+            },
+            [scene, puzzle, _] => {
+                let target = format!("{scene}.{puzzle}");
+                match self.puzzle_target_state(game, &target) {
+                    Some(state) => state,
+                    None => {
+                        return Some(Err(format!(
+                            "scene condition references unknown puzzle target: {target}"
+                        )));
+                    }
+                }
+            }
+            _ => {
+                return Some(Err(format!(
+                    "scene condition has invalid model path: {}",
+                    path.join(".")
+                )));
+            }
+        };
+        Some(Ok(self.model_condition_value(game, state, condition_name)))
+    }
+
+    fn model_condition_value(
         &self,
         game: &LoadedGridGame<D, Size>,
         state: &GridState<D, Size>,
@@ -3318,8 +3489,13 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         if condition_name == "win_conditions" {
             return self.can_clear_state(game, state);
         }
-        game.is_condition_true(condition_name, state)
-            || game.is_variable_truthy(condition_name, state)
+        if condition_name == "lose_conditions" {
+            return game.is_lose_complete(state);
+        }
+        if game.conditions.contains_key(condition_name) {
+            return game.is_condition_true(condition_name, state);
+        }
+        game.is_variable_truthy(condition_name, state)
     }
 
     fn can_clear_state(&self, game: &LoadedGridGame<D, Size>, state: &GridState<D, Size>) -> bool {
@@ -3351,22 +3527,44 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         game: &LoadedGridGame<D, Size>,
         expr: &SceneExpr,
         condition_context: SceneConditionContext,
-    ) -> Option<String> {
+        values: &HashMap<String, SceneValue>,
+    ) -> Result<Option<String>, String> {
         match expr {
             SceneExpr::Path(path) if path.len() == 1 && path[0] == "input" => {
-                self.current_input.clone()
+                Ok(self.current_input.clone())
             }
             SceneExpr::Path(path) => {
                 if let Some(value) = condition_context.value(path) {
-                    return Some(scene_value_to_string(&value));
+                    return Ok(Some(scene_value_to_string(&value)));
+                }
+                if let Some(value) = self.owned_level_progress_value(game, path) {
+                    return value
+                        .map(|value| Some(scene_value_to_string(&value)))
+                        .ok_or_else(|| {
+                            format!(
+                                "scene condition references unknown level progress path: {path:?}"
+                            )
+                        });
+                }
+                if let Some(value) = values.get(&path.join(".")) {
+                    return Ok(Some(scene_value_to_string(value)));
                 }
                 let value = path.join(".");
-                self.scene_value_string(&value)
-                    .or_else(|| is_simple_identifier(&value).then(|| value.to_string()))
+                if let Some(value) = self.scene_value_string(&value) {
+                    return Ok(Some(value));
+                }
+                if is_simple_identifier(&value) {
+                    return Ok(Some(value));
+                }
+                Err(format!(
+                    "scene condition references unknown value: {}",
+                    path.join(".")
+                ))
             }
             _ => self
-                .eval_effect_value(game, expr, &HashMap::new())
-                .map(|value| scene_value_to_string(&value)),
+                .eval_scene_value(game, expr, values)
+                .map(|value| Some(scene_value_to_string(&value)))
+                .ok_or_else(|| format!("scene condition value could not be resolved: {expr:?}")),
         }
     }
 
@@ -3375,14 +3573,10 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         game: &LoadedGridGame<D, Size>,
         set: &SceneExpr,
         value: &str,
-    ) -> Option<bool> {
-        match set {
-            SceneExpr::Path(path) if path.len() == 1 => {
-                Some(scene_builtin_value_set_contains(game, &path[0], value))
-            }
-            SceneExpr::Text(name) => Some(scene_builtin_value_set_contains(game, name, value)),
-            _ => None,
-        }
+    ) -> Result<bool, String> {
+        let name = scene_builtin_value_set_name(set)
+            .ok_or_else(|| format!("scene condition references unknown or invalid set: {set:?}"))?;
+        Ok(scene_builtin_value_set_contains(game, name, value))
     }
 
     fn apply_screen_effect(
@@ -3455,7 +3649,9 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 Ok(())
             }
             SceneEffect::Conditional { condition, effect } => {
-                if self.is_screen_condition_true(game, condition, SceneConditionContext::default())
+                if self
+                    .is_screen_condition_true(game, condition, SceneConditionContext::default())
+                    .map_err(GridTransitionError::<D>::InvalidCommand)?
                 {
                     self.apply_screen_effect(game, effect, bindings)?;
                 }
@@ -4446,6 +4642,9 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             SceneExpr::Int(value) => Some(SceneValue::Int(*value)),
             SceneExpr::Text(value) => Some(SceneValue::Text(value.clone())),
             SceneExpr::Path(path) => {
+                if let Some(value) = self.owned_level_progress_value(game, path) {
+                    return value;
+                }
                 if let Some(value) = values.get(&path.join(".")) {
                     return Some(value.clone());
                 }
@@ -4487,11 +4686,12 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                         Some(SceneValue::Bool(left == right))
                     }
                     SceneBinaryOp::In => {
-                        Some(SceneValue::Bool(self.screen_condition_set_contains(
+                        let set = scene_builtin_value_set_name(right)?;
+                        Some(SceneValue::Bool(scene_builtin_value_set_contains(
                             game,
-                            right,
+                            set,
                             &scene_value_to_string(&left),
-                        )?))
+                        )))
                     }
                     SceneBinaryOp::NotEq => {
                         let right = self.eval_scene_value(game, right, values)?;
@@ -4513,6 +4713,33 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             }
             SceneExpr::Call { .. } => None,
         }
+    }
+
+    fn owned_level_progress_value(
+        &self,
+        game: &LoadedGridGame<D, Size>,
+        path: &[String],
+    ) -> Option<Option<SceneValue>> {
+        let [levels, record_key, progress, cleared] = path else {
+            return None;
+        };
+        if levels != "levels" || progress != "progress" || cleared != "cleared" {
+            return None;
+        }
+        assert_eq!(
+            game.levels.len(),
+            self.cleared_levels.len(),
+            "loaded levels and session progress must have the same length"
+        );
+        Some(
+            game.levels
+                .iter()
+                .zip(&self.cleared_levels)
+                .find_map(|(level, is_cleared)| {
+                    (LevelId::new(&level.puzzle, &level.name).record_key() == *record_key)
+                        .then_some(SceneValue::Bool(*is_cleared))
+                }),
+        )
     }
 
     fn resolve_runtime_property(
@@ -5167,6 +5394,19 @@ fn scene_builtin_value_set_contains<const D: usize, Size: GridSize<D>>(
             .any(|direction| direction == value && input_id_by_label(game, direction).is_some()),
         _ => false,
     }
+}
+
+fn is_scene_builtin_value_set(name: &str) -> bool {
+    matches!(name, "directions" | "horizontal" | "vertical")
+}
+
+fn scene_builtin_value_set_name(expr: &SceneExpr) -> Option<&str> {
+    let name = match expr {
+        SceneExpr::Path(path) if path.len() == 1 => path[0].as_str(),
+        SceneExpr::Text(name) => name.as_str(),
+        _ => return None,
+    };
+    is_scene_builtin_value_set(name).then_some(name)
 }
 
 fn level_index_from_scene_value<const D: usize, Size: GridSize<D>>(
@@ -6491,6 +6731,15 @@ fn condition_name(value: &str) -> &str {
     value.rsplit_once('.').map_or(value, |(_, name)| name)
 }
 
+fn is_model_condition_name<const D: usize, Size: GridSize<D>>(
+    game: &LoadedGridGame<D, Size>,
+    name: &str,
+) -> bool {
+    matches!(name, "win_conditions" | "lose_conditions")
+        || game.conditions.contains_key(name)
+        || game.variable_labels.values().any(|label| label == name)
+}
+
 pub fn render_ascii_top(state: &PuzzleState, legend: &AsciiLegend) -> String {
     let mut out = String::new();
 
@@ -6534,6 +6783,15 @@ mod tests {
     }
     use puzzle_core::transition_outcome;
     use puzzle_lang::parse_game2d as parse_game;
+
+    fn complete_presentation(session: &mut GameSession, game: &LoadedGame) {
+        let continuation = session
+            .presentation_continuation()
+            .expect("a presentation timeline must be waiting");
+        session
+            .complete_presentation(game, continuation)
+            .expect("the exact pending presentation continuation must complete");
+    }
 
     fn sound_events(events: &[PresentationEvent]) -> Vec<SoundEvent> {
         events
@@ -6623,11 +6881,7 @@ mod tests {
     }
 
     #[test]
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn session_owns_choice_cursor_navigation_and_token_activation() {
-=======
-    fn session_owns_choice_cursor_navigation_and_activation() {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let source = r#"
 const title = choice_session
 
@@ -6678,9 +6932,10 @@ scene d {
         let mut session = GameSession::new(&loaded);
         session.apply_command(&loaded, "goto menu").unwrap();
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         assert_eq!(
-            session.focused_choice_cursor(&loaded, SceneConditionContext::default()),
+            session
+                .focused_choice_cursor(&loaded, SceneConditionContext::default())
+                .unwrap(),
             Some(0)
         );
         session
@@ -6691,7 +6946,9 @@ scene d {
             )
             .unwrap();
         assert_eq!(
-            session.focused_choice_cursor(&loaded, SceneConditionContext::default()),
+            session
+                .focused_choice_cursor(&loaded, SceneConditionContext::default())
+                .unwrap(),
             Some(1)
         );
         session
@@ -6702,7 +6959,9 @@ scene d {
             )
             .unwrap();
         assert_eq!(
-            session.focused_choice_cursor(&loaded, SceneConditionContext::default()),
+            session
+                .focused_choice_cursor(&loaded, SceneConditionContext::default())
+                .unwrap(),
             Some(3)
         );
         session
@@ -6715,24 +6974,11 @@ scene d {
                 SceneConditionContext::default(),
             )
             .unwrap();
-=======
-        assert_eq!(session.focused_choice_cursor(&loaded), Some(0));
-        session
-            .apply_choice_move(&loaded, RuntimeChoiceDirection::Right)
-            .unwrap();
-        assert_eq!(session.focused_choice_cursor(&loaded), Some(1));
-        session
-            .apply_choice_move(&loaded, RuntimeChoiceDirection::Down)
-            .unwrap();
-        assert_eq!(session.focused_choice_cursor(&loaded), Some(3));
-        session.apply_choice_activate(&loaded, None).unwrap();
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         assert_eq!(session.surface_state().focused_component(), "d");
 
         let mut pointer_session = GameSession::new(&loaded);
         pointer_session.apply_command(&loaded, "goto menu").unwrap();
         pointer_session
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             .apply_scene_action(
                 &loaded,
                 &RuntimeSceneActionToken {
@@ -6741,130 +6987,24 @@ scene d {
                 },
                 SceneConditionContext::default(),
             )
-=======
-            .apply_choice_activate(&loaded, Some(2))
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
             .unwrap();
         assert_eq!(pointer_session.surface_state().focused_component(), "c");
     }
 
     #[test]
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-    fn scene_action_tokens_execute_only_current_visible_actions() {
+    fn scene_action_tokens_use_the_projection_condition_context() {
         let source = r#"
-const title = scene_action_tokens
+const title = scene_action_context
 
 puzzle board {
   layers { actor = Player }
   empty .
   rules {}
 }
-
 levels default of board {
   legend P = Player
   level "one" { P }
 }
-
-scene menu {
-  layout {
-    choice "A" -> goto a
-    if false {
-      choice "Hidden" -> goto hidden
-    }
-  }
-  keys {
-    Enter -> goto keyed
-  }
-}
-
-scene a {
-  layout { text "A" }
-}
-scene hidden {
-  layout { text "Hidden" }
-}
-scene keyed {
-  layout { text "Keyed" }
-}
-"#;
-        let loaded = parse_game(source).unwrap();
-
-        let mut selected = GameSession::new(&loaded);
-        selected.apply_command(&loaded, "goto menu").unwrap();
-        selected
-            .apply_scene_action(
-                &loaded,
-                &RuntimeSceneActionToken {
-                    component: "menu".to_string(),
-                    action: RuntimeSceneActionId::Node { ordinal: 0 },
-                },
-                SceneConditionContext::default(),
-            )
-            .unwrap();
-        assert_eq!(selected.surface_state().focused_component(), "a");
-
-        let mut hidden = GameSession::new(&loaded);
-        hidden.apply_command(&loaded, "goto menu").unwrap();
-        let hidden_error = hidden
-            .apply_scene_action(
-                &loaded,
-                &RuntimeSceneActionToken {
-                    component: "menu".to_string(),
-                    action: RuntimeSceneActionId::Node { ordinal: 1 },
-                },
-                SceneConditionContext::default(),
-            )
-            .unwrap_err();
-        assert!(
-            format!("{hidden_error:?}").contains("scene action token is unavailable"),
-            "{hidden_error:?}"
-        );
-        assert_eq!(hidden.surface_state().focused_component(), "menu");
-
-        hidden
-            .apply_scene_action(
-                &loaded,
-                &RuntimeSceneActionToken {
-                    component: "menu".to_string(),
-                    action: RuntimeSceneActionId::Key { ordinal: 0 },
-                },
-                SceneConditionContext::default(),
-            )
-            .unwrap();
-        assert_eq!(hidden.surface_state().focused_component(), "keyed");
-
-        let foreign_error = GameSession::new(&loaded)
-            .apply_scene_action(
-                &loaded,
-                &RuntimeSceneActionToken {
-                    component: "foreign".to_string(),
-                    action: RuntimeSceneActionId::Node { ordinal: 0 },
-                },
-                SceneConditionContext::default(),
-            )
-            .unwrap_err();
-        assert!(
-            format!("{foreign_error:?}").contains("is not mounted"),
-            "{foreign_error:?}"
-        );
-    }
-
-    #[test]
-    fn scene_action_resolution_uses_the_same_host_condition_context_as_projection() {
-        let source = r#"
-const title = scene_action_host_context
-
-puzzle board {
-  layers { actor = Player }
-  empty .
-  rules {}
-}
-
-levels default of board {
-  legend P = Player
-  level "one" { P }
-}
-
 scene menu {
   layout {
     choice "New Game" -> goto new_game
@@ -6876,7 +7016,6 @@ scene menu {
     }
   }
 }
-
 scene new_game {
   layout { text "New Game" }
 }
@@ -6888,76 +7027,55 @@ scene impossible {
 }
 "#;
         let loaded = parse_game(source).unwrap();
-        let continue_token = RuntimeSceneActionToken {
+        let token = |ordinal| RuntimeSceneActionToken {
             component: "menu".to_string(),
-            action: RuntimeSceneActionId::Node { ordinal: 1 },
+            action: RuntimeSceneActionId::Node { ordinal },
         };
 
         let mut without_save = GameSession::new(&loaded);
         without_save.apply_command(&loaded, "goto menu").unwrap();
-        let unavailable = without_save
-            .apply_scene_action(
-                &loaded,
-                &continue_token,
-                SceneConditionContext {
-                    has_progress_save: false,
-                },
-            )
-            .unwrap_err();
         assert!(
-            format!("{unavailable:?}").contains("scene action token is unavailable"),
-            "{unavailable:?}"
+            without_save
+                .apply_scene_action(
+                    &loaded,
+                    &token(1),
+                    SceneConditionContext {
+                        has_progress_save: false,
+                    },
+                )
+                .is_err()
         );
 
         let mut with_save = GameSession::new(&loaded);
         with_save.apply_command(&loaded, "goto menu").unwrap();
-        assert_eq!(
-            with_save.focused_choice_cursor(
-                &loaded,
-                SceneConditionContext {
-                    has_progress_save: true,
-                },
-            ),
-            Some(0)
-        );
         with_save
             .apply_scene_action(
                 &loaded,
-                &continue_token,
+                &token(1),
                 SceneConditionContext {
                     has_progress_save: true,
                 },
             )
             .unwrap();
-        assert_eq!(
-            with_save.surface_state().focused_component(),
-            "continued",
-            "a token projected under the persisted-progress context must remain executable"
-        );
+        assert_eq!(with_save.surface_state().focused_component(), "continued");
 
         let mut unrelated_false = GameSession::new(&loaded);
         unrelated_false.apply_command(&loaded, "goto menu").unwrap();
-        let impossible = unrelated_false
-            .apply_scene_action(
-                &loaded,
-                &RuntimeSceneActionToken {
-                    component: "menu".to_string(),
-                    action: RuntimeSceneActionId::Node { ordinal: 2 },
-                },
-                SceneConditionContext {
-                    has_progress_save: true,
-                },
-            )
-            .unwrap_err();
         assert!(
-            format!("{impossible:?}").contains("scene action token is unavailable"),
-            "host progress must not make unrelated false conditions active: {impossible:?}"
+            unrelated_false
+                .apply_scene_action(
+                    &loaded,
+                    &token(2),
+                    SceneConditionContext {
+                        has_progress_save: true,
+                    },
+                )
+                .is_err(),
+            "host progress must not activate an unrelated false branch"
         );
     }
 
     #[test]
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     fn session_runs_the_active_levels_effective_rules() {
         let source = r#"
 const title = play_level_rules
@@ -7182,11 +7300,23 @@ A
             vec![WaitEvent::Wait { milliseconds: 100 }]
         );
 
-        session.resume_wait(&loaded).unwrap();
+        let continuation = session
+            .presentation_continuation()
+            .expect("the timed wait must expose its exact continuation");
+        session
+            .complete_presentation(&loaded, continuation)
+            .expect("the exact continuation must resume the turn");
 
         assert!(!session.state().has_object(&loaded.game, 0, 0, b));
         assert!(session.state().has_object(&loaded.game, 0, 0, c));
         assert!(!session.is_waiting());
+        let replay_error = session
+            .complete_presentation(&loaded, continuation)
+            .unwrap_err();
+        assert!(
+            format!("{replay_error:?}").contains("no presentation timeline is waiting"),
+            "{replay_error:?}"
+        );
         session.undo(&loaded);
         assert!(session.state().has_object(&loaded.game, 0, 0, a));
         assert!(!session.can_undo());
@@ -8454,7 +8584,6 @@ puzzle board = sokoban
 }
 rules {
 step board
-if board.win_conditions and board.level.last -> goto level_select
 if board.win_conditions -> board.next_level
 }
 }
@@ -8961,7 +9090,7 @@ step board
         assert!(sound_events(&presentation_events).is_empty());
         assert!(session.restart_level(&loaded).is_err());
         assert!(session.is_waiting());
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
         assert_eq!(
             sound_events(&session.take_presentation_events()),
             vec![SoundEvent::PlaySfx {
@@ -9327,8 +9456,8 @@ A
                 milliseconds: 10_000
             }]
         );
-        fast_session.resume_wait(&fast).unwrap();
-        slow_session.resume_wait(&slow).unwrap();
+        complete_presentation(&mut fast_session, &fast);
+        complete_presentation(&mut slow_session, &slow);
         assert_eq!(fast_session.state(), slow_session.state());
     }
 
@@ -9401,7 +9530,7 @@ P.
                 timeline.push(format!("component:{}", component.definition));
                 dismiss_top_component(&mut session, &loaded);
             } else {
-                session.resume_wait(&loaded).unwrap();
+                complete_presentation(&mut session, &loaded);
             }
         }
         assert!(session.state().has_object(&loaded.game, 1, 0, done));
@@ -9623,7 +9752,7 @@ P.
             }]
         );
         assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
         assert!(session.state().has_object(&loaded.game, 1, 0, marker));
     }
 
@@ -9692,7 +9821,7 @@ P.
                 to_z: 0,
             }]
         );
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
         assert!(session.state().has_object(&loaded.game, 1, 0, marker));
     }
 
@@ -9863,7 +9992,7 @@ PB.
                 },
             ]
         );
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
         assert!(session.state().has_object(&loaded.game, 1, 0, marker));
     }
 
@@ -9916,7 +10045,7 @@ PB.
             wait_events(&session.take_presentation_events()),
             vec![WaitEvent::Wait { milliseconds: 80 }]
         );
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
         assert!(session.state().has_object(&loaded.game, 1, 0, marker));
     }
 
@@ -9964,7 +10093,7 @@ AA
         assert!(session.state().has_object(&loaded.game, 1, 0, b));
         assert!(!session.state().has_object(&loaded.game, 0, 0, marker));
         assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
         assert!(session.state().has_object(&loaded.game, 0, 0, marker));
         assert!(session.state().has_object(&loaded.game, 1, 0, marker));
     }
@@ -10120,7 +10249,7 @@ goto title
     }
 
     #[test]
-    fn scene_level_name_condition_scopes_lifecycle_message() {
+    fn unknown_level_name_condition_fails_scene_lifecycle() {
         let loaded = parse_game(
             r#"
 const title = level_name_condition_message
@@ -10159,12 +10288,15 @@ message hint
         )
         .unwrap();
         let mut session = GameSession::new(&loaded);
-        session.apply_command(&loaded, "goto playing").unwrap();
-
-        assert!(presented_component_texts(&session).is_empty());
-
-        session.start_level(&loaded, 1).unwrap();
-        assert!(presented_component_texts(&session).is_empty());
+        let error = session.apply_command(&loaded, "goto playing").unwrap_err();
+        assert!(
+            matches!(
+                error,
+                GridTransitionError::InvalidCommand(ref message)
+                    if message.contains("unknown value: board.level.name")
+            ),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -10313,7 +10445,7 @@ A
         );
         assert!(sound_events(&presentation_events).is_empty());
 
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
         assert!(session.state().has_object(&loaded.game, 0, 0, b));
         assert!(!session.state().has_object(&loaded.game, 0, 0, c));
         assert_eq!(
@@ -10371,7 +10503,7 @@ A
             vec![WaitEvent::Wait { milliseconds: 100 }]
         );
 
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
         assert!(!session.state().has_object(&loaded.game, 0, 0, a));
         assert!(session.state().has_object(&loaded.game, 0, 0, b));
         assert!(session.can_undo());
@@ -10608,6 +10740,118 @@ P
                     cleared: index == 1,
                 })
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn scene_expressions_resolve_owned_level_progress_paths_and_reject_unknown_levels() {
+        let loaded = parse_game(
+            r#"
+const title = level_progress_expression
+
+puzzle board {
+  layers { actor = Player }
+  empty .
+  rules {}
+  levels {
+    legend P = Player
+    level "first" { P }
+    level "second" { P }
+  }
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        let second_id = LevelId::new("board", "second");
+        let second_progress = SceneExpr::Path(second_id.progress_cleared_path());
+
+        assert_eq!(
+            session
+                .resolve_scene_expression(&loaded, &second_progress, &HashMap::new())
+                .unwrap(),
+            SceneValue::Bool(false)
+        );
+        assert!(
+            !session
+                .is_screen_condition_true(
+                    &loaded,
+                    &second_progress,
+                    SceneConditionContext::default()
+                )
+                .unwrap()
+        );
+
+        session
+            .restore_progress_save_data(
+                &loaded,
+                &ProgressSaveData {
+                    version: PROGRESS_SAVE_VERSION,
+                    levels: vec![LevelProgressSaveData {
+                        id: second_id.record_key(),
+                        cleared: true,
+                    }],
+                    current_level: None,
+                    persistent_vars: Vec::new(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            session
+                .resolve_scene_expression(&loaded, &second_progress, &HashMap::new())
+                .unwrap(),
+            SceneValue::Bool(true)
+        );
+        assert!(
+            session
+                .is_screen_condition_true(
+                    &loaded,
+                    &second_progress,
+                    SceneConditionContext::default()
+                )
+                .unwrap()
+        );
+
+        let missing_progress =
+            SceneExpr::Path(LevelId::new("board", "missing").progress_cleared_path());
+        let mut untrusted_values = HashMap::new();
+        let SceneExpr::Path(missing_path) = &missing_progress else {
+            unreachable!()
+        };
+        untrusted_values.insert(missing_path.join("."), SceneValue::Bool(true));
+        assert!(
+            session
+                .resolve_scene_expression(&loaded, &missing_progress, &untrusted_values)
+                .is_err(),
+            "a public level progress path must name a loaded level and cannot be supplied by a consumer"
+        );
+        let missing_level_error = session
+            .is_screen_condition_true(&loaded, &missing_progress, SceneConditionContext::default())
+            .unwrap_err();
+        assert!(
+            missing_level_error.contains("unknown level progress path"),
+            "{missing_level_error}"
+        );
+
+        let unknown_generic = SceneExpr::Path(vec!["unknown_scene_condition".to_string()]);
+        let unknown_generic_error = session
+            .is_screen_condition_true(&loaded, &unknown_generic, SceneConditionContext::default())
+            .unwrap_err();
+        assert!(
+            unknown_generic_error.contains("unknown value"),
+            "{unknown_generic_error}"
+        );
+
+        let unknown_target = SceneExpr::Path(vec![
+            "missing_board".to_string(),
+            "win_conditions".to_string(),
+        ]);
+        let unknown_target_error = session
+            .is_screen_condition_true(&loaded, &unknown_target, SceneConditionContext::default())
+            .unwrap_err();
+        assert!(
+            unknown_target_error.contains("unknown puzzle target: missing_board"),
+            "{unknown_target_error}"
         );
     }
 
@@ -11878,7 +12122,7 @@ goto hub
     }
 
     #[test]
-    fn session_does_not_interpret_level_last_as_a_private_scene_property() {
+    fn session_keeps_final_level_when_next_level_has_no_successor() {
         let loaded = transition_fixture();
         let mut session = GameSession::new(&loaded);
         let final_level = loaded.levels.len() - 1;
@@ -12057,7 +12301,7 @@ step board
         );
         assert_eq!(events[0].context.level_index, Some(0));
 
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
         assert_eq!(session.level_index(), 1);
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
     }
@@ -12129,7 +12373,7 @@ P.
                 .all(|event| event.context.level_index == Some(0))
         );
 
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
         assert_eq!(session.level_index(), 1);
         assert_eq!(session.state(), &loaded.levels[1].initial_state);
     }
@@ -12177,7 +12421,7 @@ A
             vec![WaitEvent::Wait { milliseconds: 1000 }]
         );
 
-        session.resume_wait(&loaded).unwrap();
+        complete_presentation(&mut session, &loaded);
 
         assert!(!session.state().has_object(&loaded.game, 0, 0, b));
         assert!(session.state().has_object(&loaded.game, 0, 0, c));

@@ -1,7 +1,7 @@
 (() => {
 const PUZZLE3_THREE_RENDERER_CONTRACT = {
-  version: 3,
-  input: ["snapshot", "resolvedScene", "resolvedFrame", "view"],
+  version: 1,
+  input: ["snapshot", "view"],
 };
 
 class Puzzle3ThreeRenderer {
@@ -9,7 +9,6 @@ class Puzzle3ThreeRenderer {
     this.canvas = canvas;
     this.options = options;
     this.renderer = null;
-    this.rendererAntialias = null;
     this.scene = null;
     this.camera = null;
     this.loading = null;
@@ -17,85 +16,107 @@ class Puzzle3ThreeRenderer {
     this.viewTarget = null;
     this.viewDistance = null;
     this.viewPayload = null;
+    this.animationFrame = 0;
+    this.animationKey = "";
+    this.animationStartedAt = 0;
     this.activeSnapshot = null;
-    this.activeResolvedScene = null;
-    this.activeResolvedFrame = null;
     this.frame = null;
     this.faceMaterialCache = new Map();
   }
 
-  render(snapshot, resolvedScene, resolvedFrame, view = {}) {
+  render(snapshot, view = {}) {
     if (!snapshot) {
       return { rendered: false, reason: "missing-snapshot" };
     }
-    requireResolvedRenderScene(resolvedScene);
-    requireResolvedVoxelFrame(resolvedFrame);
     if (!window.THREE) {
       this.ensureThreeLoaded();
       return { rendered: false, reason: this.failed ? "three-load-failed" : "loading-three" };
     }
 
     const THREE = window.THREE;
-    const snapshotChanged = snapshot !== this.activeSnapshot;
-    const resolvedSceneChanged = resolvedScene !== this.activeResolvedScene;
-    const resolvedFrameChanged = resolvedFrame !== this.activeResolvedFrame;
-    this.activeSnapshot = snapshot;
-    this.activeResolvedScene = resolvedScene;
-    this.activeResolvedFrame = resolvedFrame;
-    const frame = buildPuzzleStudioThreeFrame(snapshot, resolvedScene, resolvedFrame, view);
-    this.frame = frame;
-    const pixelate = pixelateSettings(frame);
-    this.ensureRenderer(THREE, pixelate.enabled && pixelate.smoothing);
+    this.ensureRenderer(THREE);
+    if (snapshot !== this.activeSnapshot) {
+      if (this.animationFrame) {
+        cancelAnimationFrame(this.animationFrame);
+        this.animationFrame = 0;
+      }
+      this.activeSnapshot = snapshot;
+      this.frame = null;
+    }
+    const animation = threeAnimationState(snapshot);
+    if (animation.key !== this.animationKey) {
+      this.animationKey = animation.key;
+      this.animationStartedAt = animation.events.length ? performance.now() : 0;
+    }
+    animation.progress = animation.events.length && this.animationStartedAt
+      ? Math.min(1, Math.max(0, (performance.now() - this.animationStartedAt) / animation.durationMs))
+      : 1;
+    const visualAnimating = hasLoopingVisualAnimation(snapshot);
+    const builtFrame = visualAnimating || !this.frame;
+    const frame = !builtFrame
+      ? updatePuzzleStudioThreeFrame(this.frame, snapshot, view, animation.progress)
+      : buildPuzzleStudioThreeFrame(snapshot, { ...view, animationProgress: animation.progress });
+    if (!visualAnimating && builtFrame) {
+      this.frame = frame;
+    }
+    const scene = new THREE.Scene();
+    scene.background = threeBackground(THREE, view.background);
     frame.rendererViewTarget = this.viewTarget;
     frame.rendererViewDistance = this.viewDistance;
-    const camera = buildCamera(THREE, frame, this.canvas, this.camera);
+    const camera = buildCamera(THREE, frame, this.canvas);
+    applyProjectedRenderCulling(THREE, frame, camera, this.canvas);
+    const visible = frameVisibleVoxels(frame);
     const shadow = shadowSettings(frame);
-    const rebuildScene = snapshotChanged
-      || resolvedSceneChanged
-      || resolvedFrameChanged
-      || !this.scene
-      || view.viewportSnapNext === true;
-    if (rebuildScene) {
-      frame.renderCells = frame.cells;
-      const visible = frameVisibleVoxels(frame);
-      const scene = new THREE.Scene();
-      addLights(THREE, scene, frame, visible.voxels, shadow);
-      addGrid(THREE, scene, frame);
-      addMeshes(THREE, scene, visible, shadow, this.faceMaterialCache, visualShadeEnabled(frame));
-      addShadowCatcher(THREE, scene, frame, shadow);
-      disposeScene(this.scene, this.faceMaterialCache);
-      this.scene = scene;
-    }
-    this.scene.background = threeBackground(THREE, view.background);
-    this.configureShadowMap(THREE, shadow.enabled, rebuildScene);
-    this.configureRenderResolution(pixelate);
-    this.renderer.setClearColor(0x000000, this.scene.background ? 1 : 0);
-    this.renderer.render(this.scene, camera);
+    this.configureShadowMap(THREE, shadow.enabled);
+    addLights(THREE, scene, frame, visible.voxels, shadow);
+    addGrid(THREE, scene, frame);
+    addMeshes(THREE, scene, visible, shadow, this.faceMaterialCache);
+    addShadowCatcher(THREE, scene, frame, shadow);
+    this.renderer.setSize(this.canvas.clientWidth || this.canvas.width || 1, this.canvas.clientHeight || this.canvas.height || 1, false);
+    this.renderer.setClearColor(0x000000, scene.background ? 1 : 0);
+    disposeScene(this.scene, this.faceMaterialCache);
+    this.renderer.render(scene, camera);
+    this.scene = scene;
     this.camera = camera;
     this.viewPayload = threeViewPayload(frame, camera, this.canvas);
     this.updateViewportMotion(frame);
-    const viewportAnimating = frame.viewport?.follow === "smooth"
-      && frame.viewportAnimating === true;
+    this.scheduleAnimationFrame(
+      snapshot,
+      view,
+      animation.progress,
+      visualAnimating,
+      frame.viewport?.follow === "smooth" && frame.viewportAnimating === true,
+    );
     return {
       rendered: true,
       objectCount: frame.objectCount,
-      animating: viewportAnimating,
-      continueAnimation: resolvedFrame.continueAnimation === true,
+      animating: animation.progress < 1 || visualAnimating || (frame.viewport?.follow === "smooth" && frame.viewportAnimating === true),
       view: this.viewPayload,
     };
   }
 
+  scheduleAnimationFrame(snapshot, view, progress, visualAnimating, viewportAnimating) {
+    if ((progress >= 1 && !visualAnimating && !viewportAnimating) || this.animationFrame) {
+      return;
+    }
+    this.animationFrame = requestAnimationFrame(() => {
+      this.animationFrame = 0;
+      this.render(snapshot, view);
+    });
+  }
+
   destroy() {
+    if (this.animationFrame) {
+      cancelAnimationFrame(this.animationFrame);
+      this.animationFrame = 0;
+    }
     disposeScene(this.scene);
     this.faceMaterialCache.clear();
     this.renderer?.dispose?.();
     this.scene = null;
     this.renderer = null;
-    this.rendererAntialias = null;
     this.frame = null;
     this.activeSnapshot = null;
-    this.activeResolvedScene = null;
-    this.activeResolvedFrame = null;
   }
 
   updateViewportMotion(frame) {
@@ -109,38 +130,24 @@ class Puzzle3ThreeRenderer {
     this.viewDistance = next.distance;
   }
 
-  ensureRenderer(THREE, antialias) {
-    if (this.renderer && this.rendererAntialias === antialias) {
+  ensureRenderer(THREE) {
+    if (this.renderer) {
       return;
     }
-    this.renderer?.dispose?.();
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.canvas,
-      antialias,
+      antialias: false,
       alpha: true,
     });
-    this.rendererAntialias = antialias;
+    this.renderer.setPixelRatio(window.devicePixelRatio || 1);
   }
 
-  configureRenderResolution(pixelate) {
-    const width = Math.max(1, Number(this.canvas.clientWidth) || Number(this.canvas.width) || 1);
-    const height = Math.max(1, Number(this.canvas.clientHeight) || Number(this.canvas.height) || 1);
-    const ratio = window.devicePixelRatio || 1;
-    const rasterScale = pixelate.enabled ? pixelate.scale : 1;
-    this.renderer.setPixelRatio(ratio / rasterScale);
-    this.renderer.setSize(width, height, false);
-    if (this.canvas.style) {
-      this.canvas.style.imageRendering = pixelate.enabled ? "pixelated" : "";
-    }
-  }
-
-  configureShadowMap(THREE, enabled, sceneChanged) {
+  configureShadowMap(THREE, enabled) {
     if (enabled && THREE.PCFSoftShadowMap === undefined) {
       throw new Error("Three.js PCFSoftShadowMap is required for Puzzle3 shadows.");
     }
     this.renderer.shadowMap.enabled = enabled;
-    this.renderer.shadowMap.autoUpdate = false;
-    this.renderer.shadowMap.needsUpdate = enabled && sceneChanged;
+    this.renderer.shadowMap.autoUpdate = enabled;
     if (enabled) {
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     }
@@ -211,73 +218,84 @@ async function loadThree() {
   }
 }
 
-function requireResolvedVoxelFrame(resolvedFrame) {
-  if (!resolvedFrame || typeof resolvedFrame !== "object" || Array.isArray(resolvedFrame)) {
-    throw new Error("Puzzle3 renderer requires a Rust-resolved render frame.");
-  }
-  if (!Array.isArray(resolvedFrame.batches)
-      || typeof resolvedFrame.continueAnimation !== "boolean") {
-    throw new Error("Puzzle3 resolved render frame is missing batches or animation state.");
-  }
-  for (const batch of resolvedFrame.batches) {
-    if (batch?.content?.kind !== "voxels") {
-      throw new Error(`Puzzle3 renderer received unsupported resolved primitive: ${String(batch?.content?.kind)}`);
-    }
-  }
-  return resolvedFrame;
-}
-
-function requireResolvedRenderScene(resolvedScene) {
-  if (!resolvedScene || typeof resolvedScene !== "object" || Array.isArray(resolvedScene)) {
-    throw new Error("Puzzle3 renderer requires a Rust-resolved render scene.");
-  }
-  if (!Array.isArray(resolvedScene.cells)) {
-    throw new Error("Puzzle3 resolved render scene is missing typed cells.");
-  }
-  for (const cell of resolvedScene.cells) {
-    if (!Array.isArray(cell?.position)
-        || cell.position.length !== 3
-        || !Array.isArray(cell.objectIds)
-        || cell.objectIds.some((objectId) => !Number.isInteger(Number(objectId)) || Number(objectId) <= 0)) {
-      throw new Error("Puzzle3 resolved render scene contains an invalid focus cell.");
-    }
-  }
-  return resolvedScene;
-}
-
-function requireSpatialAffine(value) {
-  if (!Array.isArray(value)
-      || value.length !== 4
-      || value.some((row) => !Array.isArray(row)
-        || row.length !== 4
-        || row.some((entry) => typeof entry !== "number" || !Number.isFinite(entry)))) {
-    throw new Error("Puzzle3 resolved batch is missing its affine transform.");
-  }
-  return value;
-}
-
-function buildPuzzleStudioThreeFrame(snapshot, resolvedScene, resolvedFrame, view = {}) {
+function buildPuzzleStudioThreeFrame(snapshot, view = {}) {
   const size = normalizeSize(snapshot.size);
-  const cells = resolvedScene.cells.map((cell) => ({
-    position: normalizeResolvedPosition(cell.position),
-    objectIds: cell.objectIds.map(Number),
+  const objectCatalog = buildObjectCatalog(snapshot);
+  const visuals = snapshot.visuals || {};
+  const visualCache = new Map();
+  const animationEvents = Array.isArray(snapshot.animationEvents) ? snapshot.animationEvents : [];
+  const cells = (snapshot.cells || []).map((cell) => ({
+    position: normalizePosition(cell.position),
+    objects: (cell.objects || [])
+      .map((object) => resolveObject(object, objectCatalog, visuals, visualCache))
+      .filter(Boolean),
   }));
   const frame = {
     size,
     cells,
-    resolvedVoxels: resolvedFrame.batches.flatMap((batch, index) => (
-      resolvedBatchVoxels(size, batch, index)
-    )),
-    objectCount: resolvedFrame.batches.length,
+    objectCatalog,
+    visuals,
+    visualCache,
+    objectCount: cells.reduce((count, cell) => count + cell.objects.length, 0),
     camera: snapshot.render.camera,
     editorView: view.editorView || snapshot.view || {},
     settings: snapshot.render,
+    order: snapshot.order,
+    animationEvents,
+    animationEventIndex: indexTweenAnimationEvents(animationEvents),
+    animationProgress: Number.isFinite(Number(view.animationProgress)) ? Number(view.animationProgress) : 1,
     viewport: normalizeViewport(snapshot.render.viewport),
     viewportSnapNext: view.viewportSnapNext === true,
   };
   frame.focusCell = frame.viewport ? viewportFocusCell(frame) : null;
   frame.viewportRanges = viewportRanges(frame);
+  frame.renderCells = cells;
   return frame;
+}
+
+function updatePuzzleStudioThreeFrame(frame, snapshot, view, animationProgress) {
+  frame.camera = snapshot.render.camera;
+  frame.editorView = view.editorView || snapshot.view || {};
+  frame.settings = snapshot.render;
+  const animationEvents = Array.isArray(snapshot.animationEvents) ? snapshot.animationEvents : [];
+  if (animationEvents !== frame.animationEvents) {
+    frame.animationEvents = animationEvents;
+    frame.animationEventIndex = indexTweenAnimationEvents(animationEvents);
+  }
+  frame.animationProgress = animationProgress;
+  frame.viewport = normalizeViewport(snapshot.render.viewport);
+  frame.viewportSnapNext = view.viewportSnapNext === true;
+  frame.focusCell = frame.viewport ? viewportFocusCell(frame) : null;
+  frame.viewportRanges = viewportRanges(frame);
+  frame.renderCells = frame.cells;
+  return frame;
+}
+
+function threeAnimationState(snapshot) {
+  const events = tweenAnimationEvents(snapshot);
+  const tween = snapshot.render.animation.tween;
+  if (events.length && tween.enabled !== true) {
+    throw new Error("Puzzle3 received Tween animation events while tween is disabled.");
+  }
+  const durationMs = Number(tween.intervalMs);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    throw new Error("Puzzle3 Tween duration must be a positive number of milliseconds.");
+  }
+  const batchId = Number(snapshot.animationBatchId);
+  if (events.length && (!Number.isInteger(batchId) || batchId <= 0)) {
+    throw new Error("Puzzle3 Tween animation events require a positive animationBatchId.");
+  }
+  return {
+    events,
+    durationMs,
+    key: events.length ? `batch:${batchId}` : "idle",
+    progress: 1,
+  };
+}
+
+function tweenAnimationEvents(snapshot) {
+  return (Array.isArray(snapshot?.animationEvents) ? snapshot.animationEvents : [])
+    .filter((event) => event?.kind === "move" && event?.name === "tween");
 }
 
 function normalizeSize(size) {
@@ -296,166 +314,144 @@ function normalizePosition(position) {
   };
 }
 
-function normalizeResolvedPosition(position) {
-  return {
-    x: Number(position[0]) || 0,
-    y: Number(position[1]) || 0,
-    z: Number(position[2]) || 0,
-  };
-}
-
-function resolvedBatchVoxels(frameSize, batch, batchIndex) {
-  const content = batch.content;
-  const size = {
-    width: requirePositiveInteger(content.width, "resolved voxel width"),
-    depth: requirePositiveInteger(content.depth, "resolved voxel depth"),
-    height: requirePositiveInteger(content.height, "resolved voxel height"),
-  };
-  const cell = requireResolvedCell(batch.cell);
-  const spatialAffine = requireSpatialAffine(batch.transform);
-  const opacity = requireUnitValue(batch.opacity, "resolved batch opacity");
-  const objectIds = Array.isArray(batch.objectIds)
-    ? batch.objectIds.map(Number).filter(Number.isFinite)
-    : [];
-  const step = 1 / Math.max(size.width, size.depth, size.height);
-  const base = renderPositionForCell({ size: frameSize }, cell);
-  const sourceKey = `batch:${batchIndex}`;
-  const mirrored = affineDeterminant3(spatialAffine) < 0;
-  return content.voxels.map((voxel, voxelIndex) => {
-    const position = requireResolvedVoxelPosition(voxel.position, voxelIndex);
-    const color = resolvedLinearColor(voxel.color, opacity);
-    const visualLocalPosition = {
-      x: (position[0] + 0.5 - size.width / 2) * step,
-      y: (position[1] + 0.5 - size.depth / 2) * step,
-      z: (position[2] + 0.5 - size.height / 2) * step,
-    };
-    const visualLocalGrid = Puzzle3VisualCore.spatialGridPoint(visualLocalPosition, step);
-    const renderLocalPosition = visualPointToRenderPoint(visualLocalPosition);
-    const localBounds = voxelBounds(renderLocalPosition, step);
-    const renderPosition = transformRenderLocalPoint(renderLocalPosition, spatialAffine, base);
-    return {
-      fill: formatColor(color),
-      color,
-      opaque: color.a >= 0.999,
-      scale: step,
-      grid: { x: visualLocalGrid.x, y: -visualLocalGrid.z, z: visualLocalGrid.y },
-      localPosition: renderLocalPosition,
-      localBounds,
-      spatialAffine,
-      renderBase: base,
-      mirrored,
-      position: renderPosition,
-      stackPosition: renderPosition,
-      bounds: transformedVoxelBounds(renderPosition, step, spatialAffine),
-      sourceKey,
-      sourceKeys: [sourceKey],
-      objectOrder: batchIndex,
-      objectIds,
-    };
-  });
-}
-
-function requirePositiveInteger(value, label) {
-  const number = Number(value);
-  if (!Number.isInteger(number) || number <= 0) {
-    throw new Error(`Puzzle3 ${label} must be a positive integer.`);
-  }
-  return number;
-}
-
-function requireResolvedCell(value) {
-  if (!Array.isArray(value) || value.length !== 3
-      || value.some((entry) => !Number.isInteger(Number(entry)))) {
-    throw new Error("Puzzle3 resolved batch cell must contain three integers.");
-  }
-  return { x: Number(value[0]), y: Number(value[1]), z: Number(value[2]) };
-}
-
-function requireResolvedVoxelPosition(value, index) {
-  if (!Array.isArray(value) || value.length !== 3
-      || value.some((entry) => !Number.isInteger(Number(entry)))) {
-    throw new Error(`Puzzle3 resolved voxel ${index} position must contain three integers.`);
-  }
-  return value.map(Number);
-}
-
-function requireUnitValue(value, label) {
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0 || number > 1) {
-    throw new Error(`Puzzle3 ${label} must be between zero and one.`);
-  }
-  return number;
-}
-
-function resolvedLinearColor(value, opacity) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Puzzle3 resolved voxel is missing its linear RGBA color.");
-  }
-  const red = requireUnitValue(value.red, "linear red");
-  const green = requireUnitValue(value.green, "linear green");
-  const blue = requireUnitValue(value.blue, "linear blue");
-  const alpha = requireUnitValue(value.alpha, "linear alpha") * opacity;
-  return {
-    r: linearSrgbByte(red),
-    g: linearSrgbByte(green),
-    b: linearSrgbByte(blue),
-    a: alpha,
-  };
-}
-
-function linearSrgbByte(value) {
-  const srgb = value <= 0.0031308
-    ? 12.92 * value
-    : 1.055 * (value ** (1 / 2.4)) - 0.055;
-  return Math.round(Math.max(0, Math.min(1, srgb)) * 255);
-}
-
 function normalizeViewport(raw) {
-  if (raw === null || raw === undefined) {
+  if (!raw || raw === true || raw === false) {
     return null;
   }
-  if (typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error("Puzzle3 viewport must be a typed object.");
+  const framing = raw.framingBox || raw.framing || {};
+  const width = Number(framing.width);
+  const depth = Number(framing.depth);
+  if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(depth) || depth <= 0) {
+    return null;
   }
-  const framing = raw.framingBox;
-  if (!framing || typeof framing !== "object" || Array.isArray(framing)) {
-    throw new Error("Puzzle3 viewport is missing its framing box.");
-  }
-  const width = requirePositiveInteger(framing.width, "viewport framing width");
-  const depth = requirePositiveInteger(framing.depth, "viewport framing depth");
-  const mode = String(raw.mode);
-  if (!["full", "centered", "paged"].includes(mode)) {
-    throw new Error(`Puzzle3 viewport mode is invalid: ${mode}`);
-  }
-  const follow = String(raw.follow);
-  if (!["snap", "smooth"].includes(follow)) {
-    throw new Error(`Puzzle3 viewport follow mode is invalid: ${follow}`);
-  }
-  if (!Array.isArray(raw.focusObjects)) {
-    throw new Error("Puzzle3 viewport is missing typed focus object IDs.");
-  }
-  const focusObjects = raw.focusObjects.map((objectId) => {
-    const id = Number(objectId);
-    if (!Number.isInteger(id) || id <= 0) {
-      throw new Error("Puzzle3 viewport contains an invalid focus object ID.");
-    }
-    return id;
-  });
-  if (mode !== "full" && focusObjects.length === 0) {
-    throw new Error("Puzzle3 focused viewport requires at least one focus object ID.");
-  }
+  const mode = String(raw.mode || "centered");
   return {
     mode,
-    follow,
-    focusObjects,
+    follow: String(raw.follow || "snap"),
+    focus: String(raw.focus || "Player"),
+    focusObjects: Array.isArray(raw.focusObjects)
+      ? raw.focusObjects.map((objectId) => Number(objectId)).filter((objectId) => Number.isFinite(objectId) && objectId > 0)
+      : [],
     framingBox: {
       width,
       depth,
-      height: framing.height === "full"
+      height: framing.height === "full" || framing.height === undefined
         ? "full"
-        : requirePositiveInteger(framing.height, "viewport framing height"),
+        : Math.max(1, Number(framing.height) || 1),
     },
   };
+}
+
+function buildObjectCatalog(snapshot) {
+  const catalog = new Map();
+  for (const object of Object.values(snapshot.objects || {})) {
+    const id = Number(object?.id);
+    if (Number.isFinite(id)) {
+      catalog.set(id, { ...object, id });
+    }
+  }
+  for (const cell of snapshot.cells || []) {
+    for (const object of cell.objects || []) {
+      const id = Number(object?.id);
+      if (Number.isFinite(id) && !catalog.has(id)) {
+        catalog.set(id, { ...object, id });
+      }
+    }
+  }
+  return catalog;
+}
+
+function resolveObject(object, catalog, visuals, visualCache = null) {
+  const id = Number(object?.id);
+  const base = Number.isFinite(id) ? catalog.get(id) || {} : {};
+  const merged = { ...base, ...object, id: Number.isFinite(id) ? id : base.id };
+  const visualName = merged.visual || merged.name;
+  const name = merged.name || visualName || (Number.isFinite(Number(merged.id)) ? `object_${merged.id}` : "");
+  let resolvedVisual = visualCache?.get(visualName);
+  if (!resolvedVisual && !visualCache?.has(visualName)) {
+    resolvedVisual = visual(visuals[visualName]);
+    visualCache?.set(visualName, resolvedVisual);
+  }
+  if ((!Number.isFinite(Number(merged.id)) && !name && !visualName) || !resolvedVisual) {
+    return null;
+  }
+  return {
+    id: Number.isFinite(Number(merged.id)) ? Number(merged.id) : name,
+    name,
+    visual: visualName,
+    layer: Number(merged.layer ?? base.layer ?? 0) || 0,
+    visual: resolvedVisual,
+  };
+}
+
+function visual(visual) {
+  if (!visual) {
+    return null;
+  }
+  const spatialAffine = Puzzle3VisualCore.evaluateSpatialVisualAffine(visual.spatialOps);
+  const palette = visual.palette || {};
+  const blocks = currentVisualLayers(visual);
+  const height = Math.max(1, blocks.length);
+  const depth = Math.max(1, Math.max(...blocks.map((rows) => rows.length), 1));
+  const width = Math.max(1, Math.max(...blocks.flat().map((row) => String(row).length), 1));
+  const voxels = [];
+  for (let slice = 0; slice < blocks.length; slice += 1) {
+    const rows = blocks[slice] || [];
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = String(rows[rowIndex] || "");
+      for (let x = 0; x < row.length; x += 1) {
+        const token = row[x];
+        const fill = palette[token];
+        const color = parseColor(fill);
+        if (!fill || fill === "transparent" || token === "." || token === " " || color?.a <= 0) {
+          continue;
+        }
+        voxels.push({
+          x,
+          y: Math.max(0, depth - 1 - rowIndex),
+          z: Math.max(0, height - 1 - slice),
+          fill,
+          color,
+          opaque: !color || color.a >= 0.999,
+        });
+      }
+    }
+  }
+  if (!voxels.length) {
+    return null;
+  }
+  return {
+    kind: "voxels",
+    size: { width, depth, height },
+    spatialOps: visual.spatialOps,
+    spatialAffine,
+    voxels,
+  };
+}
+
+function currentVisualLayers(visual, now = performance.now()) {
+  const frames = Array.isArray(visual?.frames) ? visual.frames : [];
+  if (!frames.length) {
+    throw new Error("Puzzle3 visual frames are missing.");
+  }
+  const frameDuration = Number(visual.frameDurationMs)
+    || (Number(visual.durationMs) > 0 ? Number(visual.durationMs) / frames.length : 0);
+  const index = frames.length > 1 && frameDuration > 0
+    ? Math.floor(now / frameDuration) % frames.length
+    : 0;
+  const layers = frames[index]?.layers;
+  if (!Array.isArray(layers) || !layers.length || layers.some((layer) => !Array.isArray(layer) || !layer.length)) {
+    throw new Error("Puzzle3 visual frame layers are missing or invalid.");
+  }
+  return layers;
+}
+
+function hasLoopingVisualAnimation(snapshot) {
+  return Object.values(snapshot?.visuals || {}).some((visual) => (
+    Array.isArray(visual?.frames)
+    && visual.frames.length > 1
+    && (Number(visual.frameDurationMs) > 0 || Number(visual.durationMs) > 0)
+  ));
 }
 
 function shadowSettings(frame) {
@@ -466,7 +462,6 @@ function shadowSettings(frame) {
   return { enabled: raw };
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 function lightingSettings(THREE, frame) {
   const raw = frame.settings?.lighting;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -500,32 +495,6 @@ function lightingSettings(THREE, frame) {
   };
 }
 
-=======
-function pixelateSettings(frame) {
-  const raw = frame.settings?.pixelate;
-  if (!raw) {
-    return { enabled: false, scale: 1, smoothing: true };
-  }
-  if (raw === true) {
-    return { enabled: true, scale: 4, smoothing: true };
-  }
-  const scale = Math.max(1, Math.trunc(Number(raw.scale ?? raw.size ?? 4) || 4));
-  return {
-    enabled: raw.enabled !== false && scale > 1,
-    scale,
-    smoothing: raw.smoothing !== false,
-  };
-}
-
-function visualShadeEnabled(frame) {
-  const raw = frame.settings?.visual;
-  if (raw === false) {
-    return false;
-  }
-  return !raw || raw === true || raw.shade !== false;
-}
-
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 function addLights(THREE, scene, frame, voxels, shadow) {
   const bounds = shadowFrameBounds(frame, voxels);
   const center = boundsCenter(bounds);
@@ -656,7 +625,7 @@ function addGrid(THREE, scene, frame) {
   scene.add(new THREE.LineSegments(geometry, material));
 }
 
-function addMeshes(THREE, scene, visible, shadow, materialCache, shade) {
+function addMeshes(THREE, scene, visible, shadow, materialCache) {
   const { voxels, occupied } = visible;
   const faces = mergedVoxelFaces(voxels, occupied);
   const opaqueGroups = new Map();
@@ -668,7 +637,7 @@ function addMeshes(THREE, scene, visible, shadow, materialCache, shade) {
     }
     if (alpha < 0.999) {
       const geometry = faceBufferGeometry(THREE, [face]);
-      const material = faceMaterial(THREE, face.fill, materialCache, shade);
+      const material = faceMaterial(THREE, face.fill, materialCache);
       const mesh = new THREE.Mesh(geometry, material);
       mesh.renderOrder = 100 + Number(face.objectOrder || 0);
       mesh.castShadow = false;
@@ -676,7 +645,7 @@ function addMeshes(THREE, scene, visible, shadow, materialCache, shade) {
       scene.add(mesh);
       continue;
     }
-    const key = faceMaterialKey(face.fill, shade);
+    const key = faceMaterialKey(face.fill);
     if (!opaqueGroups.has(key)) {
       opaqueGroups.set(key, []);
     }
@@ -684,7 +653,7 @@ function addMeshes(THREE, scene, visible, shadow, materialCache, shade) {
   }
   for (const [key, groupFaces] of opaqueGroups) {
     const geometry = faceBufferGeometry(THREE, groupFaces);
-    const material = faceMaterial(THREE, groupFaces[0].fill, materialCache, shade);
+    const material = faceMaterial(THREE, groupFaces[0].fill, materialCache);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = shadow.enabled;
     mesh.receiveShadow = shadow.enabled;
@@ -712,18 +681,156 @@ function addShadowCatcher(THREE, scene, frame, shadow) {
   scene.add(catcher);
 }
 
+function applyProjectedRenderCulling(THREE, frame, camera, canvas) {
+  if (!projectedRenderCullingEnabled(frame)) {
+    frame.renderCells = frame.cells;
+    return;
+  }
+  camera.updateProjectionMatrix?.();
+  camera.updateMatrixWorld?.();
+  const width = Math.max(1, Number(canvas.clientWidth) || Number(canvas.width) || 1);
+  const height = Math.max(1, Number(canvas.clientHeight) || Number(canvas.height) || 1);
+  const marginPixels = Math.max(24, Math.min(width, height) * 0.08);
+  const marginX = (marginPixels / width) * 2;
+  const marginY = (marginPixels / height) * 2;
+  const extent = conservativeCellRenderExtent(frame);
+  const boundsCache = frame.cellRenderBoundsCache || new Map();
+  frame.cellRenderBoundsCache = boundsCache;
+  frame.renderCells = frame.cells.filter((cell) => {
+    const key = cellKey(cell.position);
+    const animated = cellHasTweenAnimation(frame, cell);
+    let bounds = animated ? null : boundsCache.get(key);
+    if (!bounds) {
+      bounds = cellCoordinateRenderBounds(frame, cell, extent);
+      if (!animated) {
+        boundsCache.set(key, bounds);
+      }
+    }
+    const projected = projectedRenderBounds(THREE, bounds, camera);
+    return projected
+      && projected.maxX >= -1 - marginX
+      && projected.minX <= 1 + marginX
+      && projected.maxY >= -1 - marginY
+      && projected.minY <= 1 + marginY
+      && projected.maxZ >= -1
+      && projected.minZ <= 1;
+  });
+}
+
+function projectedRenderCullingEnabled(frame) {
+  return Boolean(frame.viewportRanges && frame.focusCell);
+}
+
+function cellCoordinateRenderBounds(frame, cell, extent = conservativeCellRenderExtent(frame)) {
+  const positions = [cell.position || {}];
+  for (const object of cell.objects || []) {
+    const animation = animationForObjectAtPosition(frame, object, cell.position || {});
+    if (animation) {
+      positions.push(animation.from);
+    }
+  }
+  const bases = positions.map((position) => renderPositionForCell(frame, position));
+  return {
+    minX: Math.min(...bases.map((base) => base.x)) - extent.x,
+    maxX: Math.max(...bases.map((base) => base.x)) + extent.x,
+    minY: Math.min(...bases.map((base) => base.y)) - extent.yBelow,
+    maxY: Math.max(...bases.map((base) => base.y)) + extent.yAbove,
+    minZ: Math.min(...bases.map((base) => base.z)) - extent.z,
+    maxZ: Math.max(...bases.map((base) => base.z)) + extent.z,
+  };
+}
+
+function conservativeCellRenderExtent(frame) {
+  return {
+    x: 0.65,
+    yBelow: 0.65,
+    yAbove: 0.65,
+    z: 0.65,
+  };
+}
+
+function emptyProjectedBounds() {
+  return {
+    minX: Infinity,
+    maxX: -Infinity,
+    minY: Infinity,
+    maxY: -Infinity,
+    minZ: Infinity,
+    maxZ: -Infinity,
+  };
+}
+
+function projectedRenderBounds(THREE, bounds, camera) {
+  const projected = emptyProjectedBounds();
+  const point = new THREE.Vector3();
+  for (const x of [bounds.minX, bounds.maxX]) {
+    for (const y of [bounds.minY, bounds.maxY]) {
+      for (const z of [bounds.minZ, bounds.maxZ]) {
+        point.set(x, y, z).project(camera);
+        if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) {
+          continue;
+        }
+        projected.minX = Math.min(projected.minX, point.x);
+        projected.maxX = Math.max(projected.maxX, point.x);
+        projected.minY = Math.min(projected.minY, point.y);
+        projected.maxY = Math.max(projected.maxY, point.y);
+        projected.minZ = Math.min(projected.minZ, point.z);
+        projected.maxZ = Math.max(projected.maxZ, point.z);
+      }
+    }
+  }
+  return Number.isFinite(projected.minX) ? projected : null;
+}
+
 function frameVisibleVoxels(frame) {
+  const voxels = [];
+  const occupied = emptyVoxelOccupancy();
+  const staticCellCache = frame.staticCellVisibilityCache || new Map();
+  frame.staticCellVisibilityCache = staticCellCache;
+  for (const cell of frame.renderCells || frame.cells) {
+    const key = cellKey(cell.position);
+    const animated = cellHasTweenAnimation(frame, cell);
+    let visible = animated ? null : staticCellCache.get(key);
+    if (!visible) {
+      visible = cellVisibleVoxels(frame, cell);
+      if (!animated) {
+        staticCellCache.set(key, visible);
+      }
+    }
+    voxels.push(...visible.voxels);
+    for (const key of visible.occupied.opaque) {
+      occupied.opaque.add(key);
+    }
+    for (const key of visible.occupied.bySource) {
+      occupied.bySource.add(key);
+    }
+  }
+  return { voxels, occupied };
+}
+
+function cellHasTweenAnimation(frame, cell) {
+  return (cell.objects || []).some((object) => (
+    Boolean(animationForObjectAtPosition(frame, object, cell.position || {}))
+  ));
+}
+
+function cellVisibleVoxels(frame, cell) {
   const stacks = new Map();
-  for (const voxel of frame.resolvedVoxels) {
-    const key = voxelGeometryKeyAt(voxel.stackPosition, voxel.scale);
-    const stack = stacks.get(key) || [];
-    stack.push(voxel);
-    stacks.set(key, stack);
+  for (const [objectIndex, object] of (cell.objects || []).entries()) {
+    const sourceKey = `${cellKey(cell.position)}:${objectIndex}`;
+    const priority = Puzzle3VisualCore.objectPriority(visualOrder(frame), object, objectIndex);
+    const objectOrder = (cellRenderIndex(frame, cell.position) * visualOrder(frame).priorities.length) + priority;
+    for (const voxel of objectVoxels(frame, cell.position, object, sourceKey, objectOrder)) {
+      const key = voxelGeometryKeyAt(voxel.stackPosition, voxel.scale);
+      const stack = stacks.get(key) || [];
+      stack.push(voxel);
+      stacks.set(key, stack);
+    }
   }
   const voxels = [];
   const occupied = emptyVoxelOccupancy();
   for (const stack of stacks.values()) {
-    const visibleStack = visibleResolvedVoxelStack(stack);
+    const visibleStack = visibleVoxelStack(stack);
     voxels.push(...visibleStack);
     for (const voxel of visibleStack) {
       const key = voxelGeometryKey(voxel);
@@ -745,18 +852,205 @@ function emptyVoxelOccupancy() {
   };
 }
 
-function visibleResolvedVoxelStack(stack) {
+function visibleVoxelStack(stack) {
   const visible = [];
-  for (const voxel of [...stack].sort((left, right) => left.objectOrder - right.objectOrder)) {
-    if (voxel.color?.a <= 0) {
+  const ordered = [...stack].sort((left, right) => objectVoxelOrder(left) - objectVoxelOrder(right));
+  const priorities = [];
+  for (const voxel of ordered) {
+    const order = objectVoxelOrder(voxel);
+    const group = priorities.at(-1);
+    if (group && group.order === order) {
+      group.voxels.push(voxel);
+    } else {
+      priorities.push({ order, voxels: [voxel] });
+    }
+  }
+  for (const group of priorities) {
+    const order = frameOrder(stack);
+    const priority = group.order % Math.max(1, order?.priorities?.length || 1);
+    const voxel = Puzzle3VisualCore.priorityDefinition(order, priority).merge
+      ? Puzzle3VisualCore.averageMergedVoxels(group.voxels, parseColor, formatColor)
+      : group.voxels[0];
+    const source = voxel.color || parseColor(voxel.fill);
+    if (source?.a <= 0) {
       continue;
     }
-    if (voxel.opaque) {
+    const renderVoxel = {
+      ...voxel,
+      color: source || null,
+      opaque: !source || source.a >= 0.999,
+      fill: source ? formatColor(source) : voxel.fill,
+      sourceKeys: voxel.sourceKey ? [voxel.sourceKey] : [],
+    };
+    if (renderVoxel.opaque) {
       visible.length = 0;
     }
-    visible.push(voxel);
+    visible.push(renderVoxel);
   }
   return visible;
+}
+
+function visualOrder(frame) {
+  const order = frame?.order;
+  if (!order || !Array.isArray(order.direction_priority) || !Array.isArray(order.priorities)) {
+    throw new Error("compiled visual order contract is missing");
+  }
+  return order;
+}
+
+function cellRenderIndex(frame, position) {
+  const spans = {
+    x: Math.max(1, Number(frame?.size?.width) || 1),
+    y: Math.max(1, Number(frame?.size?.depth) || 1),
+    z: Math.max(1, Number(frame?.size?.height) || 1),
+  };
+  let index = 0;
+  for (const direction of visualOrder(frame).direction_priority) {
+    let value;
+    let span;
+    switch (direction) {
+      case "right": value = Number(position.x) || 0; span = spans.x; break;
+      case "left": value = spans.x - 1 - (Number(position.x) || 0); span = spans.x; break;
+      case "front": value = Number(position.y) || 0; span = spans.y; break;
+      case "back": value = spans.y - 1 - (Number(position.y) || 0); span = spans.y; break;
+      case "up": value = Number(position.z) || 0; span = spans.z; break;
+      case "down": value = spans.z - 1 - (Number(position.z) || 0); span = spans.z; break;
+      default: throw new Error(`invalid 3D visual order direction: ${direction}`);
+    }
+    index = (index * span) + value;
+  }
+  return index;
+}
+
+function frameOrder(stack) {
+  return stack[0]?.frameOrder;
+}
+
+function objectVoxelOrder(voxel) {
+  const order = Number(voxel?.objectOrder);
+  return Number.isFinite(order) ? order : 0;
+}
+
+function objectVoxels(frame, position, object, sourceKey, objectOrder = 0) {
+  if (object.visual?.kind === "voxels") {
+    return voxelInstances(frame, position, object, sourceKey, objectOrder);
+  }
+  return [];
+}
+
+function voxelInstances(frame, position, object, sourceKey, objectOrder = 0) {
+  const visual = object.visual;
+  const size = visual.size;
+  const step = 1 / Math.max(size.width, size.height, size.depth, 1);
+  const base = renderPositionForCell(frame, position);
+  const animation = animationForObjectAtPosition(frame, object, position);
+  const offset = animationOffset3(frame, animation);
+  const spatialAffine = animationSpatialAffine(frame, object, animation);
+  const mirrored = affineDeterminant3(spatialAffine) < 0;
+  base.x += offset.x;
+  base.y += offset.y;
+  base.z += offset.z;
+  return visual.voxels.map((voxel) => {
+    const visualLocalPosition = visualVoxelLocalPosition(voxel, size, step);
+    const visualLocalGrid = Puzzle3VisualCore.spatialGridPoint(visualLocalPosition, step);
+    const renderLocalPosition = visualPointToRenderPoint(visualLocalPosition);
+    const localBounds = voxelBounds(renderLocalPosition, step);
+    const renderPosition = transformRenderLocalPoint(renderLocalPosition, spatialAffine, base);
+    return {
+      fill: voxel.fill,
+      color: voxel.color,
+      opaque: voxel.opaque,
+      scale: step,
+      grid: { x: visualLocalGrid.x, y: visualLocalGrid.z, z: -visualLocalGrid.y },
+      localPosition: renderLocalPosition,
+      localBounds,
+      spatialAffine,
+      renderBase: base,
+      mirrored,
+      position: renderPosition,
+      stackPosition: renderPosition,
+      bounds: transformedVoxelBounds(renderPosition, step, spatialAffine),
+      sourceKey,
+      objectOrder,
+      frameOrder: frame.order,
+    };
+  });
+}
+
+function animationForObjectAtPosition(frame, object, position) {
+  const objectId = Number(object?.id);
+  if (!Number.isFinite(objectId)) {
+    return null;
+  }
+  return frame.animationEventIndex?.get(tweenAnimationEventKey(objectId, position)) || null;
+}
+
+function indexTweenAnimationEvents(events) {
+  if (!window.PuzzleVisualTweenCore) {
+    throw new Error("Visual tween core is unavailable.");
+  }
+  const index = new Map();
+  for (const event of window.PuzzleVisualTweenCore.resolveAnimationChannels(events || [])) {
+    if (event?.kind !== "move" || event?.name !== "tween") {
+      continue;
+    }
+    const objectId = Number(event.objectId);
+    if (!Number.isFinite(objectId)) {
+      throw new Error("Puzzle3 Tween animation event objectId must be finite.");
+    }
+    const key = tweenAnimationEventKey(objectId, event.to);
+    if (index.has(key)) {
+      throw new Error(`Puzzle3 Tween animation event target is duplicated: ${key}`);
+    }
+    index.set(key, event);
+  }
+  return index;
+}
+
+function tweenAnimationEventKey(objectId, position) {
+  return `${Number(objectId)}@${Number(position?.x)},${Number(position?.y)},${Number(position?.z)}`;
+}
+
+function animationSpatialAffine(frame, object, animation) {
+  if (!animation?.visualTween) {
+    return object.visual.spatialAffine;
+  }
+  if (!window.PuzzleVisualTweenCore) {
+    throw new Error("Visual tween core is unavailable.");
+  }
+  const state = window.PuzzleVisualTweenCore.interpolate(
+    animation.visualTween,
+    frame.animationProgress,
+  );
+  const operations = state.transforms.map((transform) => {
+    if (transform.kind === "rotate") {
+      return { ...transform, kind: "rotate3" };
+    }
+    if (transform.kind === "translate") {
+      return { ...transform, kind: "translate3" };
+    }
+    if (transform.kind === "scale") {
+      return { ...transform, kind: "scale3" };
+    }
+    if (transform.kind === "flip") {
+      return { ...transform, kind: "flip3" };
+    }
+    throw new Error(`Unknown Puzzle3 visual tween transform: ${String(transform.kind)}`);
+  });
+  return Puzzle3VisualCore.evaluateSpatialVisualAffine(operations);
+}
+
+function animationOffset3(frame, animation) {
+  if (!animation) {
+    return { x: 0, y: 0, z: 0 };
+  }
+  const progress = Math.min(1, Math.max(0, Number(frame.animationProgress) || 0));
+  const remaining = 1 - progress;
+  return {
+    x: (Number(animation.from?.x) - Number(animation.to?.x)) * remaining,
+    y: (Number(animation.from?.z) - Number(animation.to?.z)) * remaining,
+    z: -(Number(animation.from?.y) - Number(animation.to?.y)) * remaining,
+  };
 }
 
 function mergedVoxelFaces(voxels, occupied) {
@@ -1018,18 +1312,14 @@ function faceNormal(corners, mirrored = false) {
   };
 }
 
-function faceMaterial(THREE, fill, cache, shade) {
-  const key = faceMaterialKey(fill, shade);
+function faceMaterial(THREE, fill, cache) {
+  const key = faceMaterialKey(fill);
   if (cache.has(key)) {
     return cache.get(key);
   }
   const color = parseColor(fill);
   const alpha = color ? color.a : 1;
-  const Material = shade ? THREE.MeshLambertMaterial : THREE.MeshBasicMaterial;
-  if (!Material) {
-    throw new Error(`Three.js ${shade ? "MeshLambertMaterial" : "MeshBasicMaterial"} is required.`);
-  }
-  const material = new Material({
+  const material = new THREE.MeshLambertMaterial({
     color: color ? formatRgbColor(color) : fill,
     transparent: alpha < 0.999,
     opacity: Math.max(0, Math.min(1, alpha)),
@@ -1039,18 +1329,25 @@ function faceMaterial(THREE, fill, cache, shade) {
   return material;
 }
 
-function faceMaterialKey(fill, shade = true) {
+function faceMaterialKey(fill) {
   const color = parseColor(fill);
-  const value = color ? `${formatRgbColor(color)}:${Math.max(0, Math.min(1, color.a))}` : `${fill}:1`;
-  return `${shade ? "lit" : "flat"}:${value}`;
+  return color ? `${formatRgbColor(color)}:${Math.max(0, Math.min(1, color.a))}` : `${fill}:1`;
+}
+
+function visualVoxelLocalPosition(voxel, size, step) {
+  return {
+    x: (voxel.x + 0.5 - size.width / 2) * step,
+    y: (voxel.y + 0.5 - size.depth / 2) * step,
+    z: (voxel.z + 0.5 - size.height / 2) * step,
+  };
 }
 
 function visualPointToRenderPoint(point) {
-  return { x: point.x, y: -point.z, z: point.y };
+  return { x: point.x, y: point.z, z: -point.y };
 }
 
 function renderPointToVisualPoint(point) {
-  return { x: point.x, y: point.z, z: -point.y };
+  return { x: point.x, y: -point.z, z: point.y };
 }
 
 function transformRenderLocalPoint(point, spatialAffine, base) {
@@ -1133,6 +1430,10 @@ function quantizeGeometryValue(value) {
   return String(Math.round(Number(value) * 1000000) / 1000000);
 }
 
+function cellKey(position) {
+  return `${Number(position?.x) || 0},${Number(position?.y) || 0},${Number(position?.z) || 0}`;
+}
+
 function parseColor(fill) {
   if (typeof fill !== "string") {
     return null;
@@ -1196,8 +1497,8 @@ function clampColorChannel(value) {
 function renderPositionForCell(frame, position) {
   return {
     x: position.x - (frame.size.width - 1) / 2,
-    y: (frame.size.height - 1) / 2 - position.z,
-    z: position.y - (frame.size.depth - 1) / 2,
+    y: position.z - (frame.size.height - 1) / 2,
+    z: (frame.size.depth - 1) / 2 - position.y,
   };
 }
 
@@ -1207,11 +1508,18 @@ function viewportFocusCell(frame) {
     return null;
   }
   const focusObjects = new Set(viewport.focusObjects || []);
-  return frame.cells.find((cell) => viewportObjectMatches(cell, focusObjects)) || null;
+  return frame.cells.find((cell) => (
+    cell.objects || []
+  ).some((object) => viewportObjectMatches(object, viewport, focusObjects))) || null;
 }
 
-function viewportObjectMatches(cell, focusObjects) {
-  return cell.objectIds.some((objectId) => focusObjects.has(objectId));
+function viewportObjectMatches(object, viewport, focusObjects) {
+  const objectId = Number(object.id || 0);
+  return (
+    (focusObjects.size > 0 && focusObjects.has(objectId))
+    || object.name === viewport.focus
+    || object.visual === viewport.focus
+  );
 }
 
 function viewportRanges(frame) {
@@ -1243,7 +1551,7 @@ function rangeForViewportAxis(center, span, mode) {
   };
 }
 
-function buildCamera(THREE, frame, canvas, currentCamera = null) {
+function buildCamera(THREE, frame, canvas) {
   const width = canvas.clientWidth || canvas.width || 1;
   const height = canvas.clientHeight || canvas.height || 1;
   const aspect = width / Math.max(1, height);
@@ -1256,23 +1564,9 @@ function buildCamera(THREE, frame, canvas, currentCamera = null) {
   const projection = cameraSettings.projection;
   const near = 0.1;
   const far = Math.max(1000, distance * 4);
-  const orthographic = projection === "orthographic";
-  const camera = orthographic
-    ? updateOrthographicCamera(
-        currentCamera?.isOrthographicCamera ? currentCamera : null,
-        THREE,
-        aspect,
-        view.visibleHeight,
-        near,
-        far,
-      )
-    : updatePerspectiveCamera(
-        currentCamera?.isPerspectiveCamera ? currentCamera : null,
-        THREE,
-        aspect,
-        near,
-        far,
-      );
+  const camera = projection === "orthographic"
+    ? buildOrthographicCamera(THREE, aspect, view.visibleHeight, near, far)
+    : new THREE.PerspectiveCamera(34, aspect, near, far);
   camera.up.set(cameraFrame.up.x, cameraFrame.up.y, cameraFrame.up.z);
   camera.position.set(
     targetPoint.x - cameraFrame.forward.x * distance,
@@ -1283,36 +1577,12 @@ function buildCamera(THREE, frame, canvas, currentCamera = null) {
   return camera;
 }
 
-function updatePerspectiveCamera(camera, THREE, aspect, near, far) {
-  const next = camera || new THREE.PerspectiveCamera(34, aspect, near, far);
-  next.fov = 34;
-  next.aspect = aspect;
-  next.near = near;
-  next.far = far;
-  next.updateProjectionMatrix?.();
-  return next;
-}
-
-function updateOrthographicCamera(camera, THREE, aspect, visibleHeight, near, far) {
-  const height = Math.max(1, Number(visibleHeight) || 1);
-  const width = height * Math.max(0.01, aspect);
-  const next = camera || buildOrthographicCamera(THREE, aspect, visibleHeight, near, far);
-  next.left = -width / 2;
-  next.right = width / 2;
-  next.top = height / 2;
-  next.bottom = -height / 2;
-  next.near = near;
-  next.far = far;
-  next.updateProjectionMatrix?.();
-  return next;
-}
-
 function threeViewPayload(frame, camera, canvas) {
   const width = Math.max(1, Number(canvas.clientWidth) || Number(canvas.width) || 1);
   const height = Math.max(1, Number(canvas.clientHeight) || Number(canvas.height) || 1);
   const rect = canvas.getBoundingClientRect();
   const cameraView = frame.cameraView || cameraViewForFrame(frame, width / height, cameraZoom(frame));
-  const payload = {
+  return {
     width,
     height,
     viewport: {
@@ -1345,70 +1615,6 @@ function threeViewPayload(frame, camera, canvas) {
       projection: camera.isOrthographicCamera ? "orthographic" : "perspective",
     },
   };
-  payload.cellFootprints = threeStageCellFootprints(payload);
-  return payload;
-}
-
-function threeStageCellFootprints(view) {
-  const size = view.threeProjection.size;
-  const footprints = [];
-  for (let y = 0; y < size.depth; y += 1) {
-    for (let x = 0; x < size.width; x += 1) {
-      footprints.push({
-        position: { x, y, z: 0 },
-        points: [
-          { x: x - 0.5, y: y - 0.5, z: 0 },
-          { x: x + 0.5, y: y - 0.5, z: 0 },
-          { x: x + 0.5, y: y + 0.5, z: 0 },
-          { x: x - 0.5, y: y + 0.5, z: 0 },
-        ].map((point) => threeProjectLogicalPoint(point, view)),
-      });
-    }
-  }
-  return footprints;
-}
-
-function threeProjectLogicalPoint(position, view) {
-  const projection = view.threeProjection;
-  const size = projection.size;
-  const cameraFrame = cameraRenderFrame(view.camera || {});
-  const cameraPosition = {
-    x: projection.target.x - cameraFrame.forward.x * projection.distance,
-    y: projection.target.y - cameraFrame.forward.y * projection.distance,
-    z: projection.target.z - cameraFrame.forward.z * projection.distance,
-  };
-  const world = {
-    x: Number(position.x) - (size.width - 1) / 2,
-    y: (size.height - 1) / 2 - Number(position.z),
-    z: Number(position.y) - (size.depth - 1) / 2,
-  };
-  const relative = {
-    x: world.x - cameraPosition.x,
-    y: world.y - cameraPosition.y,
-    z: world.z - cameraPosition.z,
-  };
-  const cameraX = dotVector3(relative, cameraFrame.right);
-  const cameraY = dotVector3(relative, cameraFrame.up);
-  const cameraDepth = Math.max(0.0001, dotVector3(relative, cameraFrame.forward));
-  let ndcX;
-  let ndcY;
-  if (projection.projection === "orthographic") {
-    const visibleWidth = projection.visibleHeight * projection.aspect;
-    ndcX = cameraX / (visibleWidth / 2);
-    ndcY = cameraY / (projection.visibleHeight / 2);
-  } else {
-    const tanHalfFov = Math.tan(degreesToRadians(projection.fovDegrees) / 2);
-    ndcX = cameraX / (cameraDepth * tanHalfFov * projection.aspect);
-    ndcY = cameraY / (cameraDepth * tanHalfFov);
-  }
-  return {
-    x: ((ndcX + 1) / 2) * view.width,
-    y: ((1 - ndcY) / 2) * view.height,
-  };
-}
-
-function dotVector3(left, right) {
-  return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
 function logicalTargetForThreeView(frame, cameraView) {
@@ -1538,8 +1744,7 @@ function viewportFocusRenderTarget(frame) {
 
 function viewportFocusVisualRenderBounds(frame) {
   const viewport = frame.viewport || {};
-  const focusedObjectIds = new Set(frame.focusCell?.objectIds || []);
-  const focusBase = renderPositionForCell(frame, frame.focusCell?.position || {});
+  const focusObjects = new Set(viewport.focusObjects || []);
   const bounds = {
     minX: Infinity,
     maxX: -Infinity,
@@ -1548,22 +1753,21 @@ function viewportFocusVisualRenderBounds(frame) {
     minZ: Infinity,
     maxZ: -Infinity,
   };
-  for (const voxel of frame.resolvedVoxels) {
-    if (voxel.renderBase.x !== focusBase.x
-        || voxel.renderBase.y !== focusBase.y
-        || voxel.renderBase.z !== focusBase.z) {
+  for (const [objectIndex, object] of (frame.focusCell?.objects || []).entries()) {
+    if (!viewportObjectMatches(object, viewport, focusObjects)) {
       continue;
     }
-    if (focusedObjectIds.size > 0
-        && !voxel.objectIds.some((objectId) => focusedObjectIds.has(objectId))) {
-      continue;
+    const sourceKey = `${cellKey(frame.focusCell.position)}:${objectIndex}`;
+    const priority = Puzzle3VisualCore.objectPriority(visualOrder(frame), object, objectIndex);
+    const objectOrder = (cellRenderIndex(frame, frame.focusCell.position || {}) * visualOrder(frame).priorities.length) + priority;
+    for (const voxel of objectVoxels(frame, frame.focusCell.position || {}, object, sourceKey, objectOrder)) {
+      bounds.minX = Math.min(bounds.minX, voxel.bounds.x0);
+      bounds.maxX = Math.max(bounds.maxX, voxel.bounds.x1);
+      bounds.minY = Math.min(bounds.minY, voxel.bounds.y0);
+      bounds.maxY = Math.max(bounds.maxY, voxel.bounds.y1);
+      bounds.minZ = Math.min(bounds.minZ, voxel.bounds.z0);
+      bounds.maxZ = Math.max(bounds.maxZ, voxel.bounds.z1);
     }
-    bounds.minX = Math.min(bounds.minX, voxel.bounds.x0);
-    bounds.maxX = Math.max(bounds.maxX, voxel.bounds.x1);
-    bounds.minY = Math.min(bounds.minY, voxel.bounds.y0);
-    bounds.maxY = Math.max(bounds.maxY, voxel.bounds.y1);
-    bounds.minZ = Math.min(bounds.minZ, voxel.bounds.z0);
-    bounds.maxZ = Math.max(bounds.maxZ, voxel.bounds.z1);
   }
   return Number.isFinite(bounds.minX) ? bounds : null;
 }
@@ -1686,6 +1890,8 @@ window.Puzzle3ThreeRenderer = {
     return new Puzzle3ThreeRenderer(canvas, options);
   },
   buildPuzzleStudioThreeFrame,
+  updatePuzzleStudioThreeFrame,
+  animationOffset3,
   cameraRenderFrame,
   frameVisibleVoxels,
   mergedVoxelFaces,

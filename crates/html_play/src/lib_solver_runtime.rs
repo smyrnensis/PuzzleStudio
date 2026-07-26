@@ -3,7 +3,7 @@ struct SolverConfig {
     #[cfg(feature = "solver")]
     max_depth: u32,
     #[cfg(feature = "solver")]
-    max_stored_nodes: usize,
+    max_nodes: usize,
     #[cfg(feature = "solver")]
     max_duration: Duration,
 }
@@ -14,7 +14,7 @@ impl Default for SolverConfig {
             #[cfg(feature = "solver")]
             max_depth: 128,
             #[cfg(feature = "solver")]
-            max_stored_nodes: 1_000_000,
+            max_nodes: 1_000_000,
             #[cfg(feature = "solver")]
             max_duration: Duration::from_secs(5),
         }
@@ -54,21 +54,21 @@ fn parse_solver_depth_arg(
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "solver"))]
-fn parse_solver_stored_nodes_arg(
+fn parse_solver_nodes_arg(
     solver: &mut SolverConfig,
     args: &mut impl Iterator<Item = String>,
 ) -> Result<(), AppError> {
-    solver.max_stored_nodes = parse_arg(args, "--solver-stored-nodes")?;
+    solver.max_nodes = parse_arg(args, "--solver-nodes")?;
     Ok(())
 }
 
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "solver")))]
-fn parse_solver_stored_nodes_arg(
+fn parse_solver_nodes_arg(
     _solver: &mut SolverConfig,
     _args: &mut impl Iterator<Item = String>,
 ) -> Result<(), AppError> {
     Err(AppError::Config(
-        "--solver-stored-nodes requires the html-play solver feature".to_string(),
+        "--solver-nodes requires the html-play solver feature".to_string(),
     ))
 }
 
@@ -93,15 +93,9 @@ fn parse_solver_ms_arg(
 }
 
 struct ServerState {
-    standalone_export: StandaloneRuntimeExport<puzzle_lang::LoadedDocument>,
-    loaded: Arc<LoadedGame>,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     runtime: puzzle_game_runtime::RuntimeSession,
-=======
-    runtime: RuntimeSession,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
-    source: String,
-    puzzle_path: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    visual_images: DecodedVisualImageCatalog,
     game_css: String,
     game_visuals_js: String,
     solver: SolverConfig,
@@ -111,30 +105,65 @@ struct ServerState {
     solver_artifact_id: String,
 }
 
-impl ServerState {
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RenderMomentRequest {
+    render_scene: puzzle_runtime_contract::RuntimeResolvedRenderScene,
+    moment: puzzle_runtime_contract::RuntimeResolvedRenderMoment,
+}
+
+struct EditorPreviewState {
+    standalone_export: StandaloneRuntimeExport<puzzle_lang::LoadedDocument>,
+    runtime: puzzle_game_runtime::RuntimeSession,
+    source: String,
+    puzzle_path: String,
+    game_css: String,
+    game_visuals_js: String,
+}
+
+impl EditorPreviewState {
     fn new(
         document: puzzle_lang::LoadedDocument,
-        loaded: LoadedGame,
         source: String,
         puzzle_path: String,
         visual_images: EncodedVisualImageBundle,
         game_css: String,
         game_visuals_js: String,
+    ) -> Result<Self, String> {
+        let mut runtime = puzzle_game_runtime::RuntimeSession::from_document(document.clone())?;
+        runtime.set_progress_persistence_enabled(false);
+        let progress_storage = standalone_progress_storage(&document);
+        Ok(Self {
+            standalone_export: StandaloneRuntimeExport::new(
+                document,
+                visual_images,
+                progress_storage,
+            ),
+            runtime,
+            source,
+            puzzle_path,
+            game_css,
+            game_visuals_js,
+        })
+    }
+}
+
+impl ServerState {
+    fn new(
+        document: puzzle_lang::LoadedDocument,
+        _loaded: LoadedGame,
+        #[cfg(not(target_arch = "wasm32"))]
+        visual_images: DecodedVisualImageCatalog,
+        game_css: String,
+        game_visuals_js: String,
         solver: SolverConfig,
     ) -> Self {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let mut runtime = puzzle_game_runtime::RuntimeSession::from_document(document.clone())
             .expect("parsed HTML host document must construct its runtime session");
         runtime.set_progress_persistence_enabled(false);
-        let progress_storage = standalone_progress_storage(&document, &puzzle_path);
-        let standalone_export =
-            StandaloneRuntimeExport::new(document, visual_images, progress_storage);
-=======
-        let mut runtime = RuntimeSession::from_document(document.clone())
-            .expect("server document was validated before runtime construction");
-        runtime.set_progress_persistence_enabled(false);
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
-        let loaded = Arc::new(loaded);
+        #[cfg(feature = "solver")]
+        let loaded = Arc::new(_loaded);
         #[cfg(feature = "solver")]
         let (solver_service, solver_artifact_id) = {
             let mut service = puzzle_solver_runtime::SolverService::new();
@@ -142,11 +171,9 @@ impl ServerState {
             (service, prepared.artifact_id)
         };
         Self {
-            standalone_export,
-            loaded,
             runtime,
-            source,
-            puzzle_path,
+            #[cfg(not(target_arch = "wasm32"))]
+            visual_images,
             game_css,
             game_visuals_js,
             solver,
@@ -157,31 +184,21 @@ impl ServerState {
         }
     }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     #[cfg(not(target_arch = "wasm32"))]
     fn snapshot_json(&self) -> Result<(String, usize), String> {
         live_server_snapshot_json(self.runtime.development_snapshot())
-=======
-    fn scene_json(&self) -> String {
-        let snapshot: serde_json::Value = serde_json::from_str(&self.runtime.snapshot_json())
-            .expect("runtime snapshot JSON should parse");
-        serde_json::json!({ "scene": snapshot.get("scene").cloned().unwrap_or_default() })
-            .to_string()
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_render_moment_json(&self, request_json: &[u8]) -> Result<String, String> {
+        resolve_render_moment_request_json(&self.visual_images, request_json)
     }
 
     #[cfg(all(feature = "solver", not(target_arch = "wasm32")))]
     fn solve_json(&mut self) -> Result<String, AppError> {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
         let (_, session) = self.runtime.solver_session_2d().ok_or_else(|| {
             AppError::Config("solver requires a two-dimensional runtime session".to_string())
         })?;
-=======
-        let (_, session) = self
-            .runtime
-            .solver_session_2d()
-            .ok_or_else(|| AppError::Config("solver requires a 2d runtime session".to_string()))?;
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         let level_index = session
             .active_level_index()
             .ok_or_else(|| AppError::Config("solver requires an active level".to_string()))?;
@@ -192,7 +209,7 @@ impl ServerState {
                 level_index,
                 session,
                 self.solver.max_depth,
-                self.solver.max_stored_nodes,
+                self.solver.max_nodes,
                 self.solver.max_duration,
                 0,
             )
@@ -200,4 +217,21 @@ impl ServerState {
         serde_json::to_string(&response)
             .map_err(|error| AppError::Config(format!("solver response JSON failed: {error}")))
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_render_moment_request_json(
+    visual_images: &DecodedVisualImageCatalog,
+    request_json: &[u8],
+) -> Result<String, String> {
+    let request = serde_json::from_slice::<RenderMomentRequest>(request_json)
+        .map_err(|error| format!("invalid render moment request: {error}"))?;
+    let frame = puzzle_presentation::resolve_render_moment(
+        &request.render_scene,
+        visual_images,
+        &request.moment,
+    )
+    .map_err(|error| format!("render moment resolution failed: {error:?}"))?;
+    serde_json::to_string(&frame)
+        .map_err(|error| format!("render frame serialization failed: {error}"))
 }

@@ -14,6 +14,7 @@ puzzle-assets = { path = "../assets" }
 puzzle-audio = { path = "../audio" }
 puzzle-game-runtime = { path = "../game_runtime", features = ["editor-debug"] }
 puzzle-player-bootstrap = { path = "../player_bootstrap" }
+puzzle-presentation = { path = "../presentation" }
 puzzle-presentation-json = { path = "../presentation_json" }
 puzzle-runtime-contract = { path = "../runtime_contract" }
 puzzle-session-contract = { path = "../session_contract" }

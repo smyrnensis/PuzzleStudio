@@ -66,11 +66,11 @@ fn scene_iterable_catalog(
 fn level_projection_value(index: usize, level: &LevelProjectionEntry) -> AuthoringValue {
     let id = LevelId::new(&level.puzzle, &level.name);
     let record_key = id.record_key();
-    let progress_path = format!("levels.{record_key}.progress");
+    let progress_cleared_path = id.progress_cleared_path().join(".");
     let mut progress_fields = HashMap::new();
     progress_fields.insert(
         "cleared".to_string(),
-        AuthoringValue::symbol(format!("{progress_path}.cleared")),
+        AuthoringValue::symbol(progress_cleared_path),
     );
 
     let mut fields = HashMap::new();
@@ -1491,9 +1491,7 @@ fn scene_viewport_component(
     source: impl Into<String>,
     projection: puzzle_scene::ViewportProjection,
 ) -> SceneComponent {
-    let mut layout = SceneLayoutDef::default();
-    layout.space = SceneSpaceDef::Fill { weight: 1 };
-    scene_viewport_component_with_layout(source, projection, layout)
+    scene_viewport_component_with_layout(source, projection, model_window_default_layout())
 }
 
 fn scene_viewport_component_with_layout(
@@ -1510,7 +1508,7 @@ fn scene_viewport_component_with_layout(
 }
 
 fn scene_puzzle_slot_component(puzzle: &ScenePuzzleDef) -> SceneComponent {
-    scene_puzzle_slot_component_with_layout(puzzle, SceneLayoutDef::default())
+    scene_puzzle_slot_component_with_layout(puzzle, model_window_default_layout())
 }
 
 fn scene_puzzle_slot_component_with_layout(
@@ -1635,7 +1633,7 @@ fn parse_scene_leaf_component_units(
                     "puzzle state name must be an identifier",
                 ));
             }
-            let layout = parse_scene_layout_attrs_for_line(attrs, &lines[start])?;
+            let layout = parse_model_window_layout_attrs_for_line(attrs, &lines[start])?;
             Ok((
                 vec![scene_viewport_component_with_layout(
                     (*state_name).to_string(),
@@ -1989,6 +1987,24 @@ fn parse_scene_layout_attrs_for_line(
     line: &str,
 ) -> Result<SceneLayoutDef, DiagnosticReport> {
     puzzle_scene::parse_scene_layout_attrs(attrs).map_err(|error| parse_error(line, &error.message))
+}
+
+fn model_window_default_layout() -> SceneLayoutDef {
+    SceneLayoutDef {
+        space: SceneSpaceDef::Fill { weight: 1 },
+        ..SceneLayoutDef::default()
+    }
+}
+
+fn parse_model_window_layout_attrs_for_line(
+    attrs: &[&str],
+    line: &str,
+) -> Result<SceneLayoutDef, DiagnosticReport> {
+    let mut layout = parse_scene_layout_attrs_for_line(attrs, line)?;
+    if !attrs.contains(&"space") {
+        layout.space = model_window_default_layout().space;
+    }
+    Ok(layout)
 }
 
 fn parse_text_component(
