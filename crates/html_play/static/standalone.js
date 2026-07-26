@@ -47,6 +47,7 @@
         return false;
       }
       this.sessionRuntime = this.wasmModule.WasmStandaloneSession.fromExport(this.exportJson);
+      this.sessionRuntime.set_progress_persistence_enabled(this.sessionProgressEnabled());
       this.releaseWasmOwnedExportPayload();
       this.restoreSessionProgressSave();
       this.usesRustSession = true;
@@ -63,13 +64,13 @@
     sessionRequestJson(method, url, options = {}) {
       const action = this.sessionAction(method, url, options);
       const raw = this.sessionRuntime.dispatch(JSON.stringify(action));
-      const next = JSON.parse(raw);
-      if (method === "POST" && this.writeSessionProgressSave()) {
-        if (next && typeof next.snapshot === "object") {
-          next.snapshot.has_progress_save = true;
-        } else {
-          next.has_progress_save = true;
-        }
+      let next = JSON.parse(raw);
+      if (method === "POST" && this.flushProgressSaveRequest()) {
+        const presentationEvents = Array.isArray(next?.presentationEvents)
+          ? next.presentationEvents
+          : [];
+        next = this.snapshot();
+        next.presentationEvents = presentationEvents;
       }
       return next;
     }
@@ -81,33 +82,13 @@
       if (method !== "POST") {
         throw new Error(`Unsupported standalone session request: ${method} ${url}`);
       }
-      if (url === "/api/resume") {
-        return { kind: "resume" };
-      }
       if (url === "/api/action") {
         if (typeof options.body !== "string" || options.body.trim() === "") {
           throw new Error("Standalone session action requires a JSON request body.");
         }
         return JSON.parse(options.body);
       }
-      const inputPrefix = "/api/input/";
-      if (url.startsWith(inputPrefix)) {
-        return { kind: "input", name: decodeURIComponent(url.slice(inputPrefix.length)) };
-      }
-      const commandPrefix = "/api/command/";
-      if (!url.startsWith(commandPrefix)) {
-        throw new Error(`Unsupported standalone session request: ${method} ${url}`);
-      }
-      const name = decodeURIComponent(url.slice(commandPrefix.length));
-      const directActions = {
-        undo: "undo",
-        redo: "redo",
-        restart: "restart",
-        next: "next_level",
-        next_level: "next_level",
-        previous_level: "previous_level",
-      };
-      return directActions[name] ? { kind: directActions[name] } : { kind: "command", name };
+      throw new Error(`Unsupported standalone session request: ${method} ${url}`);
     }
 
     snapshot() {
@@ -117,13 +98,49 @@
       return JSON.parse(this.sessionRuntime.snapshot());
     }
 
-    applyInputName(inputName) {
+    async resolveScenePresentation(sceneName, state = {}) {
+      await this.ensureInitialized();
       if (!this.sessionRuntime) {
         throw new Error("Puzzle game WASM runtime is unavailable.");
       }
-      this.sessionRuntime.apply_input_name(inputName);
-      this.writeSessionProgressSave();
-      window.dispatchEvent(new CustomEvent("PuzzleStandaloneStateChanged"));
+      if (typeof this.sessionRuntime.resolve_scene_presentation !== "function") {
+        throw new Error("Puzzle game WASM runtime does not expose scene presentation resolution.");
+      }
+      return JSON.parse(this.sessionRuntime.resolve_scene_presentation(
+        String(sceneName || ""),
+        JSON.stringify(state || {}),
+      ));
+    }
+
+    resolveRenderFrame(renderScene, elapsedMs) {
+      if (typeof this.wasmModule?.resolve_render_frame !== "function") {
+        throw new Error("Puzzle game WASM runtime does not expose render-frame resolution.");
+      }
+      if (!renderScene || typeof renderScene !== "object") {
+        throw new Error("Render-frame resolution requires a typed render scene.");
+      }
+      const time = Math.max(0, Math.floor(Number(elapsedMs)));
+      if (!Number.isSafeInteger(time) || time > 0xffffffff) {
+        throw new Error("Render-frame elapsed time must fit an unsigned 32-bit millisecond value.");
+      }
+      return JSON.parse(this.wasmModule.resolve_render_frame(
+        JSON.stringify(renderScene),
+        time,
+      ));
+    }
+
+    resolveRenderMoment(renderScene, moment) {
+      if (typeof this.wasmModule?.resolve_render_moment !== "function") {
+        throw new Error("Puzzle game WASM runtime does not expose animation-aware render resolution.");
+      }
+      return JSON.parse(this.wasmModule.resolve_render_moment(
+        JSON.stringify(renderScene),
+        JSON.stringify(moment),
+      ));
+    }
+
+    async hydrateRenderSceneImages(renderScene) {
+      return window.PuzzleRenderAssetDecoder.hydrateRenderSceneImages(this.wasmModule, renderScene);
     }
 
     applyDebugInputName(inputName) {
@@ -134,15 +151,6 @@
         kind: "debug_input",
         name: String(inputName || ""),
       })));
-    }
-
-    applyCommandName(commandName) {
-      if (!this.sessionRuntime) {
-        throw new Error("Puzzle game WASM runtime is unavailable.");
-      }
-      this.sessionRuntime.apply_command_name(commandName);
-      this.writeSessionProgressSave();
-      window.dispatchEvent(new CustomEvent("PuzzleStandaloneStateChanged"));
     }
 
     async setCurrentState(state, options = {}) {
@@ -166,48 +174,20 @@
       this.editorPreviewSceneEnabled = options.acceptSceneInput === true;
     }
 
-    progressSaveVersion() {
-      const version = Number(this.data.progressSaveVersion);
-      if (!Number.isInteger(version) || version < 1) {
-        throw new Error("Standalone runtime requires a positive progressSaveVersion.");
-      }
-      return version;
-    }
-
     progressSaveStorageKey() {
-      if (typeof this.data.saveKey !== "string" || this.data.saveKey.length === 0) {
-        throw new Error("Standalone runtime requires saveKey for progress persistence.");
+      if (typeof this.data.progressStorageKey !== "string" || this.data.progressStorageKey.length === 0) {
+        throw new Error("Standalone runtime requires progressStorageKey for progress persistence.");
       }
-      return `PuzzleStudio.progress.v${this.progressSaveVersion()}:${this.data.saveKey}`;
-    }
-
-    editorPreviewProgressSave() {
-      if (window.parent === window) {
-        return "";
-      }
-      const saves = window.PuzzleStudioEditorPreviewProgressSaves;
-      const value = saves && saves[this.progressSaveStorageKey()];
-      return typeof value === "string" ? value : "";
-    }
-
-    notifyEditorPreviewProgressSave(type, saveJson = "") {
-      if (window.parent === window) {
-        return;
-      }
-      window.parent.postMessage({
-        type,
-        storageKey: this.progressSaveStorageKey(),
-        saveJson,
-      }, "*");
+      return this.data.progressStorageKey;
     }
 
     restoreSessionProgressSave() {
       if (!this.sessionRuntime || !this.sessionProgressEnabled()) {
         return;
       }
-      let raw = this.editorPreviewProgressSave();
+      let raw;
       try {
-        raw = raw || window.localStorage?.getItem(this.progressSaveStorageKey());
+        raw = window.localStorage?.getItem(this.progressSaveStorageKey());
       } catch (_error) {
       }
       if (!raw) {
@@ -215,7 +195,6 @@
       }
       try {
         this.sessionRuntime.restore_progress_save(raw);
-        this.sessionRuntime.mark_progress_save_written();
       } catch (error) {
         throw new Error(
           `Progress save could not be restored for ${this.progressSaveStorageKey()}. The saved progress was kept and was not overwritten. Clear progress to start a fresh save. ${error?.message || error}`,
@@ -223,33 +202,48 @@
       }
     }
 
-    writeSessionProgressSave() {
+    flushProgressSaveRequest() {
       if (!this.sessionRuntime || !this.sessionProgressEnabled()) {
         return false;
       }
-      const saveJson = this.sessionRuntime.progress_save();
-      this.notifyEditorPreviewProgressSave("PuzzleStudioPreviewProgressSave", saveJson);
-      try {
-        window.localStorage?.setItem(this.progressSaveStorageKey(), saveJson);
-      } catch (_error) {
-        // Browsers can deny storage for local files, private windows, or quota limits.
+      const rawRequest = this.sessionRuntime.progress_save_request();
+      if (!rawRequest) {
+        return false;
       }
-      this.sessionRuntime.mark_progress_save_written();
+      const request = JSON.parse(rawRequest);
+      if (!Number.isSafeInteger(request.requestId) || request.requestId < 1) {
+        throw new Error("Progress save request is missing a valid requestId.");
+      }
+      if (typeof request.saveJson !== "string" || request.saveJson.length === 0) {
+        throw new Error("Progress save request is missing saveJson.");
+      }
+      try {
+        window.localStorage?.setItem(this.progressSaveStorageKey(), request.saveJson);
+      } catch (error) {
+        window.dispatchEvent(new CustomEvent("PuzzleProgressSaveError", {
+          detail: {
+            message: `Progress save could not be written for ${this.progressSaveStorageKey()}. ${error?.message || error}`,
+          },
+        }));
+        return false;
+      }
+      this.sessionRuntime.confirm_progress_save_written(request.requestId);
       return true;
     }
 
     clearSessionProgressSave() {
-      if (this.sessionRuntime) {
-        this.sessionRuntime.clear_progress_save();
-      }
       if (!this.sessionProgressEnabled()) {
         return;
       }
-      this.notifyEditorPreviewProgressSave("PuzzleStudioPreviewProgressSaveClear");
       try {
         window.localStorage?.removeItem(this.progressSaveStorageKey());
-      } catch (_error) {
-        // Ignore storage failures; the in-memory progress was already cleared.
+      } catch (error) {
+        throw new Error(
+          `Progress save could not be cleared for ${this.progressSaveStorageKey()}. ${error?.message || error}`,
+        );
+      }
+      if (this.sessionRuntime) {
+        this.sessionRuntime.confirm_progress_save_cleared();
       }
     }
 

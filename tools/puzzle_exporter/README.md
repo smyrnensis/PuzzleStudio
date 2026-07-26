@@ -1,14 +1,13 @@
 # Puzzle HTML Exporter
 
-Dev-only macOS launcher for exporting a `.puzzle` file or game folder to a
-standalone `.html` file without typing paths.
+Dev-only macOS launcher for exporting an explicit `.puzzle` file to a standalone
+`.html` file without typing paths.
 
 Use:
 
 1. Double-click `Puzzle HTML Exporter.command`.
-2. Choose `Puzzle File` or `Folder`.
-3. Pick the input in the macOS file picker.
-4. Pick where to save the exported `.html`.
+2. Pick the `.puzzle` input in the macOS file picker.
+3. Pick where to save the exported `.html`.
 
 The launcher calls the existing exporter:
 

@@ -1,6 +1,6 @@
-title = "Rings and Boxes"
-author = "smyrnensis"
-homepage = "https:"
+const title = "Rings and Boxes"
+const author = "smyrnensis"
+const homepage = "https:"
 
 scene title {
 layout {
@@ -38,9 +38,6 @@ sfx endlevel { seed = 98393900; type = puzzlescript }
 
 puzzle main {
 
-render {
-tween = true
-}
 layers {
 layer1 = BlackFloor OrangeFloor PurpleFloor GreenFloor BrownFloor WhiteFloor
 layer2 = BlackButton OrangeButton PurpleButton GreenButton BrownButton Crack Water

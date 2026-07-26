@@ -2,21 +2,26 @@ import { readFile } from "node:fs/promises";
 
 import init, {
   WasmSolverService,
+  WasmWorkspaceSession,
   activate_source_analysis,
-  activate_source_analysis_with_profile,
   active_source_analysis_highlight_range_json,
   active_source_analysis_level_editor_level_slots,
   active_source_analysis_level_editor_manifest_json,
   active_source_analysis_level_editor_visual_json,
   compile_preview,
-  compile_workspace_preview,
-  workspace_presentation_manifest,
 } from "../crates/html_editor/static/wasm/puzzle_wasm.js";
 
 const wasm = await readFile("crates/html_editor/static/wasm/puzzle_wasm_bg.wasm");
 await init({ module_or_path: wasm });
 
-const profiledHighlightSource = `levels {
+const ownerDimensionHighlightSource = `puzzle board {
+dimension = 3
+layers {
+ground = Floor
+}
+rules {
+}
+levels {
 legend {
 _ = Floor
 }
@@ -26,26 +31,24 @@ ___
 ___
 }
 }
+}
 `;
-const profiledRevision = activate_source_analysis_with_profile(
-  profiledHighlightSource,
-  "puzzle3d",
-);
-const profiledHighlight = JSON.parse(active_source_analysis_highlight_range_json(
-  profiledRevision,
+const ownerDimensionRevision = activate_source_analysis(ownerDimensionHighlightSource);
+const ownerDimensionHighlight = JSON.parse(active_source_analysis_highlight_range_json(
+  ownerDimensionRevision,
   0,
-  profiledHighlightSource.length,
+  ownerDimensionHighlightSource.length,
   false,
 ));
-const invalidProfiledText = profiledHighlight.spans
+const invalidOwnerDimensionText = ownerDimensionHighlight.spans
   .filter((span) => span.kind === "level-cell-invalid")
-  .map((span) => profiledHighlightSource.slice(span.start, span.end));
-if (invalidProfiledText.includes("_") || invalidProfiledText.includes("-")) {
-  throw new Error(`profiled level highlighting rejected declared cells or slice separators: ${invalidProfiledText}`);
+  .map((span) => ownerDimensionHighlightSource.slice(span.start, span.end));
+if (invalidOwnerDimensionText.includes("_") || invalidOwnerDimensionText.includes("-")) {
+  throw new Error(`owner-declared 3D highlighting rejected declared cells or slice separators: ${invalidOwnerDimensionText}`);
 }
 
 const source = `
-title = "Editor Preview Contract"
+const title = "Editor Preview Contract"
 
 puzzle board {
   layers {
@@ -98,11 +101,12 @@ if (!editorPreviewExport.engine || editorPreviewExport.runtimeLoadedDocument) {
   throw new Error("editor preview metadata does not have an editor-only contract");
 }
 const workspaceDocuments = [{ path: "game.puzzle", source }];
-const workspaceHtml = compile_workspace_preview("game.puzzle", workspaceDocuments, "", "");
+const workspace = new WasmWorkspaceSession(workspaceDocuments);
+const workspaceHtml = workspace.compile_preview("game.puzzle", "", "");
 if (!workspaceHtml.includes('editorPreview\\":true')) {
   throw new Error("typed workspace preview did not compile editor HTML");
 }
-const workspaceManifest = workspace_presentation_manifest("game.puzzle", workspaceDocuments);
+const workspaceManifest = workspace.presentation_manifest("game.puzzle");
 if (
   workspaceManifest.themeName !== "clean"
   || !Array.isArray(workspaceManifest.cssPaths)
@@ -112,14 +116,41 @@ if (
 ) {
   throw new Error(`typed workspace manifest is invalid: ${JSON.stringify(workspaceManifest)}`);
 }
+workspace.replace_documents(workspaceDocuments);
+if (workspace.revision() !== 2 || JSON.parse(workspace.index_json()).revision !== 2) {
+  throw new Error("workspace replacement did not advance its authoritative revision");
+}
+const resourceWorkspace = new WasmWorkspaceSession([
+  { path: "games/game.puzzle", source: 'import board = "../models/board.puzzle"\n' },
+  { path: "models/board.puzzle", source: `puzzle main {
+layers {
+actor = Player
+}
+visuals {
+Player {
+image = "images/player.png"
+}
+}
+rules {
+}
+levels {
+legend {
+P = Player
+}
+level "start" {
+P
+}
+}
+}
+` },
+]);
+const resourceManifest = resourceWorkspace.presentation_manifest("games/game.puzzle");
+if (resourceManifest.visualImagePaths[0] !== "models/images/player.png") {
+  throw new Error(`imported resource path was not canonicalized: ${JSON.stringify(resourceManifest)}`);
+}
 let invalidWorkspaceDocumentsError = "";
 try {
-  compile_workspace_preview(
-    "game.puzzle",
-    [{ path: "game.puzzle" }],
-    "",
-    "",
-  );
+  new WasmWorkspaceSession([{ path: "game.puzzle" }]);
 } catch (error) {
   invalidWorkspaceDocumentsError = String(error);
 }
@@ -128,12 +159,9 @@ if (!invalidWorkspaceDocumentsError.includes("missing field")) {
 }
 let missingImportDiagnostic = null;
 try {
-  compile_workspace_preview(
-    "game.puzzle",
-    [{ path: "game.puzzle", source: "// heading\nimport \"missing.puzzle\"\n" }],
-    "",
-    "",
-  );
+  new WasmWorkspaceSession([
+    { path: "game.puzzle", source: "// heading\nimport missing = \"missing.puzzle\"\n" },
+  ]).compile_preview("game.puzzle", "", "");
 } catch (error) {
   missingImportDiagnostic = error?.diagnostics?.[0] || null;
 }
@@ -143,24 +171,23 @@ if (
 ) {
   throw new Error(`workspace import diagnostic lost its source origin: ${JSON.stringify(missingImportDiagnostic)}`);
 }
-const importedInvalidSource = source.replace(
-  "input right [ Player | no actor ] -> [ | Player ]",
-  "unknown_imported_statement",
-);
+const importedInvalidSource = source
+  .replace('const title = "Editor Preview Contract"\n', "")
+  .replace(
+    "input right [ Player | no actor ] -> [ | Player ]",
+    "unknown_imported_statement",
+  );
 const importedInvalidLine = importedInvalidSource
   .split(/\r?\n/)
   .findIndex((line) => line === "    unknown_imported_statement") + 1;
 let importedCompileDiagnostic = null;
 try {
-  compile_workspace_preview(
-    "game.puzzle",
+  new WasmWorkspaceSession(
     [
-      { path: "game.puzzle", source: "import \"parts/game.puzzle\"\n" },
+      { path: "game.puzzle", source: "import part = \"parts/game.puzzle\"\n" },
       { path: "parts/game.puzzle", source: importedInvalidSource },
     ],
-    "",
-    "",
-  );
+  ).compile_preview("game.puzzle", "", "");
 } catch (error) {
   importedCompileDiagnostic = error?.diagnostics?.[0] || null;
 }
@@ -189,7 +216,7 @@ const solverSearch = solverService.start(preparedSolver.artifactId, {
   },
   materializeLevelStart: true,
   maxDepth: 4,
-  maxNodes: 16,
+  maxStoredNodes: 16,
 }, Date.now());
 const solverAdvance = solverService.advance(solverSearch, 4, Date.now());
 if (solverAdvance.status !== "solved" || solverAdvance.result?.result !== "solved") {
@@ -222,7 +249,7 @@ for (const token of required) {
 }
 
 const puzzle3Source = `
-title = "3D Editor Preview Contract"
+const title = "3D Editor Preview Contract"
 
 puzzle preview {
   dimension = 3
@@ -248,7 +275,7 @@ levels default of preview {
 `;
 const puzzle3Html = compile_preview(
   puzzle3Source,
-  "spec_3d_preview_contract.puzzle3",
+  "spec_3d_preview_contract.puzzle",
   "",
   "",
 );

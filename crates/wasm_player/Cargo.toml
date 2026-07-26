@@ -16,4 +16,7 @@ source-runtime = ["puzzle-game-runtime/editor-debug"]
 [dependencies]
 puzzle-core = { path = "../core" }
 puzzle-game-runtime = { path = "../game_runtime", default-features = false }
+puzzle-presentation = { path = "../presentation" }
+puzzle-runtime-contract = { path = "../runtime_contract" }
+serde_json = "1"
 wasm-bindgen = "0.2"

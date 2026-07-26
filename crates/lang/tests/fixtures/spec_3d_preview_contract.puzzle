@@ -1,4 +1,4 @@
-title = "Microban 3D Preview Contract"
+const title = "Microban 3D Preview Contract"
 
 puzzle sokoban {
 dimension = 3

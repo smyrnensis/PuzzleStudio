@@ -867,9 +867,9 @@ function level3dRowsForEntry(entry, legendEntries) {
     if (slice > 0) {
       rows.push("");
     }
-    const z = height - 1 - slice;
+    const z = slice;
     for (let row = 0; row < depth; row += 1) {
-      const y = depth - 1 - row;
+      const y = row;
       let text = "";
       for (let x = 0; x < width; x += 1) {
         const objects = cellMap.get(`${x},${y},${z}`) || [];
@@ -1832,7 +1832,7 @@ function renderLevel3dLayerGrid() {
   const cells = [];
   for (let row = 0; row < depth; row += 1) {
     for (let x = 0; x < width; x += 1) {
-      const y = depth - 1 - row;
+      const y = row;
       const position = { x, y, z: currentLevel3dLayerZ() };
       const ch = level3dCharAtPosition(position);
       const cell = document.createElement("button");
@@ -1993,12 +1993,12 @@ function level3dCropTopDownProjection(projection) {
 function currentLevel3dLayerZ() {
   const height = Math.max(1, Math.trunc(Number(level3d.height) || 1));
   const slice = Math.max(0, Math.min(height - 1, Math.trunc(Number(level3d.slice) || 0)));
-  return height - 1 - slice;
+  return slice;
 }
 
 function level3dSliceArrayIndexForZ(z = currentLevel3dLayerZ()) {
   const height = Math.max(1, Math.trunc(Number(level3d.height) || 1));
-  return Math.max(0, Math.min(height - 1, height - 1 - Math.trunc(Number(z) || 0)));
+  return Math.max(0, Math.min(height - 1, Math.trunc(Number(z) || 0)));
 }
 
 function level3dCharAtPosition(position) {
@@ -2006,7 +2006,7 @@ function level3dCharAtPosition(position) {
   const y = Math.trunc(Number(position?.y) || 0);
   const z = Math.trunc(Number(position?.z) || 0);
   const slice = level3d.slices[level3dSliceArrayIndexForZ(z)] || [];
-  const row = Math.max(0, Math.min(Math.max(1, level3d.depth || 1) - 1, Math.max(1, level3d.depth || 1) - 1 - y));
+  const row = Math.max(0, Math.min(Math.max(1, level3d.depth || 1) - 1, y));
   const text = String(slice[row] || "").padEnd(Math.max(1, level3d.width || 1), level3dEmptyChar());
   return text[x] || level3dEmptyChar();
 }
@@ -2360,8 +2360,8 @@ function paintLevel3dCellAtPosition(position, ch = level3d.selectedChar) {
   if (!level3dPositionInBounds({ x, y, z })) {
     return false;
   }
-  const sliceIndex = level3d.height - 1 - z;
-  const row = level3d.depth - 1 - y;
+  const sliceIndex = z;
+  const row = y;
   const slice = level3d.slices[sliceIndex];
   if (!slice) {
     return false;
@@ -2872,9 +2872,6 @@ function loadLevel3dSourceDefinition(entry, source, options = {}) {
     stopLevel3dPlaytest({ syncPreview: false });
   }
   const sourceDocument = options.document || activeDocument();
-  if (!sourceDocument || sourceDocument.id === activeDocument()?.id) {
-    ensurePreviewTargetsActiveDocument();
-  }
   const exportData = options.exportData || previewBuild?.exportData;
   const levels = Array.isArray(exportData?.levels) ? exportData.levels : [];
   let levelIndex = Number.isInteger(entry.levelIndex) ? entry.levelIndex : -1;
@@ -3324,10 +3321,15 @@ function level3dModelPreviewComponent() {
 }
 
 function level3dRuntimePreviewResources(exportData = previewBuild?.exportData) {
+  const authoring = exportData?.puzzle3AuthoringResources
+    || exportData?.resources
+    || (exportData?.objects || exportData?.visuals ? exportData : null)
+    || previewBuild?.exportData
+    || {};
   return {
-    layerCount: exportData?.layerCount,
-    objects: exportData?.objects || {},
-    visuals: level3dPreviewVisuals(exportData),
+    layerCount: authoring.layerCount,
+    objects: authoring.objects || {},
+    visuals: level3dPreviewVisuals(authoring),
   };
 }
 
@@ -4654,8 +4656,8 @@ function level3dSnapshotLevelData(exportData = previewBuild?.exportData) {
         cells.push({
           position: {
             x,
-            y: level3d.depth - 1 - row,
-            z: level3d.height - 1 - slice,
+            y: row,
+            z: slice,
           },
           objects,
         });
@@ -4676,7 +4678,11 @@ function level3dObjectsForChar(ch, exportData = previewBuild?.exportData) {
   return entry.objects.map((name) => level3dObjectDescriptor(name, exportData)).filter(Boolean);
 }
 
-function level3dPaletteObjectDescriptor(name, exportData = previewBuild?.exportData, visuals = level3dPreviewVisuals(exportData)) {
+function level3dPaletteObjectDescriptor(
+  name,
+  exportData = previewBuild?.exportData,
+  visuals = level3dRuntimePreviewResources(exportData).visuals,
+) {
   const object = level3dObjectDescriptor(name, exportData);
   if (!object) {
     return null;
@@ -4684,17 +4690,20 @@ function level3dPaletteObjectDescriptor(name, exportData = previewBuild?.exportD
   return level3dObjectHasPreviewVisual(object, exportData, visuals) ? object : null;
 }
 
-function level3dObjectHasPreviewVisual(object, exportData = previewBuild?.exportData, visuals = exportData?.visuals) {
+function level3dObjectHasPreviewVisual(
+  object,
+  exportData = previewBuild?.exportData,
+  visuals = level3dRuntimePreviewResources(exportData).visuals,
+) {
   return Boolean(object && (
     visuals?.[object.visual]
     || visuals?.[object.name]
-    || exportData?.visuals?.[object.visual]
-    || exportData?.visuals?.[object.name]
   ));
 }
 
 function level3dObjectDescriptor(name, exportData = previewBuild?.exportData) {
-  const fromObjects = exportData?.objects?.[name];
+  const resources = level3dRuntimePreviewResources(exportData);
+  const fromObjects = resources.objects?.[name];
   if (fromObjects) {
     return { ...fromObjects };
   }
@@ -5435,7 +5444,8 @@ function level3dObjectPreviewFaces(position, object, snapshot, view) {
 }
 
 function level3dObjectPreviewVoxels(position, object, snapshot) {
-  const visual = snapshot.visuals?.[object.visual] || snapshot.visuals?.[object.name];
+  const visuals = level3dRuntimePreviewResources(snapshot).visuals;
+  const visual = visuals?.[object.visual] || visuals?.[object.name];
   if (!visual) {
     return [];
   }
@@ -5616,8 +5626,8 @@ function level3dProjectThreeCanvasPoint(position, view) {
   };
   const world = {
     x: Number(position.x) - (Math.max(1, Number(size.width) || 1) - 1) / 2,
-    y: Number(position.z) - (Math.max(1, Number(size.height) || 1) - 1) / 2,
-    z: (Math.max(1, Number(size.depth) || 1) - 1) / 2 - Number(position.y),
+    y: (Math.max(1, Number(size.height) || 1) - 1) / 2 - Number(position.z),
+    z: Number(position.y) - (Math.max(1, Number(size.depth) || 1) - 1) / 2,
   };
   const relative = {
     x: world.x - cameraPosition.x,

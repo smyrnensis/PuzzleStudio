@@ -155,7 +155,7 @@ self.onmessage = async (event) => {
         state: solverState(String(data.modelKind || ""), request.state),
         materializeLevelStart: request.materializeLevelStart === true,
         maxDepth: Number(request.maxDepth),
-        maxNodes: Number(request.maxNodes),
+        maxStoredNodes: Number(request.maxStoredNodes),
       },
       Date.now(),
     );

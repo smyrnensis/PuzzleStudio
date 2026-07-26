@@ -1,14 +1,25 @@
-title = "Microban 3D"
-author = "Levels by David Skinner"
+const title = "Microban 3D"
+const author = "Levels by David Skinner"
 
-theme = "puzzlescript"
+theme {
+preset = "puzzlescript"
+background_color = #fffffff
+text_color = #000
+}
+
+scene title {
+layout {
+  heading "Microban 3D"
+  choice "Start" -> start playing
+}
+}
 
 puzzle sokoban {
 dimension = 3
 render {
 camera {
 	yaw = 0
-	pitch = 90
+	pitch = 5
 	zoom = 1
 }
 }
@@ -24,8 +35,8 @@ solid = Player Box Wall
 }
 
 rules {
-input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
-input horizontal [ Player | no solid ] -> [ | Player ]
+once input horizontal [ Player | Box | no solid ] -> [ | Player | Box ]
+once input horizontal [ Player | no solid ] -> [ | Player ]
 }
 
 win_conditions {
@@ -34,26 +45,16 @@ no down [ no Box | Goal ]
 }
 
 on_level_clear {
-if win_conditions -> next_level
-}
-
-on_last_level_clear {
-message "END"
+wait 0.3s
+message "WIN"
 goto title
 }
 }
 
-scene title {
-layout {
-  heading "Microban 3D"
-  choice "New Game" -> goto playing
-  choice "Level Select" -> goto level_select
-}
-}
 
 scene playing {
 keys {
-q Escape -> goto level_select	
+q Escape -> goto title
 }
 layout {
 heading "Microban 3D"
@@ -64,21 +65,8 @@ step sokoban
 }
 }
 
-scene level_select {
-layout {
-  heading "Select Level"
-  column scroll=true {
-    choice "microban 1" -> goto sokoban("microban 1")
-    choice "microban 2" -> goto sokoban("microban 2")
-    choice "microban 3" -> goto sokoban("microban 3")
-  }
-  button "Exit" -> goto title
-}
-}
-
 levels microban of sokoban {
 legend {
-. = empty
 , = Floor
 G = Floor Goal
 P = Player
@@ -94,7 +82,7 @@ level "microban 1" {
 #..B.#
 #..###
 ####..
-
+-
 ,,,,,,
 ,,G,,,
 ,,,,,,
@@ -102,40 +90,6 @@ level "microban 1" {
 ,,,,,,
 ,,,,,,
 ,,,,,,
-}
-
-level "microban 2" {
-######
-#....#
-#.#P.#
-#.BB.#
-#..B.#
-#....#
-######
-
-,,,,,,
-,,,,,,
-,,,,,,
-,,,G,,
-,,GG,,
-,,,,,,
-,,,,,,
-}
-
-level "microban 3" {
-..####...
-###..####
-#.....B.#
-#.#..#B.#
-#....#P.#
-#########
-
-,,,,,,,,,
-,,,,,,,,,
-,,,,,,,,,
-,,,,,,,,,
-,,G,G,,,,
-,,,,,,,,,
 }
 }
 

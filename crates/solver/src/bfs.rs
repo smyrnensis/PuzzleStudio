@@ -143,8 +143,8 @@ fn budget_exceeded(
 ) -> Option<SearchStats> {
     let elapsed = started_at.elapsed();
     if budget
-        .max_nodes
-        .is_some_and(|max_nodes| visited >= max_nodes)
+        .max_stored_nodes
+        .is_some_and(|max_stored_nodes| visited >= max_stored_nodes)
         || budget
             .max_frontier
             .is_some_and(|max_frontier| frontier >= max_frontier)

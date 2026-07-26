@@ -1,6 +1,6 @@
-title = "TENETEN"
-author = "smyrnensis"
-homepage = "smyrnensis.itch.io"
+const title = "TENETEN"
+const author = "smyrnensis"
+const homepage = "smyrnensis.itch.io"
 
 theme {
 preset = "puzzlescript"

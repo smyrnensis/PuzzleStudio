@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn classifies_same_word_by_source_scope() {
         let source = r#"
-title = semantic_scope
+const title = semantic_scope
 sounds {
 sfx clear { seed = clear01; type = jump }
 }
@@ -116,7 +116,7 @@ win -> sfx clear
     #[test]
     fn classifies_authoring_schema_surface_tokens() {
         let source = r#"
-title = authoring_schema_semantics
+const title = authoring_schema_semantics
 theme = "clean"
 puzzle main {
 render {
@@ -149,13 +149,13 @@ bars = 4
         let bars_start = source.find("bars = 4").unwrap();
         let four_start = source.find("4").unwrap();
 
-        assert_semantic_token(source, &tokens, title_start, "title", SemanticKind::Keyword);
+        assert_semantic_token(source, &tokens, title_start, "title", SemanticKind::State);
         assert_semantic_token(
             source,
             &tokens,
             title_value_start,
             "authoring_schema_semantics",
-            SemanticKind::String,
+            SemanticKind::Literal,
         );
         assert_semantic_token(source, &tokens, clean_start, "clean", SemanticKind::Theme);
         assert_semantic_token(
@@ -183,7 +183,7 @@ bars = 4
     #[test]
     fn classifies_rewrite_effects_from_parser_owned_tokens() {
         let source = r#"
-title = rewrite_effect_semantics
+const title = rewrite_effect_semantics
 puzzle default {
 rules {
 once [ Player ] -> [ Player ] sfx clear
@@ -216,7 +216,7 @@ score = 1
     #[test]
     fn classifies_rewrite_pattern_selectors_from_parser_owned_tokens() {
         let source = r#"
-title = rewrite_selector_semantics
+const title = rewrite_selector_semantics
 puzzle board {
 layers {
 actor = Player Box
@@ -245,7 +245,7 @@ rules {
     #[test]
     fn classifies_implicit_level_event_sugar_from_parser_owned_tokens() {
         let source = r#"
-title = implicit_level_event_semantics
+const title = implicit_level_event_semantics
 
 puzzle board {
 layers {
@@ -283,7 +283,7 @@ P
     #[test]
     fn classifies_standard_move_call_as_routine_effect() {
         let source = r#"
-title = standard_move_semantics
+const title = standard_move_semantics
 
 puzzle board {
 layers {
@@ -307,7 +307,7 @@ move
     #[test]
     fn classifies_user_routine_calls_as_effects() {
         let source = r#"
-title = routine_call_semantics
+const title = routine_call_semantics
 
 puzzle board {
 layers {
@@ -436,7 +436,7 @@ P
     #[test]
     fn classifies_parser_owned_rewrite_prefixes_as_keywords() {
         let source = r#"
-title = rewrite_prefix_semantics
+const title = rewrite_prefix_semantics
 
 puzzle board {
 layers {
@@ -502,7 +502,7 @@ routine push_player {
     #[test]
     fn preserves_all_parser_surface_semantic_tokens() {
         let source = r#"
-title = surface_semantic_projection
+const title = surface_semantic_projection
 
 puzzle board {
 layers {
@@ -544,7 +544,7 @@ routine push_player {
     #[test]
     fn classifies_anonymous_layer_entries_as_objects() {
         let source = r#"
-title = anonymous_layer_semantics
+const title = anonymous_layer_semantics
 
 puzzle board {
 layers {
@@ -585,7 +585,7 @@ solid = Player Box Wall
     #[test]
     fn classifies_tag_set_definitions_as_groups_and_variants() {
         let source = r#"
-title = tag_semantics
+const title = tag_semantics
 
 puzzle board {
 tags {
@@ -619,7 +619,7 @@ facing = left right
     #[test]
     fn classifies_theme_state_and_condition_contexts() {
         let source = r#"
-title = semantic_contexts
+const title = semantic_contexts
 theme = "clean"
 var count = 1
 
@@ -659,7 +659,7 @@ if board.win_conditions -> goto title
     #[test]
     fn classifies_authoring_schema_projection_tokens() {
         let source = r##"
-title = authoring_schema_semantics
+const title = authoring_schema_semantics
 
 theme {
 preset = "clean"
@@ -768,7 +768,7 @@ smoothing = false
     #[test]
     fn classifies_scene_step_rule_target() {
         let source = r#"
-title = scene_step_semantics
+const title = scene_step_semantics
 
 scene playing {
 rules {
@@ -795,7 +795,7 @@ step board
     #[test]
     fn classifies_same_spelling_by_surface_role() {
         let source = r#"
-title = semantic_surface_roles
+const title = semantic_surface_roles
 
 scene title {
 layout {
@@ -803,14 +803,14 @@ heading title
 }
 "#;
         let tokens = semantic_tokens(source);
-        let metadata_title_start = source.find("title = semantic_surface_roles").unwrap();
+        let const_title_start = source.find("title = semantic_surface_roles").unwrap();
         let scene_title_start = source.find("scene title").unwrap() + "scene ".len();
         let component_title_start = source.rfind("heading title").unwrap();
 
         assert!(tokens.iter().any(|token| {
-            token.start == metadata_title_start
-                && token.end == metadata_title_start + "title".len()
-                && token.kind == SemanticKind::Keyword
+            token.start == const_title_start
+                && token.end == const_title_start + "title".len()
+                && token.kind == SemanticKind::State
         }));
         assert!(tokens.iter().any(|token| {
             token.start == scene_title_start
@@ -827,7 +827,7 @@ heading title
     #[test]
     fn classifies_visual_shape_refs_by_visual_grammar_slots() {
         let source = r#"
-title = visual_shape_semantics
+const title = visual_shape_semantics
 
 puzzle board {
 tags {
@@ -884,15 +884,14 @@ shape Block:kind
     #[test]
     fn classifies_visual_entry_properties_as_visual_keywords() {
         let source = r#"
-title = visual_property_semantics
+const title = visual_property_semantics
 
 puzzle board {
 layers {
 objects = Box
 }
 visuals {
-visual {
-selector = Box
+visual Box {
 colors = #fff #000
 duration = 120ms
 frame_duration = 60ms
@@ -904,17 +903,9 @@ frame_duration = 60ms
 }
 "#;
         let tokens = semantic_tokens(source);
-        let selector_start = source.find("selector = Box").unwrap();
         let duration_start = source.find("duration = 120ms").unwrap();
         let frame_duration_start = source.find("frame_duration = 60ms").unwrap();
 
-        assert_semantic_token(
-            source,
-            &tokens,
-            selector_start,
-            "selector",
-            SemanticKind::Setting,
-        );
         assert_semantic_token(
             source,
             &tokens,
@@ -939,8 +930,7 @@ layers {
 objects = Arrow
 }
 visuals {
-visual {
-selector = Arrow:horizontal
+visual Arrow:horizontal {
 colors = #fff ink
 shape = arrow_shape:horizontal
 sampling = pixelated
@@ -955,13 +945,6 @@ flip mirrored
         let tokens = semantic_tokens(source);
         let find = |needle: &str| source.find(needle).unwrap();
 
-        assert_semantic_token(
-            source,
-            &tokens,
-            find("selector ="),
-            "selector",
-            SemanticKind::Setting,
-        );
         assert_semantic_token(
             source,
             &tokens,
@@ -1066,7 +1049,7 @@ flip mirrored
     #[test]
     fn classifies_rule_selectors_from_parser_resolved_surface_tokens() {
         let source = r#"
-title = selector_parser_resolved_surface_tokens
+const title = selector_parser_resolved_surface_tokens
 
 puzzle board {
 layers {
@@ -1186,7 +1169,7 @@ for l in layer1 layer2 Boundary:directions {
     #[test]
     fn classifies_map_row_values_from_parser_resolved_surface_tokens() {
         let source = r#"
-title = map_row_semantics
+const title = map_row_semantics
 
 puzzle board {
 tags {
@@ -1235,7 +1218,7 @@ level "start" {
     #[test]
     fn classifies_group_rhs_selectors_from_parser_resolved_surface_tokens() {
         let source = r#"
-title = group_rhs_selector_semantics
+const title = group_rhs_selector_semantics
 
 puzzle board {
 tags {
@@ -1290,7 +1273,7 @@ level "start" {
     #[test]
     fn classifies_legend_rhs_selectors_from_parser_resolved_surface_tokens() {
         let source = r#"
-title = legend_rhs_selector_semantics
+const title = legend_rhs_selector_semantics
 
 puzzle board {
 tags {
@@ -1382,7 +1365,7 @@ level "start" {
     #[test]
     fn classifies_structural_headers_from_parser_surface_events() {
         let source = r#"
-title = structural_header_semantics
+const title = structural_header_semantics
 
 puzzle board {
 tags {
@@ -1441,7 +1424,7 @@ heading "Title"
     #[test]
     fn classifies_marks_from_parser_resolved_surface_tokens() {
         let source = r#"
-title = mark_parser_resolved_surface_tokens
+const title = mark_parser_resolved_surface_tokens
 
 puzzle board {
 tags {
@@ -1504,7 +1487,7 @@ level "start" {
     #[test]
     fn classifies_compact_rule_selector_mark_from_rule_attachment_surface() {
         let source = r#"
-title = compact_rule_selector_mark
+const title = compact_rule_selector_mark
 
 puzzle board {
 marks {
@@ -1547,7 +1530,7 @@ level "start" {
     #[test]
     fn classifies_labeled_tag_selectors_and_rule_effects_from_surface_tokens() {
         let source = r#"
-title = labeled_tag_selector_semantics
+const title = labeled_tag_selector_semantics
 
 sounds {
 sfx sfx0 { seed = 17551700; type = puzzlescript }

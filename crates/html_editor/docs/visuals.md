@@ -20,7 +20,7 @@ Box {
 }
 ```
 
-Image visuals use a game-folder relative path. ASCII visuals use a palette row
+Image visuals use a workspace-relative path. ASCII visuals use a palette row
 followed by rows of palette indexes.
 
 Visuals are drawn into one cell by default. Use `contain`, `cover`, or
@@ -51,14 +51,16 @@ Use `layers` for state exclusion and drawing order, and `legend` for level chara
 Visual spatial operations use `translate [world|local] <vector>`. A 2D visual
 uses `rotate [world|local] <angle> [from <angle>]`, for example
 `rotate directions from up`. A 3D visual may use the same `from` and axis-less
-forms; an omitted axis defaults to +Z (`up`). Use `around <axis>` for another
+forms; an omitted axis defaults to +Z (`down`). Use `around <axis>` for another
 axis, for example `rotate local facing from 0deg around right`. The removed
 `offset`, `rotate using`, and generic `transform` forms are not accepted.
 For four-way 3D variants authored facing front, use
 `Arrow:horizontal { rotate horizontal from front }`.
 
 Both model kinds use `visuals`. In a reusable ASCII shape, `>` starts the next
-animation frame and `-` starts the next -Z layer; 2D visuals must have depth 1.
+animation frame and `-` starts the next +Z (`down`) layer; 2D visuals must have
+depth 1. ASCII columns and rows increase toward right (+X) and back (+Y), so a Z
+slice has the same orientation as its ASCII source.
 
 Drawing order belongs to `layers`:
 

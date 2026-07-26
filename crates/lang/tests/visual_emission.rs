@@ -1,11 +1,9 @@
-use puzzle_lang::{
-    PuzzleSourceProfile, RuleEffect, SourceTargetKind, analyze_source_for_profile, parse_game2d,
-};
+use puzzle_lang::{RuleEffect, SourceTargetKind, analyze_source, parse_game2d};
 
 fn visual_emission_source(effect: &str) -> String {
     format!(
         r#"
-title = visual_emission
+const title = visual_emission
 
 puzzle default {{
 layers {{
@@ -115,7 +113,7 @@ fn explicit_emission_requires_a_declared_visual() {
 fn named_animation_visual_is_a_regular_visual_editor_target() {
     let source = visual_emission_source("!flash");
     let cursor = source.find("duration = 240ms").expect("visual body");
-    let analysis = analyze_source_for_profile(&source, PuzzleSourceProfile::Puzzle2d);
+    let analysis = analyze_source(&source);
     let target = analysis
         .resolve_target(cursor)
         .expect("named visual should resolve as an editor target");

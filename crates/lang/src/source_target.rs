@@ -1,4 +1,3 @@
-use crate::PuzzleSourceProfile;
 use crate::surface::{SurfaceDocument, SurfaceVisualRefs};
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -131,16 +130,19 @@ impl SourceVisualStatus {
 }
 
 pub fn resolve_source_target(source: &str, cursor_offset: usize) -> Option<SourceTarget> {
-    resolve_source_target_for_profile(source, cursor_offset, PuzzleSourceProfile::Puzzle2d)
+    let cursor = cursor_offset.min(source.len());
+    let document = crate::parse_surface_source_target_document(source);
+    resolve_source_target_from_document(&document, cursor)
 }
 
-pub fn resolve_source_target_for_profile(
+pub fn resolve_source_target_for_owner_dimension(
     source: &str,
     cursor_offset: usize,
-    profile: PuzzleSourceProfile,
+    owner_dimension: crate::ModelDimension,
 ) -> Option<SourceTarget> {
     let cursor = cursor_offset.min(source.len());
-    let document = crate::parse_surface_source_target_document_for_profile(source, profile);
+    let document =
+        crate::parse_surface_source_target_document_for_owner_dimension(source, owner_dimension);
     resolve_source_target_from_document(&document, cursor)
 }
 
@@ -1095,15 +1097,14 @@ fn source_visual3d_cells(
         .chars()
         .take(palette_len)
         .collect::<Vec<_>>();
-    for (source_slice, slice) in layers.iter().enumerate() {
-        let world_z = size - 1 - source_slice;
+    for (z, slice) in layers.iter().enumerate() {
         for (y, row) in slice.iter().enumerate() {
             for (x, ch) in row.chars().enumerate() {
                 if ch == '.' || ch == ' ' {
                     continue;
                 }
                 let color_index = keys.iter().position(|key| *key == ch)?;
-                let cell_index = (world_z * size + y) * size + x;
+                let cell_index = (z * size + y) * size + x;
                 cells[cell_index] = Some(color_index);
             }
         }
@@ -1190,10 +1191,13 @@ fn escape_json_string(out: &mut String, value: &str) {
 mod tests {
     use super::{
         SoundSourceTargetKind, SourceTargetKind, SourceVisualPaletteEntry, SourceVisualShapeAsset,
-        SourceVisualStatus, resolve_source_entries_from_document, resolve_source_target,
-        resolve_source_target_for_profile,
+        SourceVisualStatus, resolve_source_entries_from_document,
+        resolve_source_target_for_owner_dimension,
     };
-    use crate::PuzzleSourceProfile;
+
+    fn resolve_source_target(source: &str, cursor: usize) -> Option<super::SourceTarget> {
+        resolve_source_target_for_owner_dimension(source, cursor, crate::ModelDimension::Two)
+    }
 
     #[test]
     fn source_target_consumes_surface_visual_refs_instead_of_collecting_assets() {
@@ -1237,7 +1241,7 @@ mod tests {
     #[test]
     fn source_entries_are_built_from_surface_document_product() {
         let source = r#"
-title = source_entries
+const title = source_entries
 
 puzzle board {
 layers {
@@ -1370,9 +1374,7 @@ _P_
 }
 "#;
         let cursor = source.find("_P_").unwrap();
-        let target =
-            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
-                .unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Level);
         assert_eq!(target.dimension, Some(crate::ModelDimension::Three));
@@ -1621,8 +1623,7 @@ frame_duration 60ms
     fn explicit_shape_block_resolves_animation_rows_without_shape_ref() {
         let source = r##"
 visuals {
-visual {
-selector = Background
+visual Background {
 colors = #90ee90 #008000
 duration = 500ms
 shape = {
@@ -1764,8 +1765,7 @@ visuals {
 palette {
 accent = #e94f64
 }
-visual {
-selector = Player
+visual Player {
 colors = accent
 shape = {
 0
@@ -1813,7 +1813,7 @@ shape = {
     }
 
     #[test]
-    fn visual_source_contract_preserves_selector_and_duration_rows() {
+    fn visual_source_contract_preserves_duration_rows() {
         let source = r##"
 puzzle main {
 layers {
@@ -1838,7 +1838,6 @@ palette {
 accent = #e94f64
 }
 Player {
-selector = Player
 duration 120ms
 colors accent
 0
@@ -1854,10 +1853,7 @@ colors accent
 
         assert_eq!(
             source_visual.prelude_rows,
-            vec![
-                "selector = Player".to_string(),
-                "duration 120ms".to_string()
-            ]
+            vec!["duration 120ms".to_string()]
         );
         assert_eq!(source_visual.duration_ms, Some(120));
     }
@@ -2357,7 +2353,7 @@ shape = {
 "##;
         let cursor = source.find("TEN:horizontal").unwrap();
         let target =
-            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
+            resolve_source_target_for_owner_dimension(source, cursor, crate::ModelDimension::Three)
                 .expect("3D visual target");
         let source_visual = target.source_visual.expect("source visual contract");
 
@@ -2448,9 +2444,7 @@ shape = {
 }
 "##;
         let cursor = source.find("..0..").unwrap();
-        let target =
-            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
-                .unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.dimension, Some(crate::ModelDimension::Three));
@@ -2464,9 +2458,9 @@ shape = {
         assert_eq!(visual3d.size, Some(5));
         assert_eq!(visual3d.palette, vec!["#90ee90", "#008000"]);
         assert_eq!(visual3d.cells.len(), 125);
-        assert_eq!(visual3d.cells[(4 * 5 + 1) * 5 + 2], Some(0));
-        assert_eq!(visual3d.cells[(3 * 5) * 5], Some(1));
-        assert_eq!(visual3d.cells[(0 * 5 + 1) * 5 + 2], None);
+        assert_eq!(visual3d.cells[5 + 2], Some(0));
+        assert_eq!(visual3d.cells[5 * 5], Some(1));
+        assert_eq!(visual3d.cells[(4 * 5 + 1) * 5 + 2], None);
     }
 
     #[test]
@@ -2495,9 +2489,7 @@ shape = pulse
 }
 "#;
         let cursor = source.find("duration = 200ms").unwrap();
-        let target =
-            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
-                .unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
         let visual = target.source_visual.unwrap();
 
         assert_eq!(visual.status, SourceVisualStatus::Complete);
@@ -2552,9 +2544,7 @@ shape = {
 }
 "##;
         let cursor = source.find(".000.").unwrap();
-        let target =
-            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
-                .unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.dimension, Some(crate::ModelDimension::Three));
@@ -2573,9 +2563,7 @@ Floor {
 }
 "#;
         let cursor = source.find("Floor").unwrap() + "Floor".len();
-        let target =
-            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
-                .unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.dimension, Some(crate::ModelDimension::Three));
@@ -2605,9 +2593,7 @@ Goal {
 }
 "#;
         let cursor = source.find("Goal").unwrap();
-        let target =
-            resolve_source_target_for_profile(source, cursor, PuzzleSourceProfile::Puzzle3d)
-                .unwrap();
+        let target = resolve_source_target(source, cursor).unwrap();
 
         assert_eq!(target.kind, SourceTargetKind::Visual);
         assert_eq!(target.dimension, Some(crate::ModelDimension::Three));

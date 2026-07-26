@@ -1,11 +1,26 @@
-use crate::normalize_virtual_import_path;
-use std::path::Path;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceImportDeclaration {
+    pub range: SourceImportRange,
+    pub alias_range: SourceImportRange,
+    pub path_range: SourceImportRange,
+    pub alias: String,
+    pub raw_path: String,
+}
+
+impl SourceImportDeclaration {
+    pub(crate) fn shift_offsets(&mut self, threshold: usize, delta: i64) {
+        self.range.shift_offsets(threshold, delta);
+        self.alias_range.shift_offsets(threshold, delta);
+        self.path_range.shift_offsets(threshold, delta);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceImportReference {
     pub range: SourceImportRange,
     pub path_range: SourceImportRange,
     pub raw_path: String,
+    pub alias: String,
     pub resolved_path: String,
 }
 
@@ -15,41 +30,34 @@ pub struct SourceImportRange {
     pub end: usize,
 }
 
+impl SourceImportRange {
+    fn shift_offsets(&mut self, threshold: usize, delta: i64) {
+        if self.start >= threshold {
+            self.start = usize::try_from(self.start as i64 + delta)
+                .expect("incremental import span start underflow");
+            self.end = usize::try_from(self.end as i64 + delta)
+                .expect("incremental import span end underflow");
+        }
+    }
+}
+
 pub(crate) fn source_import_reference_at(
-    source: &str,
+    declarations: &[SourceImportDeclaration],
     document_path: &str,
     cursor: usize,
 ) -> Option<SourceImportReference> {
-    let cursor = cursor.min(source.len());
-    let line_start = source[..cursor].rfind('\n').map_or(0, |index| index + 1);
-    let line_end = source[cursor..]
-        .find('\n')
-        .map_or(source.len(), |offset| cursor + offset);
-    let line = &source[line_start..line_end];
-    let code = crate::source::strip_line_comment(line);
-    let tokens = crate::source::split_header_tokens(code.trim());
-    if !matches!(tokens.as_slice(), ["import", _]) {
-        return None;
-    }
-    let token = tokens[1];
-    let raw_path = token.strip_prefix('"')?.strip_suffix('"')?;
-    let quote_offset = code.find(token)?;
-    let start = line_start + quote_offset;
-    let end = start + token.len();
-    if cursor < start || cursor > end {
-        return None;
-    }
-    let base = Path::new(document_path)
-        .parent()
-        .unwrap_or_else(|| Path::new(""));
-    let resolved = normalize_virtual_import_path(&base.join(raw_path));
+    let declaration = declarations.iter().find(|declaration| {
+        declaration.path_range.start <= cursor && cursor <= declaration.path_range.end
+    })?;
+    let resolved = crate::WorkspacePath::parse(document_path)
+        .ok()?
+        .resolve_import(&declaration.raw_path)
+        .ok()?;
     Some(SourceImportReference {
-        range: SourceImportRange { start, end },
-        path_range: SourceImportRange {
-            start: start + 1,
-            end: end - 1,
-        },
-        raw_path: raw_path.to_string(),
-        resolved_path: resolved.to_string_lossy().into_owned(),
+        range: declaration.range,
+        path_range: declaration.path_range,
+        raw_path: declaration.raw_path.clone(),
+        alias: declaration.alias.clone(),
+        resolved_path: resolved.as_str().to_string(),
     })
 }

@@ -1,5 +1,5 @@
 use crate::DiagnosticReport;
-use crate::surface::SurfaceOptionBlock;
+use crate::surface::{SurfaceOptionBlock, SurfaceOutlinePolicy};
 use crate::syntax::puzzle_lifecycle_event;
 
 #[cfg(test)]
@@ -446,6 +446,9 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
     {
         return true;
     }
+    if crate::is_layers_merge_block(line) {
+        return true;
+    }
     matches!(
         tokens,
         ["map", ..]
@@ -453,7 +456,6 @@ fn starts_inline_block(tokens: &[&str], line: &str) -> bool {
             | ["tags"]
             | ["groups"]
             | ["layers"]
-            | ["merge"]
             | ["collision_layers"]
             | ["legend"]
             | ["win_conditions", ..]
@@ -625,6 +627,7 @@ pub(crate) enum SourceStructureEvent {
         header: String,
         scope: SourceScope,
         role: SourceBlockRole,
+        outline_policy: SurfaceOutlinePolicy,
         virtual_braces: bool,
         option_block: SurfaceOptionBlock,
     },
@@ -1206,10 +1209,13 @@ fn scan_surface_source_line(
             let role = source_block_role(stack_line, &tokens, current, opened);
             let virtual_braces = source_block_uses_virtual_braces(stack_line, current, opened);
             let opened_option_block = source_option_block_for_opening(&tokens, &state.block_stack);
+            let outline_policy =
+                source_outline_policy_for_opening(stack_line, current, opened_option_block);
             structural_events.push(SourceStructureEvent::Open {
                 header: structural_header(stack_line),
                 scope: opened,
                 role,
+                outline_policy,
                 virtual_braces,
                 option_block: opened_option_block,
             });
@@ -1744,6 +1750,22 @@ fn source_block_role(
     }
 }
 
+fn source_outline_policy_for_opening(
+    line: &str,
+    current: Option<SourceScope>,
+    option_block: SurfaceOptionBlock,
+) -> SurfaceOutlinePolicy {
+    if current == Some(SourceScope::Layers) && crate::is_layers_merge_block(line) {
+        return SurfaceOutlinePolicy::Hidden;
+    }
+    match option_block {
+        SurfaceOptionBlock::Authoring(kind) => {
+            crate::authoring_grammar::authoring_kind_spec(kind).outline_policy
+        }
+        SurfaceOptionBlock::Puzzle2 | SurfaceOptionBlock::Other => SurfaceOutlinePolicy::Visible,
+    }
+}
+
 fn source_block_uses_virtual_braces(
     line: &str,
     current: Option<SourceScope>,
@@ -1958,7 +1980,7 @@ mod tests {
     #[test]
     fn canonical_scan_is_the_strict_logical_line_owner() {
         let source = r#"
-title = "Demo"
+const title = "Demo"
 puzzle board {
 layers { objects = Box }
 visuals {
@@ -1991,7 +2013,7 @@ B
         assert_eq!(
             texts,
             vec![
-                "title = \"Demo\"",
+                "const title = \"Demo\"",
                 "puzzle board {",
                 "layers {",
                 "objects = Box",
@@ -2059,7 +2081,7 @@ B
 
     #[test]
     fn canonical_scan_preserves_structural_recovery_for_strict_rejection() {
-        let source = "title = \"unfinished\npuzzle board {\n}\n";
+        let source = "const title = \"unfinished\npuzzle board {\n}\n";
         let actual = scan_surface_source(source)
             .strict_logical_lines()
             .unwrap_err();
@@ -2261,8 +2283,8 @@ B
 
     #[test]
     fn incremental_surface_scan_shifts_reused_lexical_facts() {
-        let old = "title = x\npuzzle board {\n  rules {\n  }\n}\n";
-        let new = "title = longer\npuzzle board {\n  rules {\n  }\n}\n";
+        let old = "const title = x\npuzzle board {\n  rules {\n  }\n}\n";
+        let new = "const title = longer\npuzzle board {\n  rules {\n  }\n}\n";
         let edit_start = old.find('x').expect("edit start");
         let mut incremental = scan_surface_source(old);
 

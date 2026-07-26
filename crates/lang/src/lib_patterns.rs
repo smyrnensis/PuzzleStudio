@@ -366,13 +366,13 @@ fn parse_rewrite_effect_value(
     if let Some(text) = suffix.strip_prefix("message ") {
         let text = text.trim();
         if let Some(text) = parse_quoted_text(text) {
-            return Ok(vec![EffectAst::PresentComponent {
+            return Ok(vec![EffectAst::Message {
                 text,
                 literal: true,
             }]);
         }
         if parse_view_path(text).is_some() {
-            return Ok(vec![EffectAst::PresentComponent {
+            return Ok(vec![EffectAst::Message {
                 text: text.to_string(),
                 literal: false,
             }]);
@@ -769,6 +769,7 @@ fn resolve_relative_selectors_in_block(
     block: &PatternBlock,
     direction: OrientationEnvironment,
     direction_expanded: bool,
+    role: SelectorRole,
     line: &str,
 ) -> Result<PatternBlock, DiagnosticReport> {
     let mut block = block.clone();
@@ -779,10 +780,10 @@ fn resolve_relative_selectors_in_block(
                     continue;
                 };
                 for selector in &mut cell.require {
-                    resolve_relative_selector(selector, direction, direction_expanded, line)?;
+                    resolve_relative_selector(selector, direction, direction_expanded, role, line)?;
                 }
                 for selector in &mut cell.forbid {
-                    resolve_relative_selector(selector, direction, direction_expanded, line)?;
+                    resolve_relative_selector(selector, direction, direction_expanded, role, line)?;
                 }
                 cell.forbid
                     .retain(|selector| !selector.alternatives.is_empty());
@@ -805,10 +806,28 @@ fn block_has_unavailable_required_selector(block: &PatternBlock) -> bool {
     })
 }
 
+fn activate_rhs_assignment_transforms(block: &mut PatternBlock) {
+    for component in &mut block.components {
+        for row in &mut component.rows {
+            for part in row {
+                let BlockPart::Cell(cell) = part else {
+                    continue;
+                };
+                for selector in &mut cell.require {
+                    if selector.transform.is_none() {
+                        selector.transform = selector.rhs_assignment_transform.take();
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn resolve_relative_selector(
     selector: &mut ObjectSelector,
     direction: OrientationEnvironment,
     direction_expanded: bool,
+    role: SelectorRole,
     line: &str,
 ) -> Result<(), DiagnosticReport> {
     if selector.relative_constraints.is_empty() {
@@ -820,17 +839,79 @@ fn resolve_relative_selector(
             "relative direction selector tag requires an oriented rule",
         ));
     }
-    for constraint in &selector.relative_constraints {
-        let absolute =
-            resolve_relative_direction(constraint.relative, direction, direction_expanded, line)?;
-        let value = direction_tag_name(direction, absolute, line)?;
-        let Some(allowed) = constraint.alternatives_by_direction.get(value) else {
-            selector.alternatives.clear();
-            break;
-        };
-        selector
-            .alternatives
-            .retain(|object| allowed.contains(object));
+    match role {
+        SelectorRole::Match => {
+            for constraint in &selector.relative_constraints {
+                let absolute = resolve_relative_direction(
+                    constraint.relative,
+                    direction,
+                    direction_expanded,
+                    line,
+                )?;
+                let value = direction_tag_name(direction, absolute, line)?;
+                let Some(allowed) = constraint.alternatives_by_direction.get(value) else {
+                    selector.alternatives.clear();
+                    break;
+                };
+                selector
+                    .alternatives
+                    .retain(|object| allowed.contains(object));
+            }
+        }
+        SelectorRole::Rewrite => {
+            let source_token = selector.relative_source_token.take().ok_or_else(|| {
+                DiagnosticReport::error(
+                    "internal relative selector binding source missing".to_string(),
+                )
+            })?;
+            let mut transform = selector
+                .transform
+                .take()
+                .unwrap_or_else(|| SelectorTransform {
+                    source_token,
+                    source_binding: None,
+                    projects_source: true,
+                    mapped_objects: selector
+                        .relative_constraints
+                        .first()
+                        .map(|constraint| {
+                            constraint
+                                .source_objects
+                                .iter()
+                                .map(|object| (*object, *object))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    preserves_once_group: false,
+                });
+            for constraint in &selector.relative_constraints {
+                let absolute = resolve_relative_direction(
+                    constraint.relative,
+                    direction,
+                    direction_expanded,
+                    line,
+                )?;
+                let value = direction_tag_name(direction, absolute, line)?;
+                let Some(projection) = constraint.projections_by_direction.get(value) else {
+                    transform.mapped_objects.clear();
+                    break;
+                };
+                for target in transform.mapped_objects.values_mut() {
+                    *target = projection.get(target).copied().ok_or_else(|| {
+                        DiagnosticReport::error(
+                            "internal relative selector object projection missing".to_string(),
+                        )
+                    })?;
+                }
+            }
+            selector.alternatives = transform.mapped_objects.values().copied().collect();
+            dedup_objects(&mut selector.alternatives);
+            if selector.alternatives.len() == 1 {
+                selector.transform = None;
+            } else {
+                selector.transform = Some(transform);
+            }
+        }
     }
     selector.relative_constraints.clear();
     Ok(())
@@ -993,8 +1074,9 @@ struct ObjectSelector {
     token: String,
     alternatives: Vec<ObjectId>,
     transform: Option<SelectorTransform>,
+    rhs_assignment_transform: Option<SelectorTransform>,
     family_wildcard: Option<FamilyWildcardSelector>,
-    correspondence_source_token: Option<String>,
+    relative_source_token: Option<String>,
     relative_constraints: Vec<RelativeSelectorConstraint>,
     capture_requirements: HashMap<ObjectId, Vec<CaptureSelectorRequirement>>,
     dynamic_guards: HashMap<ObjectId, Vec<DynamicSelectorGuard>>,
@@ -1081,7 +1163,15 @@ impl TagCaptureValues {
 #[derive(Clone, Debug)]
 struct RelativeSelectorConstraint {
     relative: RelativeDirection,
+    source_objects: Vec<ObjectId>,
     alternatives_by_direction: HashMap<String, Vec<ObjectId>>,
+    projections_by_direction: HashMap<String, HashMap<ObjectId, ObjectId>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectorRole {
+    Match,
+    Rewrite,
 }
 
 #[derive(Clone, Debug)]
@@ -1161,6 +1251,8 @@ enum RewriteMark2 {
 #[derive(Clone, Debug)]
 struct SelectorTransform {
     source_token: String,
+    source_binding: Option<u16>,
+    projects_source: bool,
     mapped_objects: HashMap<ObjectId, ObjectId>,
     preserves_once_group: bool,
 }
@@ -1386,8 +1478,9 @@ fn resolve_object_selector_syntax(
             token,
             alternatives: vec![object],
             transform: None,
+            rhs_assignment_transform: None,
             family_wildcard: None,
-            correspondence_source_token: None,
+            relative_source_token: None,
             relative_constraints: Vec::new(),
             capture_requirements: HashMap::new(),
             dynamic_guards: HashMap::new(),
@@ -1402,8 +1495,9 @@ fn resolve_object_selector_syntax(
             token,
             alternatives: objects.clone(),
             transform: None,
+            rhs_assignment_transform: None,
             family_wildcard: None,
-            correspondence_source_token: None,
+            relative_source_token: None,
             relative_constraints: Vec::new(),
             capture_requirements: HashMap::new(),
             dynamic_guards: HashMap::new(),
@@ -1507,7 +1601,7 @@ fn resolve_object_selector_syntax(
                         "relative direction selector tag requires a direction-typed tag slot",
                     ));
                 }
-                source_token_parts.push((*value).to_string());
+                source_token_parts.push(puzzle_authoring::SELECTOR_WILDCARD.to_string());
                 return Ok(Some(SelectorConstraint::Relative {
                     axis_index: index,
                     relative,
@@ -1634,27 +1728,12 @@ fn resolve_object_selector_syntax(
     }
     let relative_constraints = relative_selector_constraints(&constraints, schema, &alternatives)?;
     let capture_requirements = capture_selector_requirements(&constraints, schema, &alternatives)?;
-    let correspondence_source_token = constraints
-        .iter()
-        .any(|constraint| matches!(constraint, Some(SelectorConstraint::Relative { .. })))
-        .then(|| {
-            let source_parts = constraints
-                .iter()
-                .zip(&source_token_parts)
-                .map(|(constraint, value)| {
-                    if matches!(constraint, Some(SelectorConstraint::Relative { .. })) {
-                        puzzle_authoring::SELECTOR_WILDCARD.to_string()
-                    } else {
-                        value.clone()
-                    }
-                })
-                .collect::<Vec<_>>();
-            labeled_selector_token(
-                &format!("{}:{}", parts[0], source_parts.join(":")),
-                occurrence_label.as_deref(),
-            )
-        });
-
+    let relative_source_token = (!relative_constraints.is_empty()).then(|| {
+        labeled_selector_token(
+            &format!("{}:{}", parts[0], source_token_parts.join(":")),
+            occurrence_label.as_deref(),
+        )
+    });
     if constraints
         .iter()
         .any(selector_constraint_needs_occurrence_transform)
@@ -1703,11 +1782,14 @@ fn resolve_object_selector_syntax(
             alternatives: target_objects,
             transform: Some(SelectorTransform {
                 source_token,
+                source_binding: None,
+                projects_source: true,
                 mapped_objects,
                 preserves_once_group,
             }),
+            rhs_assignment_transform: None,
             family_wildcard: None,
-            correspondence_source_token,
+            relative_source_token,
             relative_constraints,
             capture_requirements: capture_requirements.clone(),
             dynamic_guards: HashMap::new(),
@@ -1719,12 +1801,21 @@ fn resolve_object_selector_syntax(
 
     let dynamic_guards = dynamic_selector_guards(&constraints, schema, line)?;
     let tag_captures = selector_tag_captures(&constraints, schema, &alternatives)?;
+    let rhs_assignment_transform = schema_selector_rhs_assignment_transform(
+        &constraints,
+        parts[0],
+        schema,
+        &source_token_parts,
+        occurrence_label.as_deref(),
+        &alternatives,
+    )?;
     Ok(ObjectSelector {
         token,
         alternatives,
         transform: None,
+        rhs_assignment_transform,
         family_wildcard: None,
-        correspondence_source_token,
+        relative_source_token,
         relative_constraints,
         capture_requirements,
         dynamic_guards,
@@ -1753,8 +1844,9 @@ fn resolve_any_object_selector(
         token,
         alternatives,
         transform: None,
+        rhs_assignment_transform: None,
         family_wildcard: None,
-        correspondence_source_token: None,
+        relative_source_token: None,
         relative_constraints: Vec::new(),
         capture_requirements: HashMap::new(),
         dynamic_guards: HashMap::new(),
@@ -1840,9 +1932,10 @@ fn resolve_qualified_value_set_selector(
         token,
         alternatives,
         transform: None,
+        rhs_assignment_transform: None,
         family_wildcard: (can_map && !mapped_objects.is_empty())
             .then_some(FamilyWildcardSelector { mapped_objects }),
-        correspondence_source_token: None,
+        relative_source_token: None,
         relative_constraints: Vec::new(),
         capture_requirements: HashMap::new(),
         dynamic_guards,
@@ -1985,8 +2078,9 @@ fn resolve_schema_family_wildcard_selector(
         token,
         alternatives,
         transform: None,
+        rhs_assignment_transform: None,
         family_wildcard,
-        correspondence_source_token: None,
+        relative_source_token: None,
         relative_constraints: Vec::new(),
         capture_requirements: HashMap::new(),
         dynamic_guards: HashMap::new(),
@@ -2305,6 +2399,83 @@ fn selector_constraint_needs_occurrence_transform(constraint: &Option<SelectorCo
         Some(SelectorConstraint::Mapped { expr, .. }) => !value_expr_uses_tag_capture_ref(expr),
         _ => false,
     }
+}
+
+fn schema_selector_rhs_assignment_transform(
+    constraints: &[Option<SelectorConstraint>],
+    schema_name: &str,
+    schema: &ObjectSchema,
+    source_token_parts: &[String],
+    occurrence_label: Option<&str>,
+    alternatives: &[ObjectId],
+) -> Result<Option<SelectorTransform>, DiagnosticReport> {
+    if alternatives.len() <= 1
+        || !constraints
+            .iter()
+            .any(|constraint| matches!(constraint, Some(SelectorConstraint::Fixed(_))))
+        || constraints.iter().any(|constraint| {
+            matches!(
+                constraint,
+                Some(
+                    SelectorConstraint::Relative { .. }
+                        | SelectorConstraint::Mapped { .. }
+                        | SelectorConstraint::AxisComputed { .. }
+                        | SelectorConstraint::DynamicVariable { .. }
+                )
+            )
+        })
+    {
+        return Ok(None);
+    }
+
+    let source_parts = constraints
+        .iter()
+        .zip(source_token_parts)
+        .map(|(constraint, source)| {
+            if matches!(constraint, Some(SelectorConstraint::Fixed(_))) {
+                puzzle_authoring::SELECTOR_WILDCARD.to_string()
+            } else {
+                source.clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    let source_token = labeled_selector_token(
+        &format!("{}:{}", schema_name, source_parts.join(":")),
+        occurrence_label,
+    );
+    let mut mapped_objects = HashMap::new();
+    for source in &schema.variants {
+        let source_is_compatible =
+            constraints
+                .iter()
+                .enumerate()
+                .all(|(axis, constraint)| match constraint {
+                    Some(SelectorConstraint::ValueSet(values)) => {
+                        values.contains(&source.values[axis])
+                    }
+                    _ => true,
+                });
+        if !source_is_compatible {
+            continue;
+        }
+
+        let target = schema_selector_assignment_target(
+            schema,
+            source,
+            constraints,
+            None,
+            "schema selector assignment target not found",
+        )?;
+        mapped_objects.insert(source.object, target);
+    }
+
+    Ok(Some(SelectorTransform {
+        source_token,
+        source_binding: None,
+        projects_source: true,
+        mapped_objects,
+        preserves_once_group: false,
+    }))
 }
 
 fn value_expr_uses_tag_capture_ref(expr: &ValueExpr) -> bool {
@@ -2908,7 +3079,8 @@ fn relative_selector_constraints(
             continue;
         };
         let axis_values = schema_axis_values(schema, *axis_index)?;
-        let mut alternatives_by_direction = HashMap::<String, Vec<ObjectId>>::new();
+        let mut alternatives_by_direction = HashMap::new();
+        let mut projections_by_direction = HashMap::new();
         for value in axis_values {
             let mut objects = schema
                 .variants
@@ -2919,14 +3091,62 @@ fn relative_selector_constraints(
                 .map(|variant| variant.object)
                 .collect::<Vec<_>>();
             dedup_objects(&mut objects);
-            alternatives_by_direction.insert(value, objects);
+            alternatives_by_direction.insert(value.clone(), objects);
+            let mut mapped_objects = HashMap::new();
+            for source in &schema.variants {
+                let target = schema_selector_assignment_target(
+                    schema,
+                    source,
+                    constraints,
+                    Some((*axis_index, value.as_str())),
+                    "relative selector assignment target not found",
+                )?;
+                mapped_objects.insert(source.object, target);
+            }
+            projections_by_direction.insert(value, mapped_objects);
         }
         out.push(RelativeSelectorConstraint {
             relative: *relative,
+            source_objects: schema
+                .variants
+                .iter()
+                .map(|variant| variant.object)
+                .collect(),
             alternatives_by_direction,
+            projections_by_direction,
         });
     }
     Ok(out)
+}
+
+fn schema_selector_assignment_target(
+    schema: &ObjectSchema,
+    source: &ObjectVariant,
+    constraints: &[Option<SelectorConstraint>],
+    relative_assignment: Option<(usize, &str)>,
+    error_message: &str,
+) -> Result<ObjectId, DiagnosticReport> {
+    let mut target_values = source.values.clone();
+    for (axis, constraint) in constraints.iter().enumerate() {
+        match constraint {
+            Some(SelectorConstraint::Fixed(value)) => target_values[axis] = value.clone(),
+            Some(SelectorConstraint::Relative { axis_index, .. })
+                if relative_assignment
+                    .is_some_and(|(assigned_axis, _)| assigned_axis == *axis_index) =>
+            {
+                target_values[axis] = relative_assignment
+                    .map(|(_, value)| value.to_string())
+                    .expect("matching relative assignment was present");
+            }
+            _ => {}
+        }
+    }
+    schema
+        .variants
+        .iter()
+        .find(|variant| variant.values == target_values)
+        .map(|variant| variant.object)
+        .ok_or_else(|| DiagnosticReport::error(error_message.to_string()))
 }
 
 fn compile_before_after_blocks_for_direction(
@@ -2941,8 +3161,21 @@ fn compile_before_after_blocks_for_direction(
     line: &str,
     source_line_number: Option<usize>,
 ) -> Result<(PatternBlock, Vec<RuleBodyAlternative>), DiagnosticReport> {
-    let before = resolve_relative_selectors_in_block(before, direction, direction_expanded, line)?;
-    let after = resolve_relative_selectors_in_block(after, direction, direction_expanded, line)?;
+    let before = resolve_relative_selectors_in_block(
+        before,
+        direction,
+        direction_expanded,
+        SelectorRole::Match,
+        line,
+    )?;
+    let mut after = resolve_relative_selectors_in_block(
+        after,
+        direction,
+        direction_expanded,
+        SelectorRole::Rewrite,
+        line,
+    )?;
+    activate_rhs_assignment_transforms(&mut after);
     if block_has_unavailable_required_selector(&before)
         || block_has_unavailable_required_selector(&after)
     {
@@ -2992,9 +3225,17 @@ fn compile_before_after_blocks(
 
     for (before, after) in expanded_blocks {
         let dynamic_blocks = expand_dynamic_selector_blocks(&before, &after);
-        for (dynamic_guards, before, after) in dynamic_blocks {
+        for (dynamic_guards, before, mut after) in dynamic_blocks {
             let before_occurrences = collect_before_occurrences(&before);
             reject_duplicate_labeled_occurrences(&before_occurrences, line)?;
+            let before_by_token = before_occurrences_by_token(&before_occurrences);
+            resolve_rewrite_assignment_bindings(
+                &mut after,
+                &before_occurrences,
+                &before_by_token,
+                line,
+                source_line_number,
+            )?;
             let mut assignments =
                 expand_selector_assignments(&before_occurrences, object_layers, line)?;
             if before_occurrences
@@ -3003,7 +3244,6 @@ fn compile_before_after_blocks(
             {
                 assignments.reverse();
             }
-            let before_by_token = before_occurrences_by_token(&before_occurrences);
             'assignment_loop: for assignment in assignments {
                 let all_before_occurrences = &before_occurrences;
                 let tag_captures = tag_captures_for_assignment(&before_occurrences, &assignment);
@@ -4986,6 +5226,175 @@ fn selector_object_matches_capture_requirements(
     Ok(true)
 }
 
+fn resolve_selector_assignment_by_token(
+    selector: &ObjectSelector,
+    ordinal: usize,
+    assignment: &[SelectorAssignmentValue],
+    before_by_token: &HashMap<String, Vec<usize>>,
+    line: &str,
+    source_line_number: Option<usize>,
+) -> Result<ResolvedObjectOccurrence, DiagnosticReport> {
+    let before_index = before_by_token
+        .get(&selector.token)
+        .and_then(|indices| indices.get(ordinal))
+        .ok_or_else(|| {
+            parse_error_at_source_line_number(
+                line,
+                source_line_number,
+                "internal selector assignment missing",
+            )
+        })?;
+    assignment
+        .get(*before_index)
+        .map(|value| ResolvedObjectOccurrence {
+            token: selector.token.clone(),
+            matched: assignment_value_to_match(value),
+            key: Some(OccurrenceKey {
+                token: selector.token.clone(),
+                ordinal,
+            }),
+            from_multi_selector: selector.alternatives.len() > 1,
+        })
+        .ok_or_else(|| {
+            parse_error_at_source_line_number(
+                line,
+                source_line_number,
+                "internal selector assignment missing",
+            )
+        })
+}
+
+fn selector_assignment_source_occurrence_index(
+    selector: &ObjectSelector,
+    transform: &SelectorTransform,
+    ordinal: usize,
+    before_occurrences: &[SelectorOccurrence],
+    before_by_token: &HashMap<String, Vec<usize>>,
+    line: &str,
+    source_line_number: Option<usize>,
+) -> Result<usize, DiagnosticReport> {
+    if let Some(indices) = before_by_token.get(&transform.source_token) {
+        return if indices.len() == 1 {
+            Ok(indices[0])
+        } else {
+            indices.get(ordinal).copied().ok_or_else(|| {
+                parse_error_at_source_line_number(
+                    line,
+                    source_line_number,
+                    "selector assignment source occurrence missing",
+                )
+            })
+        };
+    }
+
+    let compatible = before_occurrences
+        .iter()
+        .enumerate()
+        .filter(|(_, occurrence)| {
+            selector.occurrence_label.is_none()
+                || selector.occurrence_label == occurrence.occurrence_label
+        })
+        .filter(|(_, occurrence)| {
+            occurrence
+                .alternatives
+                .iter()
+                .any(|object| transform.mapped_objects.contains_key(object))
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+
+    match compatible.as_slice() {
+        [index] => Ok(*index),
+        [] => Err(parse_error_at_source_line_number(
+            line,
+            source_line_number,
+            "selector assignment source must appear in before",
+        )),
+        _ => Err(parse_error_at_source_line_number(
+            line,
+            source_line_number,
+            "selector assignment source is ambiguous",
+        )),
+    }
+}
+
+fn resolve_rewrite_assignment_bindings(
+    after: &mut PatternBlock,
+    before_occurrences: &[SelectorOccurrence],
+    before_by_token: &HashMap<String, Vec<usize>>,
+    line: &str,
+    source_line_number: Option<usize>,
+) -> Result<(), DiagnosticReport> {
+    let mut token_counts = HashMap::<String, usize>::new();
+    for component in &mut after.components {
+        for row in &mut component.rows {
+            for part in row {
+                let BlockPart::Cell(cell) = part else {
+                    continue;
+                };
+                for selector in &mut cell.require {
+                    let ordinal = if selector.occurrence_label.is_some() {
+                        0
+                    } else {
+                        let ordinal = *token_counts.get(&selector.token).unwrap_or(&0);
+                        token_counts.insert(selector.token.clone(), ordinal + 1);
+                        ordinal
+                    };
+                    let Some(transform) = selector.transform.as_ref() else {
+                        continue;
+                    };
+                    let (source_index, projects_source) = if before_by_token
+                        .contains_key(&selector.token)
+                        && !before_by_token.contains_key(&transform.source_token)
+                    {
+                        let source_index = before_by_token
+                            .get(&selector.token)
+                            .and_then(|indices| indices.get(ordinal))
+                            .copied()
+                            .ok_or_else(|| {
+                                parse_error_at_source_line_number(
+                                    line,
+                                    source_line_number,
+                                    "selector assignment source occurrence missing",
+                                )
+                            })?;
+                        (source_index, false)
+                    } else {
+                        (
+                            selector_assignment_source_occurrence_index(
+                                selector,
+                                transform,
+                                ordinal,
+                                before_occurrences,
+                                before_by_token,
+                                line,
+                                source_line_number,
+                            )?,
+                            true,
+                        )
+                    };
+                    let source_binding = before_occurrences
+                        .get(source_index)
+                        .map(|occurrence| occurrence.binding)
+                        .ok_or_else(|| {
+                            parse_error_at_source_line_number(
+                                line,
+                                source_line_number,
+                                "selector assignment source occurrence missing",
+                            )
+                        })?;
+                    let transform = selector.transform.as_mut().expect(
+                        "selector assignment transform was present during binding resolution",
+                    );
+                    transform.source_binding = Some(source_binding);
+                    transform.projects_source = projects_source;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn block_cell_object_occurrences(
     cell: &BlockCell,
     assignment: &[SelectorAssignmentValue],
@@ -5008,25 +5417,25 @@ fn block_cell_object_occurrences(
                 ordinal
             };
             if let Some(transform) = &selector.transform {
-                let source_indices =
-                    before_by_token
-                        .get(&transform.source_token)
-                        .ok_or_else(|| {
-                            parse_error_at_source_line_number(
-                                line,
-                                source_line_number,
-                                "mapped selector source must appear in before",
-                            )
-                        })?;
-                let before_index = source_indices.get(ordinal).ok_or_else(|| {
+                let source_binding = transform.source_binding.ok_or_else(|| {
                     parse_error_at_source_line_number(
                         line,
                         source_line_number,
-                        "mapped selector source occurrence missing",
+                        "selector assignment binding was not resolved",
                     )
                 })?;
+                let before_index = before_occurrences
+                    .iter()
+                    .position(|occurrence| occurrence.binding == source_binding)
+                    .ok_or_else(|| {
+                        parse_error_at_source_line_number(
+                            line,
+                            source_line_number,
+                            "selector assignment binding source missing",
+                        )
+                    })?;
                 let source_object = assignment
-                    .get(*before_index)
+                    .get(before_index)
                     .and_then(assignment_concrete_object)
                     .ok_or_else(|| {
                         parse_error_at_source_line_number(
@@ -5035,7 +5444,22 @@ fn block_cell_object_occurrences(
                             "internal selector assignment missing",
                         )
                     })?;
-                let source = before_occurrences.get(*before_index).ok_or_else(|| {
+                let matched_object = if transform.projects_source {
+                    transform
+                        .mapped_objects
+                        .get(&source_object)
+                        .copied()
+                        .ok_or_else(|| {
+                            parse_error_at_source_line_number(
+                                line,
+                                source_line_number,
+                                "mapped selector source object missing",
+                            )
+                        })?
+                } else {
+                    source_object
+                };
+                let source = before_occurrences.get(before_index).ok_or_else(|| {
                     parse_error_at_source_line_number(
                         line,
                         source_line_number,
@@ -5044,7 +5468,7 @@ fn block_cell_object_occurrences(
                 })?;
                 let source_ordinal = before_by_token
                     .get(&source.token)
-                    .and_then(|indices| indices.iter().position(|index| index == before_index))
+                    .and_then(|indices| indices.iter().position(|index| *index == before_index))
                     .ok_or_else(|| {
                         parse_error_at_source_line_number(
                             line,
@@ -5052,84 +5476,26 @@ fn block_cell_object_occurrences(
                             "mapped selector source key missing",
                         )
                     })?;
-                return transform
-                    .mapped_objects
-                    .get(&source_object)
-                    .copied()
-                    .map(|object| ResolvedObjectOccurrence {
-                        token: selector.token.clone(),
-                        matched: ResolvedObjectMatch::Object(object),
-                        key: Some(OccurrenceKey {
-                            token: source.token.clone(),
-                            ordinal: source_ordinal,
-                        }),
-                        from_multi_selector: selector.alternatives.len() > 1,
-                    })
-                    .ok_or_else(|| {
-                        parse_error_at_source_line_number(
-                            line,
-                            source_line_number,
-                            "mapped selector source object missing",
-                        )
-                    });
-            }
-            if let Some(source_token) = &selector.correspondence_source_token
-                && let Some(source_indices) = before_by_token.get(source_token)
-            {
-                let source_index = source_indices.get(ordinal).ok_or_else(|| {
-                    parse_error_at_source_line_number(
-                        line,
-                        source_line_number,
-                        "relative selector source occurrence missing",
-                    )
-                })?;
-                let source = before_occurrences.get(*source_index).ok_or_else(|| {
-                    parse_error_at_source_line_number(
-                        line,
-                        source_line_number,
-                        "relative selector source occurrence missing",
-                    )
-                })?;
-                let target = match selector.alternatives.as_slice() {
-                    [target] => *target,
-                    _ => {
-                        return Err(parse_error_at_source_line_number(
-                            line,
-                            source_line_number,
-                            "relative selector target must resolve to one object",
-                        ));
-                    }
-                };
                 return Ok(ResolvedObjectOccurrence {
                     token: selector.token.clone(),
-                    matched: ResolvedObjectMatch::Object(target),
+                    matched: ResolvedObjectMatch::Object(matched_object),
                     key: Some(OccurrenceKey {
                         token: source.token.clone(),
-                        ordinal,
+                        ordinal: source_ordinal,
                     }),
                     from_multi_selector: selector.alternatives.len() > 1,
                 });
             }
             if let Some(before_occurrences) = before_by_token.get(&selector.token) {
-                if let Some(before_index) = before_occurrences.get(ordinal) {
-                    return assignment
-                        .get(*before_index)
-                        .map(|value| ResolvedObjectOccurrence {
-                            token: selector.token.clone(),
-                            matched: assignment_value_to_match(value),
-                            key: Some(OccurrenceKey {
-                                token: selector.token.clone(),
-                                ordinal,
-                            }),
-                            from_multi_selector: selector.alternatives.len() > 1,
-                        })
-                        .ok_or_else(|| {
-                            parse_error_at_source_line_number(
-                                line,
-                                source_line_number,
-                                "internal selector assignment missing",
-                            )
-                        });
+                if before_occurrences.get(ordinal).is_some() {
+                    return resolve_selector_assignment_by_token(
+                        selector,
+                        ordinal,
+                        assignment,
+                        before_by_token,
+                        line,
+                        source_line_number,
+                    );
                 }
                 if selector.alternatives.len() > 1
                     && selector.occurrence_label.is_none()
@@ -5746,7 +6112,7 @@ fn resolve_relative_direction(
     if !direction_expanded {
         return Err(parse_error(
             line,
-            "relative direction mark value requires an oriented rule",
+            "relative direction value requires an oriented rule",
         ));
     }
     Ok(direction.relative_vector(relative))

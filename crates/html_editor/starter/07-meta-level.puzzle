@@ -2,8 +2,8 @@
 // EXPECT: Walk onto a portal in one puzzle to choose a level in another puzzle.
 // TRY: Add a third main level and a matching portal to the selector puzzle.
 
-title = "07 — Meta Level"
-subtitle = "Use one puzzle as a playable level selector for another"
+const title = "07 — Meta Level"
+const subtitle = "Use one puzzle as a playable level selector for another"
 
 puzzle level_select {
 tags {

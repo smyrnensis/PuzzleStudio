@@ -677,7 +677,7 @@ mod tests {
     #[test]
     fn suggests_objects_by_prefix() {
         let source = r#"
-title = complete_objects
+const title = complete_objects
 puzzle board {
 tags {
 kind = A B
@@ -700,7 +700,7 @@ rules {
     #[test]
     fn suggests_selector_rhs_objects_after_assignment() {
         let source = r#"
-title = complete_selector_rhs
+const title = complete_selector_rhs
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -766,7 +766,7 @@ B = Pl
     #[test]
     fn suggests_at_prefixed_objects_from_unparsed_layer_rows() {
         let source = r#"
-title = complete_at_prefixed_objects
+const title = complete_at_prefixed_objects
 puzzle board {
 layers {
 @Count
@@ -796,7 +796,7 @@ rules {
     #[test]
     fn does_not_suggest_current_group_selector_token_as_object() {
         let source = r#"
-title = complete_group_objects
+const title = complete_group_objects
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -821,7 +821,7 @@ Actors = Pl
     #[test]
     fn does_not_suggest_current_object_definition_token() {
         let source = r#"
-title = complete_object_definitions
+const title = complete_object_definitions
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -844,7 +844,7 @@ __legacy_layer_1 = Pl
     #[test]
     fn does_not_suggest_current_layer_definition_token() {
         let source = r#"
-title = complete_layer_definitions
+const title = complete_layer_definitions
 puzzle board {
 layers {
 actor = Player
@@ -867,7 +867,7 @@ Pl
     #[test]
     fn selector_tag_completion_uses_parser_owned_literals() {
         let source = r#"
-title = complete_variants
+const title = complete_variants
 puzzle board {
 tags {
 kind = A B
@@ -907,7 +907,7 @@ X
     #[test]
     fn selector_tag_completion_replaces_only_tag_segment() {
         let source = r#"
-title = complete_variants
+const title = complete_variants
 puzzle board {
 tags {
 kind = Alpha Beta
@@ -933,7 +933,7 @@ rules {
     #[test]
     fn selector_object_completion_preserves_existing_tag_suffix() {
         let source = r#"
-title = complete_selector_object
+const title = complete_selector_object
 puzzle board {
 tags {
 kind = tag other
@@ -970,7 +970,7 @@ rules {
     #[test]
     fn selector_tag_completion_excludes_current_tag_segment() {
         let source = r#"
-title = complete_current_variant
+const title = complete_current_variant
 puzzle board {
 layers {
 actor = Box:state
@@ -1036,7 +1036,7 @@ rules {
     #[test]
     fn selector_tag_completion_does_not_suggest_current_untyped_axis() {
         let source = r#"
-title = complete_current_axis
+const title = complete_current_axis
 puzzle board {
 layers {
 actor = obj:dir
@@ -1063,7 +1063,7 @@ rules {
     #[test]
     fn labels_tag_axes_and_values_without_duplicate_axis_values() {
         let source = r#"
-title = complete_tags
+const title = complete_tags
 puzzle board {
 tags {
 color = red blue
@@ -1105,7 +1105,7 @@ for c in co
     #[test]
     fn labels_builtin_axes_by_completion_context() {
         let source = r#"
-title = complete_contextual_axes
+const title = complete_contextual_axes
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1191,7 +1191,7 @@ once hori [
     #[test]
     fn suggests_scene_names_after_goto() {
         let source = r#"
-title = complete_goto
+const title = complete_goto
 scene title {
 rules {
 input start -> goto 
@@ -1209,7 +1209,7 @@ scene playing {
     #[test]
     fn suggests_level_flow_effect_commands() {
         let source = r#"
-title = complete_level_flow_effects
+const title = complete_level_flow_effects
 scene title {
 layout {
 button "Play" -> st
@@ -1239,7 +1239,7 @@ button "New Game" -> go
     #[test]
     fn line_head_suggests_scope_words_not_every_symbol() {
         let source = r#"
-title = complete_line_head
+const title = complete_line_head
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1310,7 +1310,7 @@ rules {
     #[test]
     fn line_head_suggests_rule_heads_in_statement_blocks() {
         let source = r#"
-title = complete_statement_blocks
+const title = complete_statement_blocks
 puzzle board {
 routine setup once {
 once_
@@ -1365,7 +1365,7 @@ once_
     #[test]
     fn arrow_position_suggests_effect_words_only() {
         let source = r#"
-title = complete_arrow_position
+const title = complete_arrow_position
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1394,7 +1394,7 @@ rules {
     #[test]
     fn for_source_suggestions_use_the_shared_iterable_slots_in_scenes() {
         let source = r#"
-title = complete_scene_for_source
+const title = complete_scene_for_source
 scene menu {
 layout {
 items = 0
@@ -1416,7 +1416,7 @@ for item in
     #[test]
     fn effect_suggestions_follow_owner_scope() {
         let source = r#"
-title = complete_effect_scope
+const title = complete_effect_scope
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -1498,7 +1498,7 @@ goto menu
     #[test]
     fn suggests_sfx_with_specific_kind_after_sfx() {
         let source = r#"
-title = complete_sfx
+const title = complete_sfx
 sounds {
 sfx clear { seed = clear01; type = jump }
 music music_name { seed = bgm01 }
@@ -1521,7 +1521,7 @@ win -> sfx c
     #[test]
     fn sfx_definition_does_not_suggest_sfx_assets_after_sfx_keyword() {
         let source = r#"
-title = complete_sounds_sfx
+const title = complete_sounds_sfx
 sounds {
 sfx clear { seed = clear01; type = jump }
 sfx c
@@ -1541,7 +1541,7 @@ sfx c
     #[test]
     fn suggests_3d_render_options_from_authoring_schema() {
         let source = r#"
-title = complete_3d_render_options
+const title = complete_3d_render_options
 puzzle board {
 layers {
 actor
@@ -1580,7 +1580,7 @@ rules {
     #[test]
     fn suggests_contextual_option_names_only_in_owned_blocks() {
         let source = r#"
-title = complete_contextual_options
+const title = complete_contextual_options
 sounds {
 sfx click se
 music bgm he
@@ -1665,7 +1665,7 @@ tw
     #[test]
     fn does_not_suggest_asset_type_keywords_for_string_asset_rows() {
         let source = r#"
-title = complete_asset_keywords
+const title = complete_asset_keywords
 assets {
 
 }
@@ -1687,7 +1687,7 @@ assets {
     #[test]
     fn suggests_theme_presets_after_theme_assignment_value() {
         let source = r#"
-title = complete_theme_presets
+const title = complete_theme_presets
 theme = "p
 "#;
         let cursor = source.find("theme = \"p").unwrap() + "theme = \"p".len();
@@ -1708,7 +1708,7 @@ theme = "p
     #[test]
     fn reports_missing_authoring_assignment_rhs_schema_in_completion_json() {
         let source = r#"
-title = complete_unknown_assignment
+const title = complete_unknown_assignment
 theme {
 unknown = li
 }
@@ -1725,7 +1725,7 @@ unknown = li
     #[test]
     fn suggests_theme_settings_inside_theme_block() {
         let source = r#"
-title = complete_theme_settings
+const title = complete_theme_settings
 theme {
 preset = "clean"
 
@@ -1759,7 +1759,7 @@ preset = "clean"
     #[test]
     fn suggests_visual_color_names_in_visual_color_rows() {
         let source = r#"
-title = complete_visual_colors
+const title = complete_visual_colors
 puzzle board {
 layers {
 __legacy_layer_0 = Box
@@ -1787,7 +1787,7 @@ Box li
     #[test]
     fn suggests_visual_shape_names_in_visual_entries() {
         let source = r#"
-title = complete_visual_resource_refs
+const title = complete_visual_resource_refs
 puzzle board {
 tags {
 kind = A B
@@ -1818,9 +1818,9 @@ shape box_
     }
 
     #[test]
-    fn suggests_declared_assets_after_visual_selector() {
+    fn suggests_declared_assets_after_visual_name() {
         let source = r#"
-title = complete_visual_assets
+const title = complete_visual_assets
 assets {
 "visuals/box.png"
 }
@@ -1844,9 +1844,9 @@ Box vis
     }
 
     #[test]
-    fn suggests_visual_selector_objects_at_visual_line_head() {
+    fn suggests_object_names_at_visual_line_head() {
         let source = r#"
-title = complete_visual_selector_line_head
+const title = complete_visual_name_line_head
 puzzle board {
 tags {
 kind = Red Blue
@@ -1904,21 +1904,20 @@ visuals {
     }
 
     #[test]
-    fn suggests_objects_after_canonical_visual_selector_setting() {
+    fn suggests_objects_after_canonical_visual_header() {
         let source = r#"
-title = complete_canonical_visual_selector
+const title = complete_canonical_visual_name
 puzzle board {
 layers {
 __legacy_layer_0 = Player
 }
 }
 visuals {
-visual {
-selector = Pl
+visual Pl {
 }
 }
 "#;
-        let cursor = source.find("selector = Pl").unwrap() + "selector = Pl".len();
+        let cursor = source.find("visual Pl").unwrap() + "visual Pl".len();
         let list = suggest_source_completions(source, cursor);
 
         assert!(
@@ -1931,7 +1930,7 @@ selector = Pl
     #[test]
     fn suggests_color_names_for_theme_setting_values() {
         let source = r#"
-title = complete_theme_color_values
+const title = complete_theme_color_values
 theme {
 background_color = li
 }
@@ -1952,7 +1951,7 @@ background_color = li
     #[test]
     fn sounds_authoring_block_suggests_sfx_child() {
         let source = r#"
-title = complete_sounds_keyword
+const title = complete_sounds_keyword
 sounds {
 s
 }
@@ -1976,7 +1975,7 @@ s
     #[test]
     fn builtin_presentation_commands_are_effects_not_commands() {
         let source = r#"
-title = complete_emissions
+const title = complete_emissions
 sounds {
 sfx clear { seed = clear01; type = jump }
 }
@@ -2009,7 +2008,7 @@ win -> s
     #[test]
     fn builtin_model_commands_are_effects_not_commands() {
         let source = r#"
-title = complete_effects
+const title = complete_effects
 puzzle board {
 layers {
 __legacy_layer_0 = Player
@@ -2038,7 +2037,7 @@ rules {
     #[test]
     fn suggests_boolean_literals() {
         let source = r#"
-title = complete_boolean_literals
+const title = complete_boolean_literals
 puzzle board {
 var enabled = tr
 rules {
@@ -2064,7 +2063,7 @@ if enabled == fa
     #[test]
     fn does_not_suggest_removed_command_keyword() {
         let source = r#"
-title = complete_removed_command
+const title = complete_removed_command
 puzzle board {
 co
 }
@@ -2092,7 +2091,7 @@ co
         );
 
         let puzzle_source = r#"
-title = complete_removed_variable
+const title = complete_removed_variable
 puzzle board {
 g
 }
@@ -2110,7 +2109,7 @@ g
     #[test]
     fn suggests_layer_named_object_as_object() {
         let source = r#"
-title = complete_layer_object
+const title = complete_layer_object
 puzzle board {
 layers {
 floor = layer
@@ -2133,7 +2132,7 @@ rules {
     #[test]
     fn suggests_all_puzzle_lifecycle_blocks() {
         let source = r#"
-title = complete_lifecycle
+const title = complete_lifecycle
 puzzle board {
 on_
 }
@@ -2196,8 +2195,6 @@ on_
             ("sounds", CompletionKind::Keyword),
             ("assets", CompletionKind::Keyword),
             ("input_buffer", CompletionKind::Keyword),
-            ("title", CompletionKind::Setting),
-            ("author", CompletionKind::Setting),
         ] {
             assert!(
                 list.items
@@ -2220,8 +2217,6 @@ on_
             "sounds",
             "assets",
             "input_buffer",
-            "title",
-            "author",
         ] {
             assert!(
                 !keywords.contains(&schema_owned),
@@ -2236,7 +2231,7 @@ on_
     #[test]
     fn distinguishes_value_sets_and_puzzles() {
         let source = r#"
-title = complete_kinds
+const title = complete_kinds
 puzzle sokoban {
 tags {
 kind = A B
@@ -2296,7 +2291,7 @@ for value in ki
     #[test]
     fn layer_names_are_single_selector_completions() {
         let source = r#"
-title = complete_layer_selectors
+const title = complete_layer_selectors
 puzzle board {
 layers {
 floor = Goal

@@ -239,6 +239,7 @@ impl VisualShapeRotation {
 #[derive(Clone, Debug)]
 struct VisualEntrySpec {
     source_line: String,
+    source_line_number: usize,
     selector: Option<String>,
     color_exprs: Option<Vec<(char, String)>>,
     transforms: Vec<(crate::visual_authoring::VisualPropertySyntax, String)>,
@@ -253,9 +254,10 @@ struct VisualEntrySpec {
 }
 
 impl VisualEntrySpec {
-    fn new(source_line: &str, rotation: Option<VisualShapeRotation>) -> Self {
+    fn new(source: &source::LogicalLine, rotation: Option<VisualShapeRotation>) -> Self {
         Self {
-            source_line: source_line.to_string(),
+            source_line: source.text.clone(),
+            source_line_number: source.line,
             selector: None,
             color_exprs: None,
             transforms: Vec::new(),
@@ -868,7 +870,7 @@ fn lower_visual_attachment_entry(
     catalog: &Catalog,
     visuals: &mut VisualsDef,
 ) -> Result<(), DiagnosticReport> {
-    let mut entry = VisualEntrySpec::new(&attachment.header, None);
+    let mut entry = VisualEntrySpec::new(&attachment.header_line, None);
     apply_visual_attachment_body(&mut entry, analyzed, plain_shapes)?;
     lower_visual_entry(
         entry,
@@ -898,7 +900,7 @@ fn analyze_visual_attachment_entry(
 ) -> AnalyzedVisualAttachment {
     let empty_bindings = HashMap::new();
     let analyzed = crate::visual_authoring::analyze_visual_body_product(
-        Some(&attachment.header),
+        Some(&attachment.header_line),
         &attachment.body_lines,
         |name| plain_shapes.contains_key(name) || shapes.contains_key(name),
         |expr| {
@@ -1303,6 +1305,9 @@ fn lower_visual_entry(
     catalog: &Catalog,
     visuals: &mut VisualsDef,
 ) -> Result<(), DiagnosticReport> {
+    let first_alias = visuals.aliases.len();
+    let first_visual = visuals.entries.len();
+    let source_line_number = entry.source_line_number;
     let selector = entry.selector()?.to_string();
     let line = entry.source_line.as_str();
     if let Some(source) = entry.image_source {
@@ -1349,7 +1354,7 @@ fn lower_visual_entry(
             ));
         };
         validate_visual_pattern_palette(&pattern, &color_exprs, line)?;
-        let targets = expand_visual_selector(&selector, line, catalog)?;
+        let targets = resolve_visual_targets(&selector, line, catalog)?;
         let axis = visual_rotation_axis_for_targets(&targets, catalog, &rotation, line)?;
         let mut entries = HashMap::new();
         entries.insert(rotation.from.clone(), pattern.clone());
@@ -1452,6 +1457,14 @@ fn lower_visual_entry(
             visuals,
         )?;
     }
+    for alias in &mut visuals.aliases[first_alias..] {
+        alias.source_line = Some(line.to_string());
+        alias.source_line_number = Some(source_line_number);
+    }
+    for visual in &mut visuals.entries[first_visual..] {
+        visual.source_line = Some(line.to_string());
+        visual.source_line_number = Some(source_line_number);
+    }
     Ok(())
 }
 
@@ -1499,7 +1512,7 @@ fn parse_visual_image_path(value: &str, line: &str) -> Result<String, Diagnostic
     {
         return Err(parse_error(
             line,
-            "visual image path must be a game-folder relative path",
+            "visual image path must be a workspace-relative path",
         ));
     }
     if !is_visual_image_source(path) {
@@ -1512,14 +1525,14 @@ fn parse_visual_image_path(value: &str, line: &str) -> Result<String, Diagnostic
 }
 
 fn visual_rotation_axis_for_targets(
-    targets: &[VisualSelectorTarget],
+    targets: &[VisualTarget],
     catalog: &Catalog,
     rotation: &VisualShapeRotation,
     line: &str,
 ) -> Result<String, DiagnosticReport> {
     let first = targets
         .first()
-        .ok_or_else(|| parse_error(line, "visual selector matched no objects"))?;
+        .ok_or_else(|| parse_error(line, "visual name produced no targets"))?;
     let mut candidates = first
         .bindings
         .keys()
@@ -1537,7 +1550,7 @@ fn visual_rotation_axis_for_targets(
     let [axis] = candidates.as_slice() else {
         return Err(parse_error(
             line,
-            "visual rotation requires exactly one matching selector tag set",
+            "visual rotation requires exactly one matching bound tag set",
         ));
     };
     Ok(axis.clone())
@@ -2287,7 +2300,7 @@ pub(crate) fn eval_visual_transforms(
                 Ok(VisualTransform::Rotate {
                     degrees: degrees.as_f64(),
                     axis: eval_visual_axis_expr(
-                        axis.as_deref().unwrap_or("up"),
+                        axis.as_deref().unwrap_or("down"),
                         bindings,
                         expression_line,
                     )?,
@@ -2376,9 +2389,9 @@ fn eval_visual_angle_expr(
 fn visual_direction_degrees(value: &str) -> Option<Rational> {
     Some(match value {
         "right" => Rational::ZERO,
-        "up" | "front" => Rational::integer(90),
+        "up" | "back" => Rational::integer(90),
         "left" => Rational::integer(180),
-        "down" | "back" => Rational::integer(-90),
+        "down" | "front" => Rational::integer(-90),
         _ => return None,
     })
 }
@@ -2453,10 +2466,10 @@ fn eval_visual_axis_expr(
     let value = match expression {
         "right" => [1.0, 0.0, 0.0],
         "left" => [-1.0, 0.0, 0.0],
-        "front" => [0.0, 1.0, 0.0],
-        "back" => [0.0, -1.0, 0.0],
-        "up" => [0.0, 0.0, 1.0],
-        "down" => [0.0, 0.0, -1.0],
+        "front" => [0.0, -1.0, 0.0],
+        "back" => [0.0, 1.0, 0.0],
+        "up" => [0.0, 0.0, -1.0],
+        "down" => [0.0, 0.0, 1.0],
         _ => eval_visual_vector_expr(expression, bindings, line)?.map(Rational::as_f64),
     };
     let length = value
@@ -2574,7 +2587,7 @@ fn add_ascii_visuals(
     catalog: &Catalog,
     visuals: &mut VisualsDef,
 ) -> Result<(), DiagnosticReport> {
-    for target in expand_visual_selector(selector, line, catalog)? {
+    for target in resolve_visual_targets(selector, line, catalog)? {
         let transforms = eval_visual_transforms(transform_exprs, &target.bindings, line)?;
         let env = visual_value_env(&target.bindings);
         if value_expr_result_axis(shape_value_expr, &env, &catalog.maps, line)? != shape.axis {
@@ -2613,10 +2626,14 @@ fn add_ascii_visuals(
             visuals.aliases.push(VisualAliasDef {
                 object: target.object_name,
                 visual: visual.clone(),
+                source_line: None,
+                source_line_number: None,
             });
         }
         visuals.entries.push(VisualDef {
             name: visual,
+            source_line: None,
+            source_line_number: None,
             frames: vec![VisualFrameDef {
                 planes: vec![pattern],
             }],
@@ -2649,7 +2666,7 @@ fn add_inline_ascii_visuals(
             validate_visual_pattern_palette(plane, color_exprs, line)?;
         }
     }
-    for target in expand_visual_selector(selector, line, catalog)? {
+    for target in resolve_visual_targets(selector, line, catalog)? {
         let transforms = eval_visual_transforms(transform_exprs, &target.bindings, line)?;
         let colors = color_exprs
             .iter()
@@ -2672,10 +2689,14 @@ fn add_inline_ascii_visuals(
             visuals.aliases.push(VisualAliasDef {
                 object: target.object_name,
                 visual: visual.clone(),
+                source_line: None,
+                source_line_number: None,
             });
         }
         visuals.entries.push(VisualDef {
             name: visual,
+            source_line: None,
+            source_line_number: None,
             frames: frames.to_vec(),
             transforms,
             fit: VisualFit::default(),
@@ -2699,7 +2720,7 @@ fn add_solid_visuals(
     catalog: &Catalog,
     visuals: &mut VisualsDef,
 ) -> Result<(), DiagnosticReport> {
-    for target in expand_visual_selector(selector, line, catalog)? {
+    for target in resolve_visual_targets(selector, line, catalog)? {
         let transforms = eval_visual_transforms(transform_exprs, &target.bindings, line)?;
         let visual = visual_name_for_object(&target.object_name);
         let color = resolve_visual_color_expr(
@@ -2714,10 +2735,14 @@ fn add_solid_visuals(
             visuals.aliases.push(VisualAliasDef {
                 object: target.object_name,
                 visual: visual.clone(),
+                source_line: None,
+                source_line_number: None,
             });
         }
         visuals.entries.push(VisualDef {
             name: visual,
+            source_line: None,
+            source_line_number: None,
             frames: Vec::new(),
             transforms,
             fit: VisualFit::default(),
@@ -2739,17 +2764,21 @@ fn add_image_visuals(
     catalog: &Catalog,
     visuals: &mut VisualsDef,
 ) -> Result<(), DiagnosticReport> {
-    for target in expand_visual_selector(selector, line, catalog)? {
+    for target in resolve_visual_targets(selector, line, catalog)? {
         let transforms = eval_visual_transforms(transform_exprs, &target.bindings, line)?;
         let visual = visual_name_for_object(&target.object_name);
         if target.bind_object {
             visuals.aliases.push(VisualAliasDef {
                 object: target.object_name,
                 visual: visual.clone(),
+                source_line: None,
+                source_line_number: None,
             });
         }
         visuals.entries.push(VisualDef {
             name: visual,
+            source_line: None,
+            source_line_number: None,
             frames: Vec::new(),
             transforms,
             fit: VisualFit::default(),
@@ -2813,46 +2842,50 @@ fn resolve_visual_color_expr_with_aliases(
 }
 
 #[derive(Clone, Debug)]
-struct VisualSelectorTarget {
+struct VisualTarget {
     object_name: String,
     bindings: HashMap<String, String>,
     bind_object: bool,
 }
 
-fn expand_visual_selector(
-    selector: &str,
+fn standalone_visual_target(name: &str) -> Vec<VisualTarget> {
+    vec![VisualTarget {
+        object_name: name.to_string(),
+        bindings: HashMap::new(),
+        bind_object: false,
+    }]
+}
+
+fn resolve_visual_targets(
+    name: &str,
     line: &str,
     catalog: &Catalog,
-) -> Result<Vec<VisualSelectorTarget>, DiagnosticReport> {
-    if let Some(name) = selector.strip_prefix('!') {
-        if !puzzle_authoring::is_qualified_identifier(name) {
+) -> Result<Vec<VisualTarget>, DiagnosticReport> {
+    if let Some(asset_name) = name.strip_prefix('!') {
+        if !puzzle_authoring::is_qualified_identifier(asset_name) {
             return Err(parse_error(line, "invalid named visual"));
         }
-        return Ok(vec![VisualSelectorTarget {
-            object_name: name.to_string(),
-            bindings: HashMap::new(),
-            bind_object: false,
-        }]);
+        return Ok(standalone_visual_target(asset_name));
     }
-    if !selector.contains(':')
-        && let Some(object) = catalog.object_names.get(selector).copied()
+    if !name.contains(':')
+        && let Some(object) = catalog.object_names.get(name).copied()
     {
         let name = catalog
             .object_labels
             .get(&object)
             .cloned()
-            .unwrap_or_else(|| selector.to_string());
-        return Ok(vec![VisualSelectorTarget {
+            .unwrap_or_else(|| name.to_string());
+        return Ok(vec![VisualTarget {
             object_name: name,
             bindings: HashMap::new(),
             bind_object: true,
         }]);
     }
-    if let Some(objects) = catalog.object_groups.get(selector) {
+    if let Some(objects) = catalog.object_groups.get(name) {
         return Ok(objects
             .iter()
             .filter_map(|object| catalog.object_labels.get(object).cloned())
-            .map(|object_name| VisualSelectorTarget {
+            .map(|object_name| VisualTarget {
                 object_name,
                 bindings: HashMap::new(),
                 bind_object: true,
@@ -2860,59 +2893,54 @@ fn expand_visual_selector(
             .collect());
     }
 
-    if !selector.contains(':') && puzzle_authoring::is_qualified_identifier(selector) {
-        return Ok(vec![VisualSelectorTarget {
-            object_name: selector.to_string(),
-            bindings: HashMap::new(),
-            bind_object: false,
-        }]);
+    if !name.contains(':') && puzzle_authoring::is_qualified_identifier(name) {
+        return Ok(standalone_visual_target(name));
     }
 
-    let parts = selector.split(':').collect::<Vec<_>>();
+    let parts = name.split(':').collect::<Vec<_>>();
     let Some(schema) = catalog.object_schemas.get(parts[0]) else {
-        return Err(parse_error(line, "unknown visual object selector"));
+        if puzzle_authoring::is_visual_definition_target(name) {
+            return Ok(standalone_visual_target(name));
+        }
+        return Err(parse_error(line, "invalid visual name"));
     };
     if parts.len() - 1 > schema.axes.len() {
-        return Err(parse_error(
-            line,
-            "visual object selector has too many tags",
-        ));
+        return Ok(standalone_visual_target(name));
     }
 
-    let constraints = visual_selector_constraints(&parts, schema, catalog, line)?;
-    let assignments = visual_selector_assignments(schema, &constraints, &catalog.maps, line)?;
+    let Ok(constraints) = visual_selector_constraints(&parts, schema, catalog, line) else {
+        return Ok(standalone_visual_target(name));
+    };
+    let Ok(assignments) = visual_selector_assignments(schema, &constraints, &catalog.maps, line)
+    else {
+        return Ok(standalone_visual_target(name));
+    };
     let mut targets = Vec::new();
     for (target_values, bindings) in assignments {
-        let variant = schema
+        let Some(variant) = schema
             .variants
             .iter()
             .find(|variant| variant.values == target_values)
-            .ok_or_else(|| parse_error(line, "visual object selector target not found"))?;
-        let object_name = catalog
-            .object_labels
-            .get(&variant.object)
-            .cloned()
-            .ok_or_else(|| parse_error(line, "visual object label missing"))?;
+        else {
+            return Ok(standalone_visual_target(name));
+        };
+        let Some(object_name) = catalog.object_labels.get(&variant.object).cloned() else {
+            return Ok(standalone_visual_target(name));
+        };
         if targets
             .iter()
-            .any(|target: &VisualSelectorTarget| target.object_name == object_name)
+            .any(|target: &VisualTarget| target.object_name == object_name)
         {
-            return Err(parse_error(
-                line,
-                "visual object selector maps multiple bindings to one object",
-            ));
+            return Ok(standalone_visual_target(name));
         }
-        targets.push(VisualSelectorTarget {
+        targets.push(VisualTarget {
             object_name,
             bindings,
             bind_object: true,
         });
     }
     if targets.is_empty() {
-        return Err(parse_error(
-            line,
-            "visual object selector matched no objects",
-        ));
+        return Ok(standalone_visual_target(name));
     }
     Ok(targets)
 }

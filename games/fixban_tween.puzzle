@@ -1,6 +1,6 @@
-title = "Fixban Tween"
-subtitle = "Canonical Fixban with movement tween"
-author = "PuzzleStudio"
+const title = "Fixban Tween"
+const subtitle = "Canonical Fixban with movement tween"
+const author = "PuzzleStudio"
 
 theme {
 preset = "puzzlescript"

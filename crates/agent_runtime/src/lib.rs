@@ -7,13 +7,14 @@ use std::fs;
 
 use puzzle_solver_runtime::investigation::InvestigationService;
 pub use puzzle_solver_runtime::investigation::{
-    InvestigationCommand as AgentCommand, InvestigationError as AgentError, ObservationMode,
-    ObservationRequest, SearchSessionAllowance, SearchSessionLimits, SemanticGoalArtifact,
-    SemanticGoalSearchAlgorithm, SemanticGoalSearchBudget, SemanticLegendMeaning,
-    SemanticStateArtifact,
+    DeriveStateRequest, InvestigationCommand as AgentCommand, InvestigationError as AgentError,
+    ObservationMode, ObservationRequest, SearchSessionAllowance, SearchSessionLimits,
+    SemanticGoalArtifact, SemanticGoalSearchAlgorithm, SemanticGoalSearchBudget,
+    SemanticLegendMeaning, SemanticObjectPositions, SemanticStateArtifact, SemanticStateAssertion,
+    SemanticVariableValue, StartLevelFromStateRequest,
 };
 
-pub const AGENT_PROTOCOL_VERSION: u32 = 1;
+pub const AGENT_PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -129,7 +130,7 @@ mod tests {
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
     const SOURCE: &str = r#"
-title = agent_session
+const title = agent_session
 
 puzzle board {
 layers {
@@ -159,22 +160,163 @@ P.G
 }
 "#;
 
+    const VARIABLE_SOURCE: &str = r#"
+const title = agent_variable_state
+
+puzzle board {
+var count = 0
+persistent var saved = 0
+
+layers {
+actor = Player
+}
+keys {
+d ArrowRight -> right
+}
+rules {
+input right [ Player ] -> [ Player ]
+}
+}
+
+levels tiny of board {
+legend {
+P = Player
+}
+level "start" {
+P
+}
+}
+"#;
+
+    const LEVEL_START_SOURCE: &str = r#"
+const title = agent_level_start_state
+
+puzzle board {
+persistent var starts = 0
+var count = 0
+
+layers {
+floor = Started
+actor = Player
+}
+keys {
+d ArrowRight -> right
+}
+on_level_start {
+starts += 1
+count += 1
+once [ Player no Started ] -> [ Player Started ]
+}
+rules {
+input right [ Player | no actor ] -> [ | Player ]
+}
+}
+
+levels tiny of board {
+legend {
+. = empty
+P = Player
+}
+level "start" {
+P..
+}
+}
+"#;
+
+    const FAILING_LEVEL_START_SOURCE: &str = r#"
+const title = failing_agent_level_start
+
+puzzle board {
+var count = 1
+layers { actor = Player }
+empty .
+on_level_start {
+count /= 0
+}
+rules {}
+levels {
+legend { P = Player }
+level "start" { P }
+}
+}
+"#;
+
+    const DERIVED_CHECKPOINT_SOURCE: &str = r#"
+const title = derived_checkpoint_state
+
+puzzle board {
+layers { actor = Player }
+empty .
+input save
+rules {
+if input == right {
+once right [ Player | no Player ] -> [ | Player ]
+}
+if input == save {
+checkpoint
+}
+}
+levels {
+legend { P = Player }
+level "start" { P.. }
+}
+}
+"#;
+
     fn write_source() -> std::path::PathBuf {
         write_source_text(SOURCE)
     }
 
     fn write_source_text(source: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().join(format!(
             "puzzle-agent-runtime-{}-{}.puzzle",
             std::process::id(),
             NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
         ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("game.puzzle");
         fs::write(&path, source).unwrap();
         path
     }
 
+    fn remove_source(path: std::path::PathBuf) {
+        let directory = path.parent().unwrap().to_path_buf();
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
+
     fn request(server: &mut AgentServer, value: Value) -> Value {
         serde_json::from_str(&server.handle_line(&value.to_string())).unwrap()
+    }
+
+    #[test]
+    fn protocol_v2_rejects_v1_requests() {
+        let mut server = AgentServer::new();
+        let response: Value = serde_json::from_str(
+            &server.handle_line(r#"{"version":1,"op":"manifest","sessionId":"missing"}"#),
+        )
+        .unwrap();
+
+        assert_eq!(response["version"], AGENT_PROTOCOL_VERSION);
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "contract_version_mismatch");
+    }
+
+    #[test]
+    fn one_shot_search_requires_explicit_stored_node_limit() {
+        let mut server = AgentServer::new();
+        let response: Value = serde_json::from_str(&server.handle_line(
+            r#"{"version":2,"op":"solve_semantic_goal","sessionId":"session-1","goalId":"goal-1","fromStateId":"state-1","algorithm":"best_first","budget":{"maxDepth":1,"maxNodes":10,"maxMillis":1000}}"#,
+        ))
+        .unwrap();
+
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "invalid_request");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("maxStoredNodes"))
+        );
     }
 
     #[test]
@@ -183,7 +325,7 @@ P.G
         let mut server = AgentServer::new();
         let compiled = request(
             &mut server,
-            json!({ "version": 1, "requestId": "c", "op": "compile", "path": path }),
+            json!({ "version": AGENT_PROTOCOL_VERSION, "requestId": "c", "op": "compile", "path": path }),
         );
         assert_eq!(compiled["ok"], true);
         let session = compiled["data"]["sessionId"].as_str().unwrap();
@@ -194,7 +336,7 @@ P.G
         let run = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "run",
                 "sessionId": session,
                 "fromStateId": initial,
@@ -210,7 +352,7 @@ P.G
         let repeated = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "run",
                 "sessionId": session,
                 "fromStateId": initial,
@@ -227,7 +369,7 @@ P.G
         let compared = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "compare_states",
                 "sessionId": session,
                 "leftStateId": run["data"]["terminalStateId"],
@@ -239,7 +381,7 @@ P.G
         let inspected = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "inspect_run",
                 "sessionId": session,
                 "runId": run["data"]["runId"],
@@ -249,7 +391,62 @@ P.G
         );
         assert_eq!(inspected["ok"], true, "{inspected}");
         assert_eq!(inspected["data"]["points"].as_array().unwrap().len(), 2);
-        let _ = fs::remove_file(path);
+        remove_source(path);
+    }
+
+    #[test]
+    fn selected_level_run_is_independent_of_intro_presentation() {
+        let path = write_source_text(
+            r#"
+const title = agent_selected_level
+puzzle board {
+layers { actor = Player }
+empty .
+keys { d ArrowRight -> right }
+rules {
+input right [ Player | no actor ] -> [ | Player ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "intro" {
+message "intro"
+P.
+}
+level "target" {
+message "target"
+P.
+}
+}
+}
+"#,
+        );
+        let mut server = AgentServer::new();
+        let compiled = request(
+            &mut server,
+            json!({ "version": AGENT_PROTOCOL_VERSION, "op": "compile", "path": path, "model": "board" }),
+        );
+        assert_eq!(compiled["ok"], true, "{compiled}");
+        let session = compiled["data"]["sessionId"].as_str().unwrap();
+        let target = compiled["data"]["initialStates"][1]["stateId"]
+            .as_str()
+            .unwrap();
+
+        let run = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "run",
+                "sessionId": session,
+                "fromStateId": target,
+                "inputs": ["right"]
+            }),
+        );
+        assert_eq!(run["ok"], true, "{run}");
+        assert_eq!(run["data"]["executedInputs"], 1, "{run}");
+        remove_source(path);
     }
 
     #[test]
@@ -260,7 +457,7 @@ P.G
         let compiled = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "compile",
                 "path": path,
                 "model": "main"
@@ -275,7 +472,7 @@ P.G
         let run = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "run",
                 "sessionId": session,
                 "fromStateId": initial,
@@ -296,7 +493,7 @@ P.G
         let compiled = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "compile",
                 "path": path,
                 "model": "board"
@@ -310,7 +507,7 @@ P.G
         let exported = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "export_semantic_state",
                 "sessionId": session,
                 "stateId": initial
@@ -324,7 +521,7 @@ P.G
         let imported = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "import_semantic_goal",
                 "sessionId": session,
                 "artifact": goal
@@ -336,13 +533,13 @@ P.G
         let solved = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "solve_semantic_goal",
                 "sessionId": session,
                 "goalId": goal_id,
                 "fromStateId": initial,
                 "algorithm": "bfs",
-                "budget": { "maxDepth": 1, "maxNodes": 10, "maxMillis": 1000 }
+                "budget": { "maxDepth": 1, "maxStoredNodes": 10, "maxMillis": 1000 }
             }),
         );
         assert_eq!(solved["ok"], true, "{solved}");
@@ -356,7 +553,7 @@ P.G
     fn semantic_search_matches_completion_observation_before_next_level() {
         let path = write_source_text(
             r#"
-title = semantic_completion_observation
+const title = semantic_completion_observation
 puzzle board {
 layers {
 floor = Goal
@@ -398,7 +595,7 @@ level "second" {
         let mut server = AgentServer::new();
         let compiled = request(
             &mut server,
-            json!({ "version": 1, "op": "compile", "path": path, "model": "board" }),
+            json!({ "version": AGENT_PROTOCOL_VERSION, "op": "compile", "path": path, "model": "board" }),
         );
         assert_eq!(compiled["ok"], true, "{compiled}");
         let session = compiled["data"]["sessionId"].as_str().unwrap();
@@ -408,7 +605,7 @@ level "second" {
         let exported = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "export_semantic_state",
                 "sessionId": session,
                 "stateId": initial
@@ -425,7 +622,7 @@ level "second" {
         let imported = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "import_semantic_goal",
                 "sessionId": session,
                 "artifact": goal
@@ -436,13 +633,13 @@ level "second" {
         let solved = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "solve_semantic_goal",
                 "sessionId": session,
                 "goalId": imported["data"]["goalId"],
                 "fromStateId": initial,
                 "algorithm": "bfs",
-                "budget": { "maxDepth": 1, "maxNodes": 10, "maxMillis": 1000 }
+                "budget": { "maxDepth": 1, "maxStoredNodes": 10, "maxMillis": 1000 }
             }),
         );
         assert_eq!(solved["ok"], true, "{solved}");
@@ -452,7 +649,7 @@ level "second" {
         let terminal = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "inspect_state",
                 "sessionId": session,
                 "stateId": solved["data"]["terminalStateId"]
@@ -462,7 +659,7 @@ level "second" {
         let continued = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "run",
                 "sessionId": session,
                 "fromStateId": solved["data"]["terminalStateId"],
@@ -470,7 +667,7 @@ level "second" {
             }),
         );
         assert_eq!(continued["ok"], true, "{continued}");
-        let _ = fs::remove_file(path);
+        remove_source(path);
     }
 
     #[test]
@@ -479,7 +676,7 @@ level "second" {
         let mut server = AgentServer::new();
         let compiled = request(
             &mut server,
-            json!({ "version": 1, "op": "compile", "path": path }),
+            json!({ "version": AGENT_PROTOCOL_VERSION, "op": "compile", "path": path }),
         );
         let session = compiled["data"]["sessionId"].as_str().unwrap();
         let initial = compiled["data"]["initialStates"][0]["stateId"]
@@ -488,7 +685,7 @@ level "second" {
         let failed = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "run",
                 "sessionId": session,
                 "fromStateId": initial,
@@ -498,10 +695,10 @@ level "second" {
         assert_eq!(failed["error"]["code"], "unknown_input");
         let manifest = request(
             &mut server,
-            json!({ "version": 1, "op": "manifest", "sessionId": session }),
+            json!({ "version": AGENT_PROTOCOL_VERSION, "op": "manifest", "sessionId": session }),
         );
         assert_eq!(manifest["ok"], true);
-        let _ = fs::remove_file(path);
+        remove_source(path);
     }
 
     #[test]
@@ -510,7 +707,7 @@ level "second" {
         let mut server = AgentServer::new();
         let compiled = request(
             &mut server,
-            json!({ "version": 1, "op": "compile", "path": path }),
+            json!({ "version": AGENT_PROTOCOL_VERSION, "op": "compile", "path": path }),
         );
         let session = compiled["data"]["sessionId"].as_str().unwrap();
         let initial = compiled["data"]["initialStates"][0]["stateId"]
@@ -519,7 +716,7 @@ level "second" {
         let exported = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "export_semantic_state",
                 "sessionId": session,
                 "stateId": initial
@@ -533,7 +730,7 @@ level "second" {
         let rejected = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "import_semantic_state",
                 "sessionId": session,
                 "artifact": stale
@@ -546,7 +743,7 @@ level "second" {
         let rejected_unknown = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "import_semantic_state",
                 "sessionId": session,
                 "artifact": state_with_unknown
@@ -562,7 +759,7 @@ level "second" {
         let rejected_predicate = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "import_semantic_state",
                 "sessionId": session,
                 "artifact": state_with_predicate
@@ -576,7 +773,7 @@ level "second" {
         let round_trip = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "import_semantic_state",
                 "sessionId": session,
                 "artifact": exported["data"].clone()
@@ -610,7 +807,7 @@ level "second" {
         let imported = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "import_semantic_state",
                 "sessionId": session,
                 "artifact": edited
@@ -629,7 +826,7 @@ level "second" {
         let run = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "run",
                 "sessionId": session,
                 "fromStateId": hypothetical,
@@ -646,7 +843,7 @@ level "second" {
         let goal = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "import_semantic_goal",
                 "sessionId": session,
                 "artifact": goal_artifact
@@ -660,7 +857,7 @@ level "second" {
         let initial_evaluation = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "evaluate_semantic_goal",
                 "sessionId": session,
                 "goalId": goal_id,
@@ -671,7 +868,7 @@ level "second" {
         let hypothetical_evaluation = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "evaluate_semantic_goal",
                 "sessionId": session,
                 "goalId": goal_id,
@@ -694,7 +891,7 @@ level "second" {
         let excludes_goal = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "import_semantic_goal",
                 "sessionId": session,
                 "artifact": excludes_artifact
@@ -705,7 +902,7 @@ level "second" {
         let excludes_initial = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "evaluate_semantic_goal",
                 "sessionId": session,
                 "goalId": excludes_goal_id,
@@ -716,7 +913,7 @@ level "second" {
         let excludes_hypothetical = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "evaluate_semantic_goal",
                 "sessionId": session,
                 "goalId": excludes_goal_id,
@@ -741,7 +938,7 @@ level "second" {
         let search_goal = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "import_semantic_goal",
                 "sessionId": session,
                 "artifact": search_goal_artifact
@@ -754,7 +951,7 @@ level "second" {
             let solved = request(
                 &mut server,
                 json!({
-                    "version": 1,
+                    "version": AGENT_PROTOCOL_VERSION,
                     "op": "solve_semantic_goal",
                     "sessionId": session,
                     "goalId": search_goal_id,
@@ -762,7 +959,7 @@ level "second" {
                     "algorithm": algorithm,
                     "budget": {
                         "maxDepth": 4,
-                        "maxNodes": 100,
+                        "maxStoredNodes": 100,
                         "maxMillis": 1000
                     }
                 }),
@@ -777,7 +974,7 @@ level "second" {
             let evaluated = request(
                 &mut server,
                 json!({
-                    "version": 1,
+                    "version": AGENT_PROTOCOL_VERSION,
                     "op": "evaluate_semantic_goal",
                     "sessionId": session,
                     "goalId": search_goal_id,
@@ -790,7 +987,7 @@ level "second" {
         let resumable = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "create_search",
                 "sessionId": session,
                 "goalId": goal_id,
@@ -806,7 +1003,7 @@ level "second" {
         let first_advance = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "advance_search",
                 "sessionId": session,
                 "searchId": resumable_id,
@@ -820,7 +1017,7 @@ level "second" {
         let inspected_search = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "inspect_search",
                 "sessionId": session,
                 "searchId": resumable_id,
@@ -837,7 +1034,7 @@ level "second" {
         let materialized = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "materialize_search_candidate",
                 "sessionId": session,
                 "searchId": resumable_id,
@@ -851,7 +1048,7 @@ level "second" {
         let second_advance = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "advance_search",
                 "sessionId": session,
                 "searchId": resumable_id,
@@ -864,7 +1061,7 @@ level "second" {
         let exhausted = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "advance_search",
                 "sessionId": session,
                 "searchId": resumable_id,
@@ -877,7 +1074,7 @@ level "second" {
         let solved_search = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "create_search",
                 "sessionId": session,
                 "goalId": search_goal_id,
@@ -890,7 +1087,7 @@ level "second" {
         let solved_advance = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "advance_search",
                 "sessionId": session,
                 "searchId": solved_search_id,
@@ -905,7 +1102,7 @@ level "second" {
         let rejected_terminal_advance = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "advance_search",
                 "sessionId": session,
                 "searchId": solved_search_id,
@@ -920,7 +1117,7 @@ level "second" {
         let closed_search = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "close_search",
                 "sessionId": session,
                 "searchId": resumable_id
@@ -930,7 +1127,7 @@ level "second" {
         let closed_inspect = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "inspect_search",
                 "sessionId": session,
                 "searchId": resumable_id,
@@ -942,17 +1139,789 @@ level "second" {
         let invalid_budget = request(
             &mut server,
             json!({
-                "version": 1,
+                "version": AGENT_PROTOCOL_VERSION,
                 "op": "solve_semantic_goal",
                 "sessionId": session,
                 "goalId": search_goal_id,
                 "fromStateId": initial,
                 "algorithm": "bfs",
-                "budget": { "maxDepth": 0, "maxNodes": 100, "maxMillis": 1000 }
+                "budget": { "maxDepth": 0, "maxStoredNodes": 100, "maxMillis": 1000 }
             }),
         );
         assert_eq!(invalid_budget["error"]["code"], "invalid_search_budget");
-        let _ = fs::remove_file(path);
+        remove_source(path);
+    }
+
+    #[test]
+    fn derive_state_replaces_named_object_positions_without_ascii_authoring() {
+        let path = write_source();
+        let mut server = AgentServer::new();
+        let compiled = request(
+            &mut server,
+            json!({ "version": AGENT_PROTOCOL_VERSION, "op": "compile", "path": path }),
+        );
+        let session = compiled["data"]["sessionId"].as_str().unwrap();
+        let initial = compiled["data"]["initialStates"][0]["stateId"]
+            .as_str()
+            .unwrap();
+        let initial_hash = compiled["data"]["initialStates"][0]["stateHash"]
+            .as_str()
+            .unwrap();
+
+        let derived = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "expectedBaseHash": initial_hash,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[1, 0]] }
+                ],
+                "assert": [
+                    { "kind": "contains", "position": [1, 0], "objects": ["Player"] },
+                    { "kind": "excludes", "position": [0, 0], "objects": ["Player"] }
+                ]
+            }),
+        );
+        assert_eq!(derived["ok"], true, "{derived}");
+        assert_eq!(derived["data"]["provenance"]["kind"], "hypothetical");
+        assert_eq!(derived["data"]["provenance"]["origin"], "derived");
+        assert_eq!(
+            derived["data"]["provenance"]["inputCountAfterDerivation"],
+            0
+        );
+        assert_eq!(
+            derived["data"]["applied"]["setObjectPositions"],
+            json!([{ "object": "Player", "positions": [[1, 0]] }])
+        );
+        assert_eq!(
+            derived["data"]["diff"]["objects"],
+            json!([{
+                "object": "Player",
+                "removed": [[0, 0]],
+                "added": [[1, 0]]
+            }])
+        );
+        let derived_state = derived["data"]["stateId"].as_str().unwrap();
+
+        let original = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "inspect_state",
+                "sessionId": session,
+                "stateId": initial
+            }),
+        );
+        let original_player = original["data"]["state"]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|object| object["name"] == "Player")
+            .unwrap();
+        assert_eq!(original_player["positions"], json!([[0, 0]]));
+
+        let run = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "run",
+                "sessionId": session,
+                "fromStateId": derived_state,
+                "inputs": ["right"]
+            }),
+        );
+        assert_eq!(run["ok"], true, "{run}");
+
+        let exported = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "export_semantic_state",
+                "sessionId": session,
+                "stateId": derived_state
+            }),
+        );
+        let mut goal = exported["data"].clone();
+        goal["kind"] = json!("puzzle2d-semantic-goal");
+        goal.as_object_mut().unwrap().remove("variables");
+        goal["legend"] = json!({
+            "?": { "kind": "unknown" },
+            "P": { "kind": "contains", "objects": ["Player"] }
+        });
+        goal["lines"] = json!(["??P"]);
+        let imported = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "import_semantic_goal",
+                "sessionId": session,
+                "artifact": goal
+            }),
+        );
+        assert_eq!(imported["ok"], true, "{imported}");
+        let solved = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "solve_semantic_goal",
+                "sessionId": session,
+                "goalId": imported["data"]["goalId"],
+                "fromStateId": derived_state,
+                "algorithm": "best_first",
+                "budget": { "maxDepth": 2, "maxStoredNodes": 20, "maxMillis": 1000 }
+            }),
+        );
+        assert_eq!(solved["ok"], true, "{solved}");
+        assert_eq!(solved["data"]["searchOutcome"], "solved", "{solved}");
+        assert_eq!(solved["data"]["inputs"], json!(["right"]));
+        let terminal = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "inspect_state",
+                "sessionId": session,
+                "stateId": solved["data"]["terminalStateId"]
+            }),
+        );
+        assert_eq!(terminal["data"]["provenance"]["kind"], "hypothetical");
+        assert_eq!(terminal["data"]["provenance"]["origin"], "derived");
+        assert_eq!(
+            terminal["data"]["provenance"]["inputCountAfterDerivation"],
+            1
+        );
+
+        let stale = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "expectedBaseHash": "0000000000000000",
+                "setObjectPositions": []
+            }),
+        );
+        assert_eq!(stale["error"]["code"], "derived_state_base_mismatch");
+
+        let conflict = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Trail", "positions": [[2, 0]] }
+                ]
+            }),
+        );
+        assert_eq!(conflict["error"]["code"], "derived_state_layer_conflict");
+
+        let duplicate_object = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[0, 0]] },
+                    { "object": "Player", "positions": [[1, 0]] }
+                ]
+            }),
+        );
+        assert_eq!(
+            duplicate_object["error"]["code"],
+            "duplicate_derived_state_object"
+        );
+
+        let duplicate_position = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[1, 0], [1, 0]] }
+                ]
+            }),
+        );
+        assert_eq!(
+            duplicate_position["error"]["code"],
+            "duplicate_derived_state_position"
+        );
+
+        let removed = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [] }
+                ],
+                "assert": [
+                    { "kind": "exact", "position": [0, 0], "objects": [] }
+                ]
+            }),
+        );
+        assert_eq!(removed["ok"], true, "{removed}");
+        assert_eq!(
+            removed["data"]["diff"]["objects"],
+            json!([{
+                "object": "Player",
+                "removed": [[0, 0]],
+                "added": []
+            }])
+        );
+
+        let same_layer_swap = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Goal", "positions": [[1, 0]] },
+                    { "object": "Trail", "positions": [[2, 0]] }
+                ],
+                "assert": [
+                    { "kind": "contains", "position": [1, 0], "objects": ["Goal"] },
+                    { "kind": "contains", "position": [2, 0], "objects": ["Trail"] }
+                ]
+            }),
+        );
+        assert_eq!(same_layer_swap["ok"], true, "{same_layer_swap}");
+
+        let failed_assertion = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[0, 0]] }
+                ],
+                "assert": [
+                    { "kind": "contains", "position": [0, 0], "objects": ["Goal"] }
+                ]
+            }),
+        );
+        assert_eq!(
+            failed_assertion["error"]["code"],
+            "derived_state_assertion_failed"
+        );
+
+        let impossible_contains = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[0, 0]] }
+                ],
+                "assert": [
+                    { "kind": "contains", "position": [2, 0], "objects": ["Goal", "Trail"] }
+                ]
+            }),
+        );
+        assert_eq!(
+            impossible_contains["error"]["code"],
+            "invalid_derived_state_assertion"
+        );
+
+        let impossible_exact = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[0, 0]] }
+                ],
+                "assert": [
+                    { "kind": "exact", "position": [2, 0], "objects": ["Goal", "Trail"] }
+                ]
+            }),
+        );
+        assert_eq!(
+            impossible_exact["error"]["code"],
+            "invalid_derived_state_assertion"
+        );
+
+        let unknown_object = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Missing", "positions": [[0, 0]] }
+                ]
+            }),
+        );
+        assert_eq!(unknown_object["error"]["code"], "unknown_object");
+
+        let object_out_of_bounds = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[3, 0]] }
+                ]
+            }),
+        );
+        assert_eq!(
+            object_out_of_bounds["error"]["code"],
+            "semantic_position_out_of_bounds"
+        );
+
+        let assertion_out_of_bounds = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[0, 0]] }
+                ],
+                "assert": [
+                    { "kind": "contains", "position": [3, 0], "objects": ["Player"] }
+                ]
+            }),
+        );
+        assert_eq!(
+            assertion_out_of_bounds["error"]["code"],
+            "semantic_position_out_of_bounds"
+        );
+
+        let typo = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPosition": [
+                    { "object": "Player", "positions": [[1, 0]] }
+                ]
+            }),
+        );
+        assert_eq!(typo["error"]["code"], "invalid_request", "{typo}");
+
+        let nested_typo = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[1, 0]], "position": [1, 0] }
+                ]
+            }),
+        );
+        assert_eq!(nested_typo["error"]["code"], "invalid_request");
+
+        let empty = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial
+            }),
+        );
+        assert_eq!(empty["error"]["code"], "empty_derived_state_patch");
+
+        remove_source(path);
+    }
+
+    #[test]
+    fn derive_state_changes_only_named_non_persistent_variables() {
+        let path = write_source_text(VARIABLE_SOURCE);
+        let mut server = AgentServer::new();
+        let compiled = request(
+            &mut server,
+            json!({ "version": AGENT_PROTOCOL_VERSION, "op": "compile", "path": path }),
+        );
+        assert_eq!(compiled["ok"], true, "{compiled}");
+        let session = compiled["data"]["sessionId"].as_str().unwrap();
+        let initial = compiled["data"]["initialStates"][0]["stateId"]
+            .as_str()
+            .unwrap();
+
+        let derived = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setVariables": [{ "variable": "count", "value": 3 }]
+            }),
+        );
+        assert_eq!(derived["ok"], true, "{derived}");
+        assert_eq!(derived["data"]["state"]["variables"]["count"], 3);
+        assert_eq!(derived["data"]["state"]["variables"]["saved"], 0);
+        assert_eq!(
+            derived["data"]["diff"]["variables"],
+            json!([{ "variable": "count", "before": 0, "after": 3 }])
+        );
+
+        let persistent = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setVariables": [{ "variable": "saved", "value": 1 }]
+            }),
+        );
+        assert_eq!(
+            persistent["error"]["code"],
+            "derived_state_persistent_variable_change"
+        );
+
+        let unknown = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setVariables": [{ "variable": "missing", "value": 1 }]
+            }),
+        );
+        assert_eq!(unknown["error"]["code"], "unknown_variable");
+
+        let duplicate = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setVariables": [
+                    { "variable": "count", "value": 1 },
+                    { "variable": "count", "value": 2 }
+                ]
+            }),
+        );
+        assert_eq!(
+            duplicate["error"]["code"],
+            "duplicate_derived_state_variable"
+        );
+
+        remove_source(path);
+    }
+
+    #[test]
+    fn start_level_from_state_applies_the_patch_before_level_start_once() {
+        let path = write_source_text(LEVEL_START_SOURCE);
+        let mut server = AgentServer::new();
+        let compiled = request(
+            &mut server,
+            json!({ "version": AGENT_PROTOCOL_VERSION, "op": "compile", "path": path }),
+        );
+        assert_eq!(compiled["ok"], true, "{compiled}");
+        let session = compiled["data"]["sessionId"].as_str().unwrap();
+        let initial = compiled["data"]["initialStates"][0]["stateId"]
+            .as_str()
+            .unwrap();
+
+        let derived = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": initial,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[1, 0]] }
+                ]
+            }),
+        );
+        assert_eq!(derived["ok"], true, "{derived}");
+        let derived_objects = derived["data"]["state"]["objects"].as_array().unwrap();
+        let derived_started = derived_objects
+            .iter()
+            .find(|object| object["name"] == "Started")
+            .unwrap();
+        assert_eq!(derived_started["positions"], json!([[0, 0]]));
+        assert_eq!(derived["data"]["state"]["variables"]["starts"], 1);
+        assert_eq!(derived["data"]["state"]["variables"]["count"], 1);
+
+        let started = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "start_level_from_state",
+                "sessionId": session,
+                "levelIndex": 0,
+                "expectedLevelName": "start",
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[1, 0]] }
+                ],
+                "setVariables": [
+                    { "variable": "count", "value": 10 }
+                ],
+                "assert": [
+                    { "kind": "contains", "position": [1, 0], "objects": ["Player", "Started"] },
+                    { "kind": "excludes", "position": [0, 0], "objects": ["Started"] }
+                ]
+            }),
+        );
+        assert_eq!(started["ok"], true, "{started}");
+        assert_eq!(started["data"]["state"]["variables"]["starts"], 1);
+        assert_eq!(started["data"]["state"]["variables"]["count"], 11);
+        assert_eq!(started["data"]["provenance"]["origin"], "level_start");
+        assert_eq!(started["data"]["provenance"]["inputCountAfterStart"], 0);
+        let started_state = started["data"]["stateId"].as_str().unwrap();
+
+        let run = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "run",
+                "sessionId": session,
+                "fromStateId": started_state,
+                "inputs": ["right"]
+            }),
+        );
+        assert_eq!(run["ok"], true, "{run}");
+        let terminal = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "inspect_state",
+                "sessionId": session,
+                "stateId": run["data"]["terminalStateId"]
+            }),
+        );
+        assert_eq!(terminal["data"]["state"]["variables"]["starts"], 1);
+        assert_eq!(terminal["data"]["state"]["variables"]["count"], 11);
+        assert_eq!(terminal["data"]["provenance"]["origin"], "level_start");
+        assert_eq!(terminal["data"]["provenance"]["inputCountAfterStart"], 1);
+
+        let exported = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "export_semantic_state",
+                "sessionId": session,
+                "stateId": started_state
+            }),
+        );
+        let mut goal = exported["data"].clone();
+        goal["kind"] = json!("puzzle2d-semantic-goal");
+        goal.as_object_mut().unwrap().remove("variables");
+        goal["legend"] = json!({
+            "?": { "kind": "unknown" },
+            "P": { "kind": "contains", "objects": ["Player"] }
+        });
+        goal["lines"] = json!(["??P"]);
+        let imported = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "import_semantic_goal",
+                "sessionId": session,
+                "artifact": goal
+            }),
+        );
+        assert_eq!(imported["ok"], true, "{imported}");
+        let solved = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "solve_semantic_goal",
+                "sessionId": session,
+                "goalId": imported["data"]["goalId"],
+                "fromStateId": started_state,
+                "algorithm": "best_first",
+                "budget": { "maxDepth": 1, "maxStoredNodes": 10, "maxMillis": 1000 }
+            }),
+        );
+        assert_eq!(solved["ok"], true, "{solved}");
+        assert_eq!(solved["data"]["searchOutcome"], "solved", "{solved}");
+        assert_eq!(solved["data"]["inputs"], json!(["right"]));
+
+        let mismatched_level = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "start_level_from_state",
+                "sessionId": session,
+                "levelIndex": 0,
+                "expectedLevelName": "other",
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[1, 0]] }
+                ]
+            }),
+        );
+        assert_eq!(
+            mismatched_level["error"]["code"],
+            "level_start_state_level_mismatch"
+        );
+
+        let empty = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "start_level_from_state",
+                "sessionId": session,
+                "levelIndex": 0
+            }),
+        );
+        assert_eq!(empty["error"]["code"], "empty_level_start_state_patch");
+
+        let persistent = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "start_level_from_state",
+                "sessionId": session,
+                "levelIndex": 0,
+                "setVariables": [
+                    { "variable": "starts", "value": 2 }
+                ]
+            }),
+        );
+        assert_eq!(
+            persistent["error"]["code"],
+            "level_start_state_persistent_variable_change"
+        );
+
+        let failed_assertion = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "start_level_from_state",
+                "sessionId": session,
+                "levelIndex": 0,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[1, 0]] }
+                ],
+                "assert": [
+                    { "kind": "contains", "position": [0, 0], "objects": ["Player"] }
+                ]
+            }),
+        );
+        assert_eq!(
+            failed_assertion["error"]["code"],
+            "level_start_state_assertion_failed"
+        );
+
+        remove_source(path);
+    }
+
+    #[test]
+    fn compile_reports_authoritative_level_start_failure() {
+        let path = write_source_text(FAILING_LEVEL_START_SOURCE);
+        let mut server = AgentServer::new();
+        let compiled = request(
+            &mut server,
+            json!({ "version": AGENT_PROTOCOL_VERSION, "op": "compile", "path": path }),
+        );
+
+        assert_eq!(compiled["ok"], false, "{compiled}");
+        assert_eq!(compiled["error"]["code"], "level_start_failed");
+        assert!(
+            compiled["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("VariableDivisionByZero")),
+            "{compiled}"
+        );
+
+        remove_source(path);
+    }
+
+    #[test]
+    fn derive_state_preserves_the_base_checkpoint_restart_anchor() {
+        let path = write_source_text(DERIVED_CHECKPOINT_SOURCE);
+        let mut server = AgentServer::new();
+        let compiled = request(
+            &mut server,
+            json!({ "version": AGENT_PROTOCOL_VERSION, "op": "compile", "path": path }),
+        );
+        assert_eq!(compiled["ok"], true, "{compiled}");
+        let session = compiled["data"]["sessionId"].as_str().unwrap();
+        let initial = compiled["data"]["initialStates"][0]["stateId"]
+            .as_str()
+            .unwrap();
+
+        let checkpointed = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "run",
+                "sessionId": session,
+                "fromStateId": initial,
+                "inputs": ["right", "save"]
+            }),
+        );
+        assert_eq!(checkpointed["ok"], true, "{checkpointed}");
+        let checkpointed_state = checkpointed["data"]["terminalStateId"].as_str().unwrap();
+
+        let derived = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "derive_state",
+                "sessionId": session,
+                "baseStateId": checkpointed_state,
+                "setObjectPositions": [
+                    { "object": "Player", "positions": [[2, 0]] }
+                ]
+            }),
+        );
+        assert_eq!(derived["ok"], true, "{derived}");
+
+        let restarted = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "run",
+                "sessionId": session,
+                "fromStateId": derived["data"]["stateId"],
+                "inputs": ["restart"]
+            }),
+        );
+        assert_eq!(restarted["ok"], true, "{restarted}");
+        let terminal = request(
+            &mut server,
+            json!({
+                "version": AGENT_PROTOCOL_VERSION,
+                "op": "inspect_state",
+                "sessionId": session,
+                "stateId": restarted["data"]["terminalStateId"]
+            }),
+        );
+        let objects = terminal["data"]["state"]["objects"].as_array().unwrap();
+        let player = objects
+            .iter()
+            .find(|object| object["name"] == "Player")
+            .unwrap();
+        assert_eq!(player["positions"], json!([[1, 0]]));
+
+        remove_source(path);
     }
 
     #[test]
@@ -961,7 +1930,7 @@ level "second" {
         let failed: Value = serde_json::from_str(&server.handle_line("{")).unwrap();
         assert_eq!(failed["error"]["code"], "invalid_request");
         let next: Value = serde_json::from_str(
-            &server.handle_line(r#"{"version":1,"op":"manifest","sessionId":"missing"}"#),
+            &server.handle_line(r#"{"version":2,"op":"manifest","sessionId":"missing"}"#),
         )
         .unwrap();
         assert_eq!(next["error"]["code"], "unknown_session");

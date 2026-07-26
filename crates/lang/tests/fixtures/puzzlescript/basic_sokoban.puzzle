@@ -1,4 +1,4 @@
-title = "Basic PS Sokoban"
+const title = "Basic PS Sokoban"
 
 scene title {
 layout {

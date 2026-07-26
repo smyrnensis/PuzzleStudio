@@ -23,7 +23,11 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args = parse_args(env::args().skip(1).collect())?;
-    let game = puzzle_lang::parse_game2d_file(&args.path).map_err(|report| report.to_string())?;
+    let entry = puzzle_lang::resolve_game_entry(&args.path).map_err(|error| error.to_string())?;
+    let root = entry.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let document = puzzle_workspace::FileWorkspace::load(&entry, root)?.compile()
+        .map_err(|error| error.to_string())?;
+    let game = puzzle_play::loaded_document_scene_host_loaded_game(&document)?;
     if game.levels.is_empty() {
         return Err("game has no levels".to_string());
     }

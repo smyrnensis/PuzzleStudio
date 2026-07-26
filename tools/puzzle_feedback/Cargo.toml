@@ -10,3 +10,4 @@ license = "UNLICENSED"
 puzzle-core = { path = "../../crates/core" }
 puzzle-lang = { path = "../../crates/lang" }
 puzzle-play = { path = "../../crates/play" }
+puzzle-workspace = { path = "../../crates/workspace" }

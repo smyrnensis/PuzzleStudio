@@ -1,5 +1,5 @@
-title = "Move Collision Test"
-author = "PuzzleStudio"
+const title = "Move Collision Test"
+const author = "PuzzleStudio"
 
 default_wait_time = 100ms
 

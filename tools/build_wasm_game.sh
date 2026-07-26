@@ -3,13 +3,26 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+game_target_dir="${CARGO_TARGET_DIR:-target}"
+wasm_profile="${1:-release}"
+if (($# > 1)) || [[ "$wasm_profile" != "debug" && "$wasm_profile" != "release" ]]; then
+  echo "usage: tools/build_wasm_game.sh [debug|release]" >&2
+  exit 2
+fi
 
-cargo build --target wasm32-unknown-unknown --release -p puzzle-wasm-game
+if [[ "$wasm_profile" == "release" ]]; then
+  target_profile_dir="release"
+  cargo build --target wasm32-unknown-unknown --release -p puzzle-wasm-game
+else
+  target_profile_dir="debug"
+  cargo build --target wasm32-unknown-unknown -p puzzle-wasm-game
+fi
+
 mkdir -p crates/html_play/static/wasm_game
 wasm-bindgen \
   --target web \
   --out-dir crates/html_play/static/wasm_game \
-  target/wasm32-unknown-unknown/release/puzzle_wasm_game.wasm
+  "$game_target_dir/wasm32-unknown-unknown/$target_profile_dir/puzzle_wasm_game.wasm"
 
 if ! grep -q "export class WasmStandaloneSession" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
   echo "generated game WASM bindings are missing WasmStandaloneSession" >&2

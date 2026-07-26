@@ -1,7 +1,10 @@
 use puzzle_core::{
     GridCompiledGame, GridCoord, GridSize, GridState, ObjectId, RuleId, Size2, Size3,
 };
-pub use puzzle_scene::{ComponentPlacement, SceneEffect as LifecycleCommand};
+pub use puzzle_scene::{
+    ComponentPlacement, STANDARD_MESSAGE_COMPONENT, STANDARD_MESSAGE_DISMISS_EVENT,
+    STANDARD_MESSAGE_TEXT_PROPERTY, SceneEffect as LifecycleCommand,
+};
 use serde::{
     Deserialize, Deserializer, Serialize,
     de::{self, MapAccess, Visitor},
@@ -107,8 +110,11 @@ impl<Document> StandaloneRuntimeExport<Document> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SessionAction {
+    Initialize,
     Snapshot,
     Input { name: String },
+    ChoiceMove { direction: RuntimeChoiceDirection },
+    ChoiceActivate { index: Option<usize> },
     Resume,
     ComponentEvent { instance: String, event: String },
     DebugInput { name: String },
@@ -120,6 +126,22 @@ pub enum SessionAction {
     GotoLevel { level: usize },
     SceneEffect { effect: LifecycleCommand },
     Command { name: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeChoiceDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeProgressSaveRequest {
+    pub request_id: u32,
+    pub save_json: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +193,490 @@ pub struct RuntimeStateSnapshot3d {
     pub level_fired_rules: Vec<u16>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePuzzle3CameraProjection {
+    Perspective,
+    Orthographic,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePuzzle3ViewportMode {
+    Full,
+    Centered,
+    Paged,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePuzzle3ViewportFollow {
+    Snap,
+    Smooth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimePuzzle3ViewportHeight {
+    Full,
+    Size(u16),
+}
+
+impl Serialize for RuntimePuzzle3ViewportHeight {
+    fn serialize<SerializerType>(
+        &self,
+        serializer: SerializerType,
+    ) -> Result<SerializerType::Ok, SerializerType::Error>
+    where
+        SerializerType: serde::Serializer,
+    {
+        match self {
+            Self::Full => serializer.serialize_str("full"),
+            Self::Size(height) => serializer.serialize_u16(*height),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RuntimePuzzle3ViewportHeight {
+    fn deserialize<DeserializerType>(
+        deserializer: DeserializerType,
+    ) -> Result<Self, DeserializerType::Error>
+    where
+        DeserializerType: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum SerializedHeight {
+            Name(String),
+            Size(u16),
+        }
+
+        match SerializedHeight::deserialize(deserializer)? {
+            SerializedHeight::Name(name) if name == "full" => Ok(Self::Full),
+            SerializedHeight::Name(name) => Err(de::Error::custom(format!(
+                "unsupported Puzzle3 viewport height: {name}"
+            ))),
+            SerializedHeight::Size(height) if height > 0 => Ok(Self::Size(height)),
+            SerializedHeight::Size(_) => Err(de::Error::custom(
+                "Puzzle3 viewport height must be positive",
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimePuzzle3VisualSpace {
+    World,
+    Local,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum RuntimePuzzle3SpatialOp {
+    #[serde(rename = "rotate3")]
+    Rotate {
+        space: RuntimePuzzle3VisualSpace,
+        axis: [f64; 3],
+        degrees: f64,
+    },
+    #[serde(rename = "translate3")]
+    Translate {
+        space: RuntimePuzzle3VisualSpace,
+        value: [f64; 3],
+    },
+    #[serde(rename = "flip3")]
+    Flip { enabled: bool },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3Size {
+    pub width: u16,
+    pub depth: u16,
+    pub height: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3Input {
+    pub id: u16,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3Object {
+    pub id: u16,
+    pub name: String,
+    pub visual: Option<String>,
+    pub layer: u16,
+    pub render_priority: u16,
+    pub composition: RuntimeVisualComposition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeVisualComposition {
+    Ordered,
+    Average,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeLinearRgba {
+    pub red: f64,
+    pub green: f64,
+    pub blue: f64,
+    pub alpha: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedPixel {
+    pub position: [i32; 2],
+    pub color: RuntimeLinearRgba,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedVoxel {
+    pub position: [i32; 3],
+    pub color: RuntimeLinearRgba,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeResolvedVisualFrame {
+    Pixels {
+        width: u16,
+        height: u16,
+        pixels: Vec<RuntimeResolvedPixel>,
+    },
+    Voxels {
+        width: u16,
+        depth: u16,
+        height: u16,
+        voxels: Vec<RuntimeResolvedVoxel>,
+    },
+    ExternalImage {
+        source: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedVisualClip {
+    pub id: String,
+    pub frames: Vec<RuntimeResolvedVisualFrame>,
+    pub frame_duration_ms: Option<u64>,
+    pub layout: RuntimeResolvedVisualLayout,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResolvedFitMode {
+    Contain,
+    Cover,
+    Stretch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResolvedSampling {
+    Pixelated,
+    Smooth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedVisualLayout {
+    pub fit: RuntimeResolvedFitMode,
+    pub width: u16,
+    pub height: u16,
+    pub sampling: RuntimeResolvedSampling,
+    pub raster: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedImageAsset {
+    pub source: String,
+    pub width: u16,
+    pub height: u16,
+    pub rgba8_srgb: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedRenderInstance {
+    pub id: u64,
+    pub object_id: Option<u16>,
+    pub visual: String,
+    pub cell: [i32; 3],
+    pub transform: [[f64; 4]; 4],
+    pub opacity: f64,
+    pub frame_elapsed_ms: Option<u64>,
+    pub playback: RuntimeResolvedPlayback,
+    pub render_order: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeResolvedPlayback {
+    Loop,
+    Once,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedCompositionGroup {
+    pub render_order: u64,
+    pub composition: RuntimeVisualComposition,
+    pub instances: Vec<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedRenderScene {
+    pub clips: Vec<RuntimeResolvedVisualClip>,
+    pub instances: Vec<RuntimeResolvedRenderInstance>,
+    pub composition_groups: Vec<RuntimeResolvedCompositionGroup>,
+    pub cells: Vec<RuntimeResolvedRenderCell>,
+    pub render_priority_count: u16,
+    pub animation_duration_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedRenderCell {
+    pub position: [i32; 3],
+    pub render_order: u64,
+    pub object_ids: Vec<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedRenderMoment {
+    pub clip_elapsed_ms: u64,
+    pub animation_elapsed_ms: u64,
+    pub animations: Vec<RuntimeAnimationEvent>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedPixelGeometry {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub sampling: RuntimeResolvedSampling,
+    pub raster: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeResolvedRenderBatchContent {
+    Pixels {
+        width: u16,
+        height: u16,
+        pixels: Vec<RuntimeResolvedPixel>,
+    },
+    Voxels {
+        width: u16,
+        depth: u16,
+        height: u16,
+        voxels: Vec<RuntimeResolvedVoxel>,
+    },
+    ExternalImage {
+        source: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedRenderBatch {
+    pub render_order: u64,
+    pub object_ids: Vec<u16>,
+    pub cell: [i32; 3],
+    pub transform: [[f64; 4]; 4],
+    pub opacity: f64,
+    pub pixel_geometry: Option<RuntimeResolvedPixelGeometry>,
+    pub content: RuntimeResolvedRenderBatchContent,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedRenderFrame {
+    pub batches: Vec<RuntimeResolvedRenderBatch>,
+    pub continue_animation: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedVisualOrder {
+    pub render_priority: u16,
+    pub composition: RuntimeVisualComposition,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3ObjectRef {
+    pub id: u16,
+    pub layer: u16,
+    pub render_order: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3Cell {
+    pub position: RuntimeCoord,
+    pub objects: Vec<RuntimePuzzle3ObjectRef>,
+    pub render_order: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3VisualFrame {
+    pub layers: Vec<Vec<String>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3Visual {
+    pub palette: std::collections::BTreeMap<String, String>,
+    pub frames: Vec<RuntimePuzzle3VisualFrame>,
+    pub duration_ms: Option<u64>,
+    pub frame_duration_ms: Option<u64>,
+    pub spatial_affine: [[f64; 4]; 4],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3Camera {
+    pub projection: RuntimePuzzle3CameraProjection,
+    pub yaw_degrees: i16,
+    pub pitch_degrees: i16,
+    pub roll_degrees: i16,
+    pub zoom: f64,
+    pub interactive_look: bool,
+    pub interactive_zoom: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3GridRender {
+    pub visibility: u8,
+    pub occupied_cells: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3VisualRender {
+    pub shade: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3PixelateRender {
+    pub enabled: bool,
+    pub scale: u16,
+    pub smoothing: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3TweenRender {
+    pub enabled: bool,
+    pub interval_ms: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3AnimationRender {
+    pub tween: RuntimePuzzle3TweenRender,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3ViewportFraming {
+    pub width: u16,
+    pub depth: u16,
+    pub height: RuntimePuzzle3ViewportHeight,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3Viewport {
+    pub mode: RuntimePuzzle3ViewportMode,
+    pub follow: RuntimePuzzle3ViewportFollow,
+    pub focus: String,
+    pub focus_objects: Vec<u16>,
+    pub framing_box: RuntimePuzzle3ViewportFraming,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3Render {
+    pub camera: RuntimePuzzle3Camera,
+    pub grid: RuntimePuzzle3GridRender,
+    pub visual: RuntimePuzzle3VisualRender,
+    pub shadow: bool,
+    pub pixelate: RuntimePuzzle3PixelateRender,
+    pub animation: RuntimePuzzle3AnimationRender,
+    pub viewport: Option<RuntimePuzzle3Viewport>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3VisualOrderPriority {
+    pub objects: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub animations: Vec<String>,
+    pub merge: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimePuzzle3VisualOrder {
+    pub direction_priority: Vec<String>,
+    pub priorities: Vec<RuntimePuzzle3VisualOrderPriority>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3Resources {
+    pub layer_count: u16,
+    pub inputs: Vec<RuntimePuzzle3Input>,
+    pub objects: std::collections::BTreeMap<String, RuntimePuzzle3Object>,
+    pub visuals: std::collections::BTreeMap<String, RuntimePuzzle3Visual>,
+    pub render: RuntimePuzzle3Render,
+    pub order: RuntimePuzzle3VisualOrder,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePuzzle3Snapshot {
+    pub component: String,
+    pub level_index: usize,
+    pub level_count: usize,
+    pub level_name: Option<String>,
+    pub size: RuntimePuzzle3Size,
+    pub cells: Vec<RuntimePuzzle3Cell>,
+    pub completed: bool,
+    pub has_next_level: bool,
+    pub has_previous_level: bool,
+    pub render: RuntimePuzzle3Render,
+    pub render_scene: RuntimeResolvedRenderScene,
+    #[serde(default)]
+    pub animation_events: Vec<RuntimeAnimationEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub animation_batch_id: Option<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum SolverStateSnapshot {
@@ -210,7 +716,7 @@ pub struct SolverSearchRequest {
     pub state: SolverStateSnapshot,
     pub materialize_level_start: bool,
     pub max_depth: u32,
-    pub max_nodes: usize,
+    pub max_stored_nodes: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -606,8 +1112,39 @@ pub struct RuntimeVisualState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeVisualTween {
-    pub from: RuntimeVisualState,
-    pub to: RuntimeVisualState,
+    pub transforms: Vec<RuntimeVisualTweenTransform>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<RuntimeScalarTween>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RuntimeVisualTweenTransform {
+    Rotate {
+        #[serde(rename = "startDegrees")]
+        start_degrees: f64,
+        #[serde(rename = "deltaDegrees")]
+        delta_degrees: f64,
+        axis: [f64; 3],
+        space: RuntimeVisualSpace,
+    },
+    Translate {
+        start: [f64; 3],
+        delta: [f64; 3],
+        space: RuntimeVisualSpace,
+    },
+    Scale {
+        start: [f64; 3],
+        delta: [f64; 3],
+        space: RuntimeVisualSpace,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeScalarTween {
+    pub start: f64,
+    pub delta: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -616,6 +1153,8 @@ pub enum RuntimeAnimationEvent {
     Animation {
         name: String,
         position: RuntimeCoord,
+        #[serde(rename = "resolvedVisual", skip_serializing_if = "Option::is_none")]
+        resolved_visual: Option<RuntimeResolvedVisualOrder>,
     },
     Move {
         name: String,
@@ -746,6 +1285,19 @@ pub struct RuntimeComponentProperty {
     pub literal: bool,
 }
 
+pub fn standard_message_effect(value: String, literal: bool) -> RuntimeEffect {
+    RuntimeEffect::PresentComponent {
+        definition: STANDARD_MESSAGE_COMPONENT.to_string(),
+        properties: vec![RuntimeComponentProperty {
+            name: STANDARD_MESSAGE_TEXT_PROPERTY.to_string(),
+            value,
+            literal,
+        }],
+        placement: ComponentPlacement::Overlay,
+        await_event: Some(STANDARD_MESSAGE_DISMISS_EVENT.to_string()),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeRuleFiring {
@@ -834,28 +1386,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn visual_tween_contract_keeps_extensible_visual_state_endpoints() {
+    fn solver_search_request_names_the_stored_node_limit() {
+        let request = serde_json::json!({
+            "levelIndex": 0,
+            "state": {
+                "kind": "2d",
+                "width": 1,
+                "height": 1,
+                "layerCount": 1,
+                "slots": [0],
+                "variables": [],
+                "levelFiredRules": []
+            },
+            "materializeLevelStart": false,
+            "maxDepth": 8,
+            "maxStoredNodes": 1000
+        });
+        let decoded: SolverSearchRequest = serde_json::from_value(request.clone()).unwrap();
+        assert_eq!(decoded.max_stored_nodes, 1000);
+
+        let mut legacy = request;
+        let stored_node_limit = legacy["maxStoredNodes"].take();
+        legacy["maxNodes"] = stored_node_limit;
+        legacy.as_object_mut().unwrap().remove("maxStoredNodes");
+        assert!(serde_json::from_value::<SolverSearchRequest>(legacy).is_err());
+    }
+
+    #[test]
+    fn visual_tween_contract_exposes_prepared_renderer_channels() {
         let tween = RuntimeVisualTween {
-            from: RuntimeVisualState {
-                transforms: vec![RuntimeVisualTransform::Scale {
-                    value: [1.0, 1.0, 1.0],
-                    space: RuntimeVisualSpace::Local,
-                }],
-                opacity: Some(0.0),
-            },
-            to: RuntimeVisualState {
-                transforms: vec![RuntimeVisualTransform::Scale {
-                    value: [2.0, 2.0, 1.0],
-                    space: RuntimeVisualSpace::Local,
-                }],
-                opacity: Some(1.0),
-            },
+            transforms: vec![RuntimeVisualTweenTransform::Scale {
+                start: [1.0, 1.0, 1.0],
+                delta: [1.0, 1.0, 0.0],
+                space: RuntimeVisualSpace::Local,
+            }],
+            opacity: Some(RuntimeScalarTween {
+                start: 0.0,
+                delta: 1.0,
+            }),
         };
 
         let value = serde_json::to_value(tween).unwrap();
-        assert_eq!(value["from"]["transforms"][0]["kind"], "scale");
-        assert_eq!(value["from"]["opacity"], 0.0);
-        assert_eq!(value["to"]["opacity"], 1.0);
+        assert_eq!(value["transforms"][0]["kind"], "scale");
+        assert_eq!(value["transforms"][0]["start"][0], 1.0);
+        assert_eq!(value["transforms"][0]["delta"][0], 1.0);
+        assert_eq!(value["opacity"]["delta"], 1.0);
     }
 
     #[test]
@@ -867,6 +1442,7 @@ mod tests {
                 y: 3,
                 z: None,
             },
+            resolved_visual: None,
         })
         .unwrap();
 
@@ -893,6 +1469,28 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<SessionAction>(resume).unwrap(),
             SessionAction::Resume
+        );
+        let choice_move = SessionAction::ChoiceMove {
+            direction: RuntimeChoiceDirection::Left,
+        };
+        let choice_move_value = serde_json::to_value(&choice_move).unwrap();
+        assert_eq!(
+            choice_move_value,
+            json!({"kind": "choice_move", "direction": "left"})
+        );
+        assert_eq!(
+            serde_json::from_value::<SessionAction>(choice_move_value).unwrap(),
+            choice_move
+        );
+        let choice_activate = SessionAction::ChoiceActivate { index: Some(3) };
+        let choice_activate_value = serde_json::to_value(&choice_activate).unwrap();
+        assert_eq!(
+            choice_activate_value,
+            json!({"kind": "choice_activate", "index": 3})
+        );
+        assert_eq!(
+            serde_json::from_value::<SessionAction>(choice_activate_value).unwrap(),
+            choice_activate
         );
         assert!(
             serde_json::from_value::<SessionAction>(json!({
@@ -1124,6 +1722,7 @@ fn presentation_animation_batch_round_trips_as_one_runtime_occurrence() {
                         y: 0,
                         z: None,
                     },
+                    resolved_visual: None,
                 },
             ],
         },

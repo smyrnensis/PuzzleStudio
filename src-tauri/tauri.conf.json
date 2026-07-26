@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "dev.puzzlestudio.editor",
   "build": {
-    "beforeDevCommand": "tools/ensure_wasm_fresh.sh desktop",
-    "beforeBuildCommand": "tools/ensure_wasm_fresh.sh desktop",
+    "beforeDevCommand": "tools/prepare_desktop_build.sh desktop-dev",
+    "beforeBuildCommand": "tools/prepare_desktop_build.sh desktop",
     "frontendDist": "../crates/html_editor/static"
   },
   "app": {

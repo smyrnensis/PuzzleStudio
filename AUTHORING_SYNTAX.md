@@ -19,10 +19,10 @@ canonical な制御語は `if` に寄せる。
 ## File Shape
 
 ```txt
-title = "Sokoban"
-subtitle = "A compact pushing puzzle"
-author = "Puzzle Author"
-homepage = "https://example.com"
+const title = "Sokoban"
+const subtitle = "A compact pushing puzzle"
+const author = "Puzzle Author"
+const homepage = "https://example.com"
 
 puzzle sokoban {
 layers {
@@ -134,16 +134,16 @@ order for runtime or presentation meaning.
 
 ## Definition Syntax
 
-### `title` / `subtitle` / `author` / `homepage`
+### Named content constants
 
 ```txt
-title = "Sokoban"
-subtitle = "A compact pushing puzzle"
-author = "Puzzle Author"
-homepage = "https://example.com"
+const title = "Sokoban"
+const subtitle = "A compact pushing puzzle"
+const author = "Puzzle Author"
+const homepage = "https://example.com"
 ```
 
-表示用・配布用のゲーム metadata。`title` はゲーム名、`subtitle` は短い説明、`author` は作者名、`homepage` は作者または作品の URL。`subtitle` / `author` / `homepage` は省略可能。scene expression からはこれらを top scope の bare name として読み、`heading title` や `caption author` のように任意の text role から参照できる。metadata と text role は独立している。`name <text>` は top-level metadata としては読まない。
+これらは通常の top-level `const` の例で、予約された宣言ではない。scene expression からは他の top-level 値と同様に bare name で読み、`heading title` や `caption author` のように任意の text roleへ渡せる。名前・個数・用途は作者が決め、game entry や compile 成功条件にはならない。
 
 ### Tags / Object Schema
 
@@ -174,6 +174,8 @@ tag value list の中の `<start>...<end>` は inclusive numeric range として
 | `directions` | `xy_plane` | 全6方向 |
 
 `horizontal` は2Dでは `x_axis`、3Dでは `xy_plane`、`vertical` は2Dでは `y_axis`、3Dでは `z_axis` と同じ集合を表す正式alias。これらの組み込み名は再定義できず、2Dで `z_axis` / `yz_plane` / `xz_plane` を使用すると errorになる。object schema、`map`、visual `shape` / `palette`、`for`、orientation set prefixは同じ集合契約を使う。
+
+3Dのcanonical game座標は `right = +X`、`back = +Y`、`down = +Z`。renderer固有の座標変換は描画adapterだけが行い、source、game state、editorはこの座標を共有する。
 
 `up down left right front back` の部分集合だけからなる author-defined tag set も、名前に依存せず方向型として扱う。方向型の schema tag slot では、oriented rule の相対 selector tag `>` / `<` / `^` / `v` を使える。相対方向がその tag set の domain 外になる orientation は rule alternative を生成しない。
 
@@ -847,48 +849,26 @@ P = Player
 
 ### Imports
 
-ゲーム folder の実行 entry は、top-level `puzzle` model を宣言する `.puzzle` / `.puzzle3`。model の次元は拡張子で決まり、`.puzzle3` でも `puzzle <name>` と書く。旧 `puzzle3` 宣言は error。`title` などの top-level metadata は表示情報であり、entry 資格ではない。folder を play / build / editor に渡すと、その folder 内の model-declaring source を entry として読む。複数ある場合は `game.puzzle`、`game.puzzle3`、`<folder>.puzzle`、`<folder>.puzzle3`、`main.puzzle`、`main.puzzle3`、その他の順で優先する。
-
-`levels.puzzle`、`visuals.puzzle`、`menus/title.puzzle` のような model を宣言しない分割 file は import fragment。直接開いた場合、preview / build / play は同じ folder から親 folder へ向かって最初の game entry を探す。entry から明示的に import する。
-
-`parse_game_file` で読む file は、同じ場所へ別 file の内容を展開できる。
-
-```txt
-puzzle sokoban {
-layers { ... }
-rules { ... }
-import "levels.puzzle"
-}
-
-// levels.puzzle
-levels {
-legend { ... }
-level warmup
-...
-}
-```
-
-`import "<path>"` は書いた場所へ file 内容をそのまま展開する。相対 path は import を書いた file の directory から解決され、import された file の中の相対 import もその file の directory から解決される。
-
-`import` は source composition であり、どの game を起動するかは決めない。同じ folder にある `.puzzle` は自動では読まれない。
-
-分割 file も `.puzzle` に統一する。import は wrapper を作らないので、import 先は `puzzle ... {}`、`scene ... {}`、`menu ... {}`、`theme ... {}` のように必要な owner block を自分で持つ。
+各 `.puzzle` file は独立した document module。import は source root に alias 付きで宣言する。
 
 ```txt
 // game.puzzle
-import "sokoban.puzzle"
-import "level_select.puzzle"
+import boards = "models/boards.puzzle"
+import screens = "ui/screens.puzzle"
 
-// sokoban.puzzle
-puzzle sokoban {
-...
+scene title {
+layout {
+puzzle board = boards:sokoban
+frame screens:title
 }
-
-// level_select.puzzle
-menu level_select {
-...
 }
 ```
+
+相対 path は import 元 document の directory から workspace root 内で解決する。absolute path、root 外への `..`、存在しない document、重複 alias、cycle は error。同じ folder の file は自動 import されない。
+
+import された宣言はローカル名にはならない。直接 import した module の宣言だけを `<alias>:<name>` で参照できる。import 先がさらに import した宣言は再公開されず、参照したい document を直接 import する。
+
+import は document を読み込むもので、記述位置への text 挿入ではない。puzzle body や scene body 内の import、owner block の途中を別 file にする fragment、sibling source order による可視性はない。各 document は `puzzle ... {}` や `scene ... {}` など完全な top-level 宣言を所有する。
 
 `else` も `} else {` または `else {` で書ける。ただし、gameplay としての `else` は `if` セクションの制約に従う。
 
@@ -1534,9 +1514,11 @@ visual のインライン ASCII shape を明示する場合は `shape = { ... }`
 `shape =` の次行から暗黙に row が続く形は使わない。shape 以外の設定から
 ASCII row を区別できる場合は、`shape = {}` 自体を省略して row だけを書ける。
 
-visual shape は時間 × Z × Y × X の共通モデルを使う。`>` だけの行は次の animation frame、`-` だけの行は同じ frame 内の次の -Z layer を表す。shape 内に空行は書かない。2D model に属する `visuals` は Z depth 1 だけを受け付けるため `-` は使えず、3D model に属する `visuals` では複数 layer を書ける。2D/3D は `visuals` の綴りではなく、`of <model>` または所有 model の `puzzle` / `puzzle` から決まる。
+visual shape は時間 × Z × Y × X の共通モデルを使う。ASCIIの列は +X（right）、行は +Y（back）、layerは +Z（down）へ進む。slice 1は最初のASCII layerで、slice番号も同じ順に増える。`>` だけの行は次の animation frame、`-` だけの行は同じ frame 内の次の +Z layer を表す。shape 内に空行は書かない。2D model に属する `visuals` は Z depth 1 だけを受け付けるため `-` は使えず、3D model に属する `visuals` では複数 layer を書ける。2D/3D は `visuals` の綴りではなく、`of <model>` または所有 model の `puzzle` / `puzzle` から決まる。
 
-visual entry は、selector block の中に色行、空間操作、ASCII pattern の順で書ける。人間向けには `translate local (1, 0)` / `rotate local 90deg` の簡潔形を使え、world は既定なので省略できる。2D の `rotate directions from up` は `rotate (directions - up)` と同じで、selector が bind した angle expression から基準 angle を引く。`rotate local directions from up` のように space と合成できる。script/editor は `translate { space = world; value = (...) }` / `rotate { space = local; angle = ...; from = ...; axis = ... }` の明示blockを生成できる。色行は `colors` keyword を省略できる。`transparent` は通常のpalette色であり、`.` のempty cellとは異なる。
+visual entry は、名前を header に置き、block の中に色行、空間操作、ASCII pattern の順で書ける。名前が object / group / schema selector に解決できる場合は concrete object visual へ展開して結び付け、解決できない名前は standalone visual asset として保持する。人間向けには `translate local (1, 0)` / `rotate local 90deg` の簡潔形を使え、world は既定なので省略できる。2D の `rotate directions from up` は `rotate (directions - up)` と同じで、名前が bind した angle expression から基準 angle を引く。`rotate local directions from up` のように space と合成できる。script/editor は `translate { space = world; value = (...) }` / `rotate { space = local; angle = ...; from = ...; axis = ... }` の明示blockを生成できる。色行は `colors` keyword を省略できる。`transparent` は通常のpalette色であり、`.` のempty cellとは異なる。
+
+block entry の完全形は `visual <name> { ... }`。`<name> { ... }` は同じ entry の sugar である。名前は header に置き、body property にはしない。
 
 単純な visual は block braces なしでも書ける。selector の次の行が色 1 つだけで pattern がなければ cell 全体の単色塗りつぶしになる。これは `Background` / `#9CBD0F` のような PuzzleScript 由来の色だけ visual でも同じで、`00000` のようなダミー ASCII pattern は不要。pattern を続けると、その行数・列数が visual pixel grid になる。`pixels_per_cell <w> <h>` を省略した場合は ASCII pattern の行数・列数が 1 cell の pixel grid になる。明示した場合は、pattern がその grid より大きくても描画は overflow できる。
 
@@ -1544,7 +1526,7 @@ visual entry は、selector block の中に色行、空間操作、ASCII pattern
 
 shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + `shape <ref>` で分けて書く。
 
-2D translateはvec2、3D translateはvec3を要求する。2D rotateは`rotate [world|local] <angle> [from <angle>]`、3D rotateは`rotate [world|local] <angle> [from <angle>] [around <direction-or-vec3>]`を使う。`from`は主angleから基準angleを引くsugarなので、旧`rotate from <angle>`は受理しない。3Dでaxisを省略した2D形は+Z（`up`）axisとして扱う。4方向のvariant visualは`Arrow:horizontal { rotate horizontal from front }`と書けば、frontを0度としてright/front/left/backが-90/0/90/-180度へ展開される。操作はsource順のaffine列で、world操作は左合成、local操作は右合成する。旧`offset`、`rotate using`、包括的な`transform` nodeは受理しない。
+2D translateはvec2、3D translateはvec3を要求する。2D rotateは`rotate [world|local] <angle> [from <angle>]`、3D rotateは`rotate [world|local] <angle> [from <angle>] [around <direction-or-vec3>]`を使う。`from`は主angleから基準angleを引くsugarなので、旧`rotate from <angle>`は受理しない。3Dでaxisを省略した2D形は+Z（`down`）axisとして扱う。4方向のvariant visualは`Arrow:horizontal { rotate horizontal from front }`と書けば、frontを0度としてright/front/left/backが-90/0/90/-180度へ展開される。操作はsource順のaffine列で、world操作は左合成、local操作は右合成する。旧`offset`、`rotate using`、包括的な`transform` nodeは受理しない。
 
 `visuals` はvisual alias、palette、shape、空間操作を定義する。`shapes`はvisual dataだけを所有し、rotation派生を所有しない。同じnamed shapeを異なる姿勢で使う場合は各visual参照側へ`rotate`を書く。
 
@@ -1672,11 +1654,11 @@ play_music loop
 
 scene / component RHS の canonical form は、`input <name>`、`component_effect <name>`、bare scene routine name、または direct scene effect。`input <name>` は focus 中の scene transition または puzzle transition に渡る semantic input で、1 回の遷移中に必ず 1 つだけ存在する原因として扱う。`component_effect <name>` は model window など、lowering 後にも専用操作を持つ component に使う。scene / presentation / lifecycle effect は `effect` wrapper を付けずに直接書く。
 
-scene は component definition の authoring 名であり、runtime では一つの surface に component instance が順序付きで mount される。先頭 instance が root、残りが content / overlay である。`goto <component>` は root を置換して履歴を破棄し、`enter <component>` は現在の focus を履歴へ積んで root を置換し、`back` は履歴から root を復元する。`show` / `hide` / `toggle` は mount と visibility、`focus` は input routing、`move <component> first|last|before <anchor>|after <anchor>` は root より上の表示順序を操作する。`start <component>` は対象 instance state を初期化してから `goto` する。level component への入場は `goto sokoban`、`goto sokoban(level_name)`、`goto playing(level)` のように書く。通常の clear / advance / restart は model window component と puzzle lifecycle が所有し、scene から明示的に介入するときは `<target>.restart`、`<target>.next_level` のように target を指定する。複数 effect は block に一行ずつ書く。
+scene は component definition の authoring 名であり、runtime では一つの surface に component instance が順序付きで mount される。先頭 instance が root、残りが content / overlay である。`goto <component>` は root を置換して履歴を破棄し、`enter <component>` は現在の focus を履歴へ積んで root を置換し、`back` は履歴から root を復元する。root置換時は以前のinstanceをすべてunmountし、`present`で作られた一意IDのstateも破棄する。`create <component>` はdefinition名と同じ安定したIDを持つhidden overlay instanceをmountして、そのinstance固有のstateを初期化する。`show` / `hide` / `toggle` はmount済みinstanceのvisibilityだけを変更し、`focus` はvisible instanceへのinput routingだけを変更する。focused instanceをhide/deleteする場合は先に別のinstanceへfocusを移す。`delete` はnon-root instanceとそのstateを削除し、`move <component> first|last|before <anchor>|after <anchor>` はrootより上の表示順序を操作する。`start <component>` は対象instance stateを初期化してから`goto`する。level componentへの入場は `goto sokoban`、`goto sokoban(level_name)`、`goto playing(level)` のように書く。通常のclear / advance / restartはmodel window componentとpuzzle lifecycleが所有し、sceneから明示的に介入するときは `<target>.restart`、`<target>.next_level` のようにtargetを指定する。複数effectはblockに一行ずつ書く。
 
 game progress は scene effect から明示的に操作できる。`clear_game_progress` は `level.cleared` を全 level で false にし、`current_level` を初期状態に戻し、`persistent var` を既定値に戻す。細かく操作する場合は `set current_level = <level>`、`clear current_level`、`set level.cleared = true|false`、`set level(<level>).cleared = true|false`、`reset persistent_vars`、`reset <persistent var>` を使う。undo/redo 履歴だけを捨てる場合は `clear_undo_history` を使う。
 
-`present <definition>(<property> = <expr>, ...) [as content|overlay] [await <event>]` は component instance を root の上へ追加する primitive。root の置換には `goto` / `enter` を使う。`await` がある instance は modal input target となり、指定 event を受け取るまで後続 effect を停止する。`message <expr>` は `present standard.message(text = <expr>) as overlay await dismiss` の sugar。`expr` は quoted text、scene `var`、top-level `var`、または effect binding を参照できる。
+`present <definition>(<property> = <expr>, ...) [as content|overlay] [await <event>]` は一意なinstance IDと独立stateを持つvisible component instanceをrootの上へ追加するprimitive。同じdefinitionを複数回presentしてもstateは共有しない。rootの置換には `goto` / `enter` を使う。`await` があるinstanceはmodal input targetとなり、definitionが宣言したeventを受け取るまで後続effectを停止する。`message <expr>` は `present standard.message(text = <expr>) as overlay await dismiss` のsugar。`standard.message`も登録済みdefinitionとして通常のtext/layout rendererで描画される。`expr`はquoted text、scene `var`、top-level `var`、またはeffect bindingを参照できる。
 
 `wait [duration]` は scene / component effect sequence の presentation wait。`duration` は `wait 0.1s`、`wait 1s`、`wait 100ms` のように秒またはミリ秒で書く。`wait` 単体は既定で `0.2s` 待つ。top-level に `default_wait_time = 500ms` のように書くと bare `wait` の既定待ち時間を変更できる。`message` は時間ではなく `dismiss` component event を待つ。
 
@@ -1852,13 +1834,13 @@ Scene layout は `puzzle` を固定 4:3 display として扱う。`puzzle` は�
 
 `grid occupied_cells` は object が存在する cell の外周 edge を表示する読み取り補助。floor や volume の追加ではなく、level、collision、rule、win condition には影響しない。省略時は表示しない。
 
-`pixelate` / `pixelate scale=4` は 3D canvas の描画後 pixel 化 postprocess を有効にする。`scale` は一度縮小する倍率で、省略時は `4`。省略時は pixel 化しない。
+`pixelate` / `pixelate scale=4` は Three.js の描画解像度を `scale` 分の1にし、nearest-neighbor で表示サイズへ拡大する。省略時の `scale` は `4`。`smoothing` は低解像度描画時の WebGL antialiasing を制御する。省略時は pixel 化しない。
 
 `render { shade }` は 3D visual voxel の面ごとの明暗付けを有効にする表示設定。visual data や puzzle state には影響しない。省略時も on。
 
 3D object は、その `puzzle` model に属する `visuals` に同名 visual が定義されている場合だけ voxel visual を描く。visual 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
 
-3D visual も2Dと同じ visual entry、palette、shape、animation frame 文法を使う。`-` だけの行が次の -Z layer、`>` だけの行が次の frame であり、separator の前後に空行は入れない。色行だけなら 1x1x1 の filled cube visual になる。再利用する voxel pattern は `shapes { <name> { ... } }` で定義し、visual entry 側では `shape = <name>` と書く。
+3D visual も2Dと同じ visual entry、palette、shape、animation frame 文法を使う。`-` だけの行が次の +Z（down）layer、`>` だけの行が次の frame であり、separator の前後に空行は入れない。色行だけなら 1x1x1 の filled cube visual になる。再利用する voxel pattern は `shapes { <name> { ... } }` で定義し、visual entry 側では `shape = <name>` と書く。
 
 ```txt
 visuals simple of world {

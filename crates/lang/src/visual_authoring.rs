@@ -4,7 +4,6 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct VisualNodeSyntax {
     pub(crate) selector: Option<String>,
-    pub(crate) selector_body_line: Option<usize>,
     pub(crate) colors: Option<Vec<String>>,
     pub(crate) colors_body_line: Option<usize>,
     pub(crate) duration: Option<String>,
@@ -121,12 +120,12 @@ fn analyze_visual_syntax(
 }
 
 pub(crate) fn analyze_visual_body_product(
-    header: Option<&str>,
+    header: Option<&crate::source::LogicalLine>,
     lines: &[crate::source::LogicalLine],
     is_known_shape: impl FnMut(&str) -> bool,
     resolve_display_color: impl FnMut(&str) -> Option<crate::SourceHighlightColor>,
 ) -> crate::surface::ParseProduct<VisualBodyProduct> {
-    let syntax = parse_visual_node(header, lines);
+    let syntax = parse_visual_node(header.map(AsRef::as_ref), lines);
     let shape = resolve_visual_shape(&syntax, is_known_shape);
     let mut error = syntax.issues.first().map(|issue| VisualBodyError {
         line: issue.line.clone(),
@@ -144,7 +143,13 @@ pub(crate) fn analyze_visual_body_product(
             message: message.to_string(),
         });
     }
-    let recognition = recognize_visual_display(&syntax, Some(&shape), lines, resolve_display_color);
+    let recognition = recognize_visual_display(
+        &syntax,
+        Some(&shape),
+        header,
+        lines,
+        resolve_display_color,
+    );
     crate::surface::ParseProduct::new(
         VisualBodyProduct {
             syntax,
@@ -628,17 +633,11 @@ pub(crate) fn parse_visual_node(
             continue;
         }
         match tokens.as_slice() {
-            ["selector", "=", value] | ["selector", value] => {
-                syntax.prelude_rows.push(line.to_string());
-                if syntax.selector.is_none() {
-                    syntax.selector_body_line = Some(line_index);
-                }
-                set_string_once(
-                    &mut syntax.selector,
-                    value,
+            ["selector", "=", _] | ["selector", _] => {
+                issue(
+                    &mut syntax,
                     line,
-                    "duplicate visual selector",
-                    &mut syntax.issues,
+                    "`selector` is not a visual property; write visual <name> {",
                 );
             }
             ["colors", "=", values @ ..] | ["colors", values @ ..] if !values.is_empty() => {
@@ -740,13 +739,14 @@ pub(crate) fn parse_visual_node(
 fn recognize_visual_display(
     syntax: &VisualNodeSyntax,
     resolved: Option<&ResolvedVisualShape>,
+    header: Option<&crate::source::LogicalLine>,
     lines: &[crate::source::LogicalLine],
     mut resolve_display_color: impl FnMut(&str) -> Option<crate::SourceHighlightColor>,
 ) -> crate::surface::ParserRecognition {
     use crate::surface::{ParserRecognition, SourceSpan, SurfaceDisplayFact};
 
     let mut recognition = ParserRecognition::default();
-    recognize_visual_semantics(syntax, lines, &mut recognition);
+    recognize_visual_semantics(syntax, header, lines, &mut recognition);
     let colors = syntax.colors.as_deref().unwrap_or_default();
     if let Some(line_index) = syntax.colors_body_line
         && let Some(line) = lines.get(line_index)
@@ -825,6 +825,7 @@ fn recognize_visual_display(
 
 fn recognize_visual_semantics(
     syntax: &VisualNodeSyntax,
+    header: Option<&crate::source::LogicalLine>,
     lines: &[crate::source::LogicalLine],
     recognition: &mut crate::surface::ParserRecognition,
 ) {
@@ -846,11 +847,8 @@ fn recognize_visual_semantics(
             }
         }
     };
-    if let (Some(line_index), Some(selector)) = (syntax.selector_body_line, &syntax.selector)
-        && let Some(line) = lines.get(line_index)
-    {
-        mark(recognition, line, "selector", SurfaceSemanticKind::Setting);
-        mark_visual_compound(recognition, line, selector, SurfaceSemanticKind::Object);
+    if let (Some(header), Some(selector)) = (header, syntax.selector.as_deref()) {
+        mark_visual_compound(recognition, header, selector, SurfaceSemanticKind::Object);
     }
     if let Some(line_index) = syntax.colors_body_line
         && let Some(line) = lines.get(line_index)
@@ -1402,11 +1400,10 @@ mod tests {
     }
 
     #[test]
-    fn explicit_and_bare_inline_rows_preserve_distinct_syntax_with_same_content() {
+    fn full_header_and_bare_sugar_preserve_distinct_bodies_with_same_selector() {
         let explicit = parse_visual_node(
-            Some("visual {"),
+            Some("visual Player {"),
             &[
-                "selector = Player",
                 "colors = #fff #000",
                 "duration = 500ms",
                 "shape = {",
@@ -1446,6 +1443,20 @@ mod tests {
             rows(explicit.shape.unwrap()),
             rows(shorthand.shape.unwrap())
         );
+    }
+
+    #[test]
+    fn selector_property_is_rejected_in_visual_body() {
+        let syntax = parse_visual_node(
+            Some("visual Player {"),
+            &["selector = Player", "colors = #fff"].map(str::to_string),
+        );
+
+        assert!(syntax.issues.iter().any(|issue| {
+            issue
+                .message
+                .contains("`selector` is not a visual property")
+        }));
     }
 
     #[test]

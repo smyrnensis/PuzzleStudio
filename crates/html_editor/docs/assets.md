@@ -9,11 +9,11 @@ file "visuals/player.png"
 }
 ```
 
-Paths are relative to the game folder. Only declared CSS and scripts are loaded,
+Paths are relative to the workspace. Only declared CSS and scripts are loaded,
 and standalone export embeds only declared files. A file merely being present
 in the folder does not make it a game asset.
 
-Visual `image` paths must also belong to the game folder.
+Visual `image` paths must also belong to the workspace.
 
 ```puzzle
 visuals {

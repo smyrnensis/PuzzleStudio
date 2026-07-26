@@ -5,13 +5,19 @@ highlighting integration, workspace behavior, and editor-owned layout.
 
 ## Generated Output
 
-`static/renderer.js`, `static/renderer.css`, and
-`static/puzzle3_visual_core.js` are generated Tauri `frontendDist` copies. Their
+`static/renderer.css` and `static/puzzle3_visual_core.js` are generated Tauri
+`frontendDist` copies. Their
 only source owners are the same-named files under `../html_play/static/`. Never
 edit the editor copies directly. Run `tools/sync_static_assets.sh` to regenerate
 them, or `tools/sync_static_assets.sh --check` to verify freshness. Adding a new
 shared desktop distribution asset requires adding its mapping only to that sync
 script; freshness and desktop-boundary checks consume the script's check mode.
+
+`static/editor_authoring_renderer.js` is editor-owned. It renders incomplete
+authoring grids and object thumbnails as interactive DOM. Solver observations,
+playtest previews, and other valid runtime states must be projected through the
+Rust typed render scene and use `../html_play/static/renderer.js`; they must not
+be interpreted by the authoring renderer.
 
 `static/editor_codemirror.js` is generated from `web/src/editor_codemirror.js`
 and the locked npm dependencies under `web/`. Do not edit the bundle directly.

@@ -1,5 +1,5 @@
-title = "Microban"
-author = "Levels by David Skinner"
+const title = "Microban"
+const author = "Levels by David Skinner"
 
 theme = "puzzlescript"
 

@@ -3,21 +3,34 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+editor_target_dir="${CARGO_TARGET_DIR:-target}"
+wasm_profile="${1:-release}"
+if (($# > 1)) || [[ "$wasm_profile" != "debug" && "$wasm_profile" != "release" ]]; then
+  echo "usage: tools/build_wasm_editor.sh [debug|release]" >&2
+  exit 2
+fi
 
-cargo build --target wasm32-unknown-unknown --release -p puzzle-wasm
+if [[ "$wasm_profile" == "release" ]]; then
+  target_profile_dir="release"
+  cargo build --target wasm32-unknown-unknown --release -p puzzle-wasm
+else
+  target_profile_dir="debug"
+  cargo build --target wasm32-unknown-unknown -p puzzle-wasm
+fi
+
 mkdir -p crates/html_editor/static/wasm
 wasm-bindgen \
   --target web \
   --out-dir crates/html_editor/static/wasm \
-  target/wasm32-unknown-unknown/release/puzzle_wasm.wasm
+  "$editor_target_dir/wasm32-unknown-unknown/$target_profile_dir/puzzle_wasm.wasm"
 
 if ! grep -q "export function activate_source_analysis" crates/html_editor/static/wasm/puzzle_wasm.js; then
   echo "generated WASM bindings are missing activate_source_analysis" >&2
   exit 1
 fi
 
-if ! grep -q "export function activate_source_analysis_with_profile" crates/html_editor/static/wasm/puzzle_wasm.js; then
-  echo "generated WASM bindings are missing activate_source_analysis_with_profile" >&2
+if grep -q "export function activate_source_analysis_with_profile" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings still expose the removed file-level source profile" >&2
   exit 1
 fi
 
@@ -56,8 +69,8 @@ if ! grep -q "export class WasmSolverService" crates/html_editor/static/wasm/puz
   exit 1
 fi
 
-if ! grep -q "export function workspace_presentation_manifest" crates/html_editor/static/wasm/puzzle_wasm.js; then
-  echo "generated WASM bindings are missing workspace_presentation_manifest" >&2
+if ! grep -q "export class WasmWorkspaceSession" crates/html_editor/static/wasm/puzzle_wasm.js; then
+  echo "generated WASM bindings are missing WasmWorkspaceSession" >&2
   exit 1
 fi
 
@@ -66,8 +79,8 @@ if ! grep -q "documents: ReadonlyArray<WorkspaceSourceDocument>" crates/html_edi
   exit 1
 fi
 
-if ! grep -q "workspace_presentation_manifest.*WorkspacePresentationManifest" crates/html_editor/static/wasm/puzzle_wasm.d.ts; then
-  echo "generated editor WASM bindings do not expose the typed workspace presentation manifest" >&2
+if ! grep -q "presentation_manifest.*WorkspacePresentationManifest" crates/html_editor/static/wasm/puzzle_wasm.d.ts; then
+  echo "generated editor WASM workspace session does not expose the typed presentation manifest" >&2
   exit 1
 fi
 

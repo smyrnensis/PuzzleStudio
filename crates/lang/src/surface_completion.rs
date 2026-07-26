@@ -486,6 +486,10 @@ fn visual_completion_slots(
                 .filter(|token| !token.is_empty())
                 .collect::<Vec<_>>();
             match tokens.as_slice() {
+                ["visual"] => Some(vec![
+                    SemanticCompletionSlot::Objects,
+                    SemanticCompletionSlot::Groups,
+                ]),
                 ["colors", ..] => Some(vec![SemanticCompletionSlot::Colors]),
                 ["shape", ..] => Some(vec![SemanticCompletionSlot::Shapes]),
                 [first, ..] if !matches!(*first, "shape" | "visual" | "palette" | "colors") => {
@@ -904,7 +908,7 @@ mod tests {
     #[test]
     fn completion_context_uses_source_scope_for_same_word() {
         let sounds_source = r#"
-title = completion_sounds_authoring_block
+const title = completion_sounds_authoring_block
 sounds {
 s
 }
@@ -927,7 +931,7 @@ s
         );
 
         let scene_source = r#"
-title = completion_scene_scope
+const title = completion_scene_scope
 scene playing {
 rules {
 win -> s
@@ -951,7 +955,7 @@ win -> s
     #[test]
     fn assets_completion_does_not_use_typed_entry_keywords() {
         let source = r#"
-title = completion_assets_content
+const title = completion_assets_content
 assets {
 
 }
@@ -974,7 +978,7 @@ assets {
     #[test]
     fn authoring_generic_completions_follow_owner_schema() {
         let source = r#"
-title = completion_authoring_schema
+const title = completion_authoring_schema
 sounds {
 s
 }
@@ -1030,7 +1034,7 @@ type = "o
     #[test]
     fn completion_symbols_are_surface_document_product() {
         let source = r#"
-title = completion_surface_product
+const title = completion_surface_product
 puzzle board {
 tags {
 facing = left right

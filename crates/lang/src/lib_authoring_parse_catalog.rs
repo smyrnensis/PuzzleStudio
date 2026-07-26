@@ -579,7 +579,7 @@ fn collect_puzzle_group_declarations_from_entries(
 
 fn parser_surface_catalog_from_source_scan(
     source_scan: &source::SurfaceSourceScan,
-    source_profile: Option<PuzzleSourceProfile>,
+    owner_dimension: Option<crate::ModelDimension>,
 ) -> crate::surface::ParseProduct<Result<ParserSurfaceSnapshot, DiagnosticReport>> {
     let mut recognition = crate::surface::ParserRecognition::default();
     let logical_lines = source_scan.editor_logical_lines();
@@ -593,6 +593,12 @@ fn parser_surface_catalog_from_source_scan(
         Ok(entries) => entries,
         Err(report) => return crate::surface::ParseProduct::new(Err(report), recognition),
     };
+    for entry in document_entries
+        .iter()
+        .filter(|entry| entry.directive == puzzle_authoring::PuzzleDirectiveSurface::Import)
+    {
+        recognition.merge(entry.semantics.fixed.clone());
+    }
     let shell = match parse_document_shell_entries(&document_entries) {
         Ok(shell) => shell,
         Err(report) => return crate::surface::ParseProduct::new(Err(report), recognition),
@@ -649,11 +655,7 @@ fn parser_surface_catalog_from_source_scan(
         Err(DiagnosticReport::from_diagnostics(compile_diagnostics))
     };
     let mut integrated = integrate_level_editor_document_parts(parts);
-    if let (Some(entries), Some(source_profile)) = (loose_entries, source_profile) {
-        let dimension = match source_profile {
-            PuzzleSourceProfile::Puzzle2d => crate::ModelDimension::Two,
-            PuzzleSourceProfile::Puzzle3d => crate::ModelDimension::Three,
-        };
+    if let (Some(entries), Some(dimension)) = (loose_entries, owner_dimension) {
         let catalog = Catalog::for_dimension(dimension);
         let mut level_count = 0;
         for entry in &entries {
@@ -980,7 +982,14 @@ fn integrate_level_editor_document_parts(
             let mut char_objects = catalog.char_objects.clone();
             char_objects.extend(body.local_char_objects);
             let parsed =
-                crate::level::parse_level(&game, &body.lines, Some(empty_char), &char_objects, &[]);
+                crate::level::parse_level(
+                    &game,
+                    &level.source,
+                    &body.lines,
+                    Some(empty_char),
+                    &char_objects,
+                    &[],
+                );
             recognition.merge(parsed.recognition);
             let parsed = parsed.value?;
             Ok::<_, DiagnosticReport>(LevelEditorIntegratedLevel {
@@ -1812,6 +1821,10 @@ fn parse_mark_directive(
     Ok(())
 }
 
+fn is_layers_merge_block(line: &str) -> bool {
+    is_block_header_line(line) && matches!(split_header_tokens(line).as_slice(), ["merge"])
+}
+
 fn parse_layers_block(
     lines: &[source::LogicalLine],
     start: usize,
@@ -1863,7 +1876,7 @@ fn parse_layers_block(
                     ));
                 }
             }
-            ["merge"] if is_block_header_line(&lines[i]) => {
+            _ if is_layers_merge_block(&lines[i].text) => {
                 if !allow_merge {
                     return Err(parse_error(&lines[i], "layers merge cannot be nested"));
                 }
@@ -2069,7 +2082,7 @@ fn collect_layer_block_terms(
                 i += 1;
                 continue;
             }
-            ["merge"] if is_block_header_line(&lines[i]) => {
+            _ if is_layers_merge_block(&lines[i].text) => {
                 let next = collect_layer_block_terms(
                     lines,
                     i + 1,

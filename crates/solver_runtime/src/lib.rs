@@ -183,9 +183,7 @@ impl SolverService {
                 "solver workspace requires {estimated_bytes} source bytes, exceeding the {MAX_PREPARED_SOURCE_BYTES}-byte prepared-artifact limit"
             ));
         }
-        let source = puzzle_lang::expand_game_imports_from_documents(entry_path, &documents)
-            .map_err(|error| error.to_string())?;
-        let document = puzzle_lang::parse_game_for_path(&source, entry_path)
+        let document = puzzle_lang::parse_workspace_game(entry_path, &documents)
             .map_err(|error| error.to_string())?;
         let model = match document.single_model() {
             Some(LoadedDocumentModel::Puzzle3d { game, .. }) => {
@@ -236,8 +234,8 @@ impl SolverService {
         request: SolverSearchRequest,
         now_ms: u64,
     ) -> Result<u32, String> {
-        if request.max_depth == 0 || request.max_nodes == 0 {
-            return Err("solver maxDepth and maxNodes must be positive".to_string());
+        if request.max_depth == 0 || request.max_stored_nodes == 0 {
+            return Err("solver maxDepth and maxStoredNodes must be positive".to_string());
         }
         let search = {
             let artifact = self.artifacts.get_mut(artifact_id).ok_or_else(|| {
@@ -297,12 +295,12 @@ impl SolverService {
         level_index: usize,
         session: GameSession,
         max_depth: u32,
-        max_nodes: usize,
+        max_stored_nodes: usize,
         max_duration: Duration,
         now_ms: u64,
     ) -> Result<SolverResult, String> {
-        if max_depth == 0 || max_nodes == 0 {
-            return Err("solver maxDepth and maxNodes must be positive".to_string());
+        if max_depth == 0 || max_stored_nodes == 0 {
+            return Err("solver maxDepth and maxStoredNodes must be positive".to_string());
         }
         let search = {
             let artifact = self.artifacts.get_mut(artifact_id).ok_or_else(|| {
@@ -317,7 +315,7 @@ impl SolverService {
                 level_index,
                 session,
                 max_depth,
-                max_nodes,
+                max_stored_nodes,
             )?)
         };
         let search_id = self.store_search(artifact_id, search)?;
@@ -453,7 +451,7 @@ impl SolverService {
         match &artifact.model {
             PreparedModel::TwoD(loaded) => {
                 let state = state.into_state2(&loaded.game)?;
-                let mut session = GridGameSession::new(loaded);
+                let mut session = GridGameSession::new_headless_before_level_start(loaded);
                 session
                     .start_level_from_state(loaded, level_index, state, materialize_level_start)
                     .map_err(|error| format!("{error:?}"))?;
@@ -461,7 +459,7 @@ impl SolverService {
             }
             PreparedModel::ThreeD(loaded) => {
                 let state = state.into_state3(&loaded.game)?;
-                let mut session = GridGameSession::new(loaded);
+                let mut session = GridGameSession::new_headless_before_level_start(loaded);
                 session
                     .start_level_from_state(loaded, level_index, state, materialize_level_start)
                     .map_err(|error| format!("{error:?}"))?;
@@ -564,17 +562,23 @@ fn start_grid_search<const D: usize, Size: GridSize<D>>(
         state,
         materialize_level_start,
         max_depth,
-        max_nodes,
+        max_stored_nodes,
     } = request;
     if level_index >= loaded.levels.len() {
         return Err(format!("solver level index out of range: {}", level_index));
     }
     let state = decode_state(state, &loaded.game)?;
-    let mut initial_session = GridGameSession::new(&loaded);
+    let mut initial_session = GridGameSession::new_headless_before_level_start(&loaded);
     initial_session
         .start_level_from_state(&loaded, level_index, state, materialize_level_start)
         .map_err(|error| format!("{error:?}"))?;
-    start_grid_search_from_session(loaded, level_index, initial_session, max_depth, max_nodes)
+    start_grid_search_from_session(
+        loaded,
+        level_index,
+        initial_session,
+        max_depth,
+        max_stored_nodes,
+    )
 }
 
 fn start_grid_search_from_session<const D: usize, Size: GridSize<D>>(
@@ -582,7 +586,7 @@ fn start_grid_search_from_session<const D: usize, Size: GridSize<D>>(
     level_index: usize,
     initial_session: GridGameSession<D, Size>,
     max_depth: u32,
-    max_nodes: usize,
+    max_stored_nodes: usize,
 ) -> Result<ActiveGridSearch<D, Size>, String> {
     if level_index >= loaded.levels.len() {
         return Err(format!("solver level index out of range: {level_index}"));
@@ -618,7 +622,7 @@ fn start_grid_search_from_session<const D: usize, Size: GridSize<D>>(
         initial_score,
         ResumableSearchLimits {
             max_depth,
-            max_stored_nodes: max_nodes,
+            max_stored_nodes,
         },
     );
     Ok(ActiveGridSearch {
@@ -957,6 +961,13 @@ fn collect_condition_inputs<const D: usize>(
                 }
             }
         }
+        GridRuleCondition::RuleMatches { guards, .. } => {
+            for guard in guards {
+                if let GridGuard::InputIs(input) = guard {
+                    inputs.insert(*input);
+                }
+            }
+        }
         GridRuleCondition::AnyMatches(_) | GridRuleCondition::NoMatches(_) => {}
     }
 }
@@ -986,9 +997,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rule_match_condition_contributes_guard_inputs() {
+        let expected = InputId(7);
+        let condition = GridRuleCondition::<2>::RuleMatches {
+            guards: vec![GridGuard::InputIs(expected)],
+            pattern: puzzle_core::GridPattern::from_components(Vec::new()),
+        };
+        let mut inputs = BTreeSet::new();
+
+        collect_condition_inputs(&condition, &mut inputs);
+
+        assert_eq!(inputs, BTreeSet::from([expected]));
+    }
+
+    #[test]
     fn prepared_artifact_owns_compiled_rules_and_search_state() {
         let source = r#"
-title = solver_push_goal
+const title = solver_push_goal
 
 puzzle default {
 layers {
@@ -1045,7 +1070,7 @@ PBG
                     state: initial_state,
                     materialize_level_start: true,
                     max_depth: 8,
-                    max_nodes: 32,
+                    max_stored_nodes: 32,
                 },
                 0,
             )
@@ -1059,7 +1084,7 @@ PBG
         let mut service = SolverService::new();
         let document = WorkspaceSourceDocument {
             path: "game.puzzle".to_string(),
-            source: "title = empty".to_string(),
+            source: "const title = empty".to_string(),
         };
         assert_eq!(
             service.prepare_workspace("", vec![document.clone()], 0),
@@ -1081,7 +1106,7 @@ PBG
     #[test]
     fn search_nodes_are_logical_and_progress_materialization_is_real() {
         let source = r#"
-title = logical_search_real_observation
+const title = logical_search_real_observation
 
 puzzle default {
 layers {
@@ -1142,7 +1167,7 @@ P.....DG
                     state: initial_state,
                     materialize_level_start: true,
                     max_depth: 8,
-                    max_nodes: 32,
+                    max_stored_nodes: 32,
                 },
                 0,
             )

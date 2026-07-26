@@ -9,158 +9,9 @@ fn planar_visual_pattern(visual: &VisualDef) -> &Vec<String> {
 }
 
 #[test]
-fn virtual_workspace_imports_are_resolved_by_the_language_layer() {
-    let documents = vec![
-        WorkspaceSourceDocument {
-            path: "games/demo/game.puzzle".to_string(),
-            source: "import \"parts/model.puzzle\"\n".to_string(),
-        },
-        WorkspaceSourceDocument {
-            path: "games/demo/parts/model.puzzle".to_string(),
-            source: "title = imported\npuzzle default { objects {} collision_layers {} rules {} levels default of default {} }\n".to_string(),
-        },
-    ];
-    let expanded = expand_game_imports_from_documents("games/demo/game.puzzle", &documents)
-        .expect("virtual import expansion");
-    assert!(expanded.contains("title = imported"));
-    assert!(!expanded.contains("import \"parts/model.puzzle\""));
-}
-
-fn remapped_workspace_line(
-    entry_path: &str,
-    documents: &[WorkspaceSourceDocument],
-    expanded_line: usize,
-) -> (Option<String>, Option<usize>) {
-    let expanded = expand_game_imports_from_documents_with_origins(entry_path, documents)
-        .expect("workspace import expansion");
-    let report = expanded.remap_diagnostic_report(DiagnosticReport::error_at_source_line_number(
-        "probe",
-        "probe",
-        expanded_line,
-    ));
-    let span = report.diagnostics()[0]
-        .primary_span
-        .as_ref()
-        .expect("remapped diagnostic span");
-    (span.file.clone(), span.line)
-}
-
-#[test]
-fn virtual_workspace_origin_map_accounts_for_empty_imports() {
-    let documents = vec![
-        WorkspaceSourceDocument {
-            path: "game.puzzle".to_string(),
-            source: "import \"empty.puzzle\"\nentry line\n".to_string(),
-        },
-        WorkspaceSourceDocument {
-            path: "empty.puzzle".to_string(),
-            source: String::new(),
-        },
-    ];
-
-    assert_eq!(
-        remapped_workspace_line("game.puzzle", &documents, 2),
-        (Some("game.puzzle".to_string()), Some(2))
-    );
-}
-
-#[test]
-fn virtual_workspace_origin_map_preserves_consecutive_unterminated_imports() {
-    let documents = vec![
-        WorkspaceSourceDocument {
-            path: "game.puzzle".to_string(),
-            source: "import \"first.puzzle\"\nimport \"second.puzzle\"\n".to_string(),
-        },
-        WorkspaceSourceDocument {
-            path: "first.puzzle".to_string(),
-            source: "first line".to_string(),
-        },
-        WorkspaceSourceDocument {
-            path: "second.puzzle".to_string(),
-            source: "second line".to_string(),
-        },
-    ];
-
-    assert_eq!(
-        remapped_workspace_line("game.puzzle", &documents, 1),
-        (Some("first.puzzle".to_string()), Some(1))
-    );
-    assert_eq!(
-        remapped_workspace_line("game.puzzle", &documents, 2),
-        (Some("second.puzzle".to_string()), Some(1))
-    );
-}
-
-#[test]
-fn virtual_workspace_origin_map_preserves_nested_imports() {
-    let documents = vec![
-        WorkspaceSourceDocument {
-            path: "game.puzzle".to_string(),
-            source: "import \"middle.puzzle\"\n".to_string(),
-        },
-        WorkspaceSourceDocument {
-            path: "middle.puzzle".to_string(),
-            source: "import \"leaf.puzzle\"\nmiddle line\n".to_string(),
-        },
-        WorkspaceSourceDocument {
-            path: "leaf.puzzle".to_string(),
-            source: "leaf line".to_string(),
-        },
-    ];
-
-    assert_eq!(
-        remapped_workspace_line("game.puzzle", &documents, 1),
-        (Some("leaf.puzzle".to_string()), Some(1))
-    );
-    assert_eq!(
-        remapped_workspace_line("game.puzzle", &documents, 2),
-        (Some("middle.puzzle".to_string()), Some(2))
-    );
-}
-
-#[test]
-fn virtual_workspace_import_cycles_fail_visibly() {
-    let documents = vec![
-        WorkspaceSourceDocument {
-            path: "game.puzzle".to_string(),
-            source: "import \"part.puzzle\"\n".to_string(),
-        },
-        WorkspaceSourceDocument {
-            path: "part.puzzle".to_string(),
-            source: "import \"game.puzzle\"\n".to_string(),
-        },
-    ];
-    let error =
-        expand_game_imports_from_documents("game.puzzle", &documents).expect_err("cycle must fail");
-    assert!(error.to_string().contains("cyclic import"));
-}
-
-#[test]
-fn virtual_workspace_rejects_duplicate_normalized_paths() {
-    let documents = vec![
-        WorkspaceSourceDocument {
-            path: "parts/../game.puzzle".to_string(),
-            source: "title = first\n".to_string(),
-        },
-        WorkspaceSourceDocument {
-            path: "game.puzzle".to_string(),
-            source: "title = second\n".to_string(),
-        },
-    ];
-
-    let error = expand_game_imports_from_documents("game.puzzle", &documents)
-        .expect_err("normalized duplicate paths must fail");
-    assert!(
-        error
-            .to_string()
-            .contains("duplicate workspace document path")
-    );
-}
-
-#[test]
 fn workspace_presentation_manifest_uses_compiled_language_facts() {
     let source = r##"
-title = workspace_manifest
+const title = workspace_manifest
 theme = "pixel"
 
 assets {
@@ -195,7 +46,9 @@ B
         source: source.to_string(),
     }];
 
-    let manifest = workspace_presentation_manifest("game.puzzle", &documents)
+    let manifest = WorkspaceAnalysis::new(&documents)
+        .expect("workspace analysis")
+        .presentation_manifest("game.puzzle")
         .expect("workspace presentation manifest");
     assert_eq!(manifest.theme_name.as_deref(), Some("pixel"));
     assert_eq!(manifest.css_paths, ["game.css"]);
@@ -206,8 +59,7 @@ B
 
 #[test]
 fn workspace_presentation_manifest_remaps_imported_diagnostics() {
-    let imported_source = r#"title = imported_error
-puzzle main {
+    let imported_source = r#"puzzle main {
 layers {
 base = Floor
 }
@@ -233,7 +85,7 @@ level "first"
     let documents = vec![
         WorkspaceSourceDocument {
             path: "game.puzzle".to_string(),
-            source: "import \"parts/game.puzzle\"\n".to_string(),
+            source: "import part = \"parts/game.puzzle\"\n".to_string(),
         },
         WorkspaceSourceDocument {
             path: "parts/game.puzzle".to_string(),
@@ -241,7 +93,9 @@ level "first"
         },
     ];
 
-    let report = workspace_presentation_manifest("game.puzzle", &documents)
+    let report = WorkspaceAnalysis::new(&documents)
+        .expect("workspace analysis")
+        .presentation_manifest("game.puzzle")
         .expect_err("invalid imported source should fail manifest parsing");
     let span = report.diagnostics()[0]
         .primary_span
@@ -254,13 +108,14 @@ level "first"
 
 #[test]
 fn source_analysis_returns_typed_import_reference_at_the_path_only() {
-    let source = "// import \"ignored.puzzle\"\nimport \"parts/model.puzzle\"\nassets {\n  file \"not-a-link.png\"\n}\n";
+    let source = "// import ignored = \"ignored.puzzle\"\nimport model = \"parts/model.puzzle\"\nassets {\n  file \"not-a-link.png\"\n}\n";
     let analysis = analyze_source(source);
     let cursor = source.find("model.puzzle").unwrap();
     let reference = analysis
         .import_reference_at("games/demo/game.puzzle", cursor)
         .expect("import reference");
     assert_eq!(reference.raw_path, "parts/model.puzzle");
+    assert_eq!(reference.alias, "model");
     assert_eq!(reference.resolved_path, "games/demo/parts/model.puzzle");
     let asset_cursor = source.find("not-a-link.png").unwrap();
     assert!(
@@ -276,7 +131,7 @@ use puzzle_core::{
 #[test]
 fn level_rules_compose_before_global_and_after_by_reference() {
     let source = r#"
-title = level_rules_order
+const title = level_rules_order
 
 puzzle board {
   layers {
@@ -353,7 +208,7 @@ levels default of board {
 #[test]
 fn level_rules_reject_duplicate_after_slot() {
     let source = r#"
-title = duplicate_level_rules
+const title = duplicate_level_rules
 puzzle board {
   layers {
     item = A
@@ -391,7 +246,7 @@ fn parse_game(source: &str) -> Result<LoadedGame, DiagnosticReport> {
 #[test]
 fn solver_strategy_lowers_query_variable_and_distance_terms() {
     let source = r#"
-title = solver_strategy_terms
+const title = solver_strategy_terms
 
 puzzle default {
 layers {
@@ -655,7 +510,7 @@ fn labels_at(loaded: &LoadedGame, state: &State, x: u16, y: u16) -> Vec<String> 
 fn rules_local_frame_limits_main_transition_matching_to_player_frame() {
     let loaded = parse_game(
         r#"
-title = local frame
+const title = "local frame"
 puzzle main {
 layers {
 actor = Player A B
@@ -691,7 +546,7 @@ once_all [ A ] -> [ B ]
 fn rules_local_radius_lowers_to_radius_extent() {
     let loaded = parse_game(
         r#"
-title = local radius
+const title = "local radius"
 puzzle main {
 layers {
 actor = Player A B
@@ -725,7 +580,7 @@ once_all [ A ] -> [ B ]
 #[test]
 fn section_headers_are_not_canonical_syntax() {
     let source = r#"
-title = section_header
+const title = section_header
 
 puzzle board {
 ======
@@ -762,7 +617,7 @@ level "start" {
 #[test]
 fn inline_braced_blocks_accept_semicolon_rows() {
     let source = r#"
-title = inline_blocks
+const title = inline_blocks
 
 puzzle board {
 layers { actor = Player Box Wall; floor = Goal }
@@ -788,7 +643,7 @@ P.G
 #[test]
 fn null_pattern_matches_outside_board_cell() {
     let source = r#"
-title = null_pattern
+const title = null_pattern
 
 puzzle board {
 layers { mark = Edge }
@@ -813,7 +668,7 @@ level "start" {
 #[test]
 fn no_null_pattern_is_rejected() {
     let source = r#"
-title = no_null_pattern
+const title = no_null_pattern
 
 puzzle board {
 layers { mark = Edge }
@@ -838,7 +693,7 @@ level "start" {
 #[test]
 fn rhs_only_null_pattern_is_rejected() {
     let source = r#"
-title = rhs_only_null_pattern
+const title = rhs_only_null_pattern
 
 puzzle board {
 layers { mark = Edge }
@@ -860,7 +715,7 @@ level "start" {
 #[test]
 fn pattern_rows_accept_physical_line_breaks() {
     let source = r#"
-title = pattern_newlines
+const title = pattern_newlines
 
 puzzle board {
 layers { actor = A B C }
@@ -891,7 +746,7 @@ B
 #[test]
 fn at_prefixed_objects_and_routines_use_normal_gameplay_semantics() {
     let source = r#"
-title = at_display
+const title = at_display
 
 puzzle board {
 layers {
@@ -935,7 +790,7 @@ P
 #[test]
 fn legend_does_not_define_unknown_objects() {
     let source = r#"
-title = legend_unknown
+const title = legend_unknown
 
 puzzle board {
 layers {
@@ -967,7 +822,7 @@ P
 #[test]
 fn level_local_legend_does_not_define_unknown_objects() {
     let source = r#"
-title = level_legend_unknown
+const title = level_legend_unknown
 
 puzzle board {
 layers {
@@ -1003,7 +858,7 @@ P
 #[test]
 fn layers_define_objects_even_when_visuals_are_omitted() {
     let source = r#"
-title = visual_omitted_is_transparent
+const title = visual_omitted_is_transparent
 
 puzzle board {
 layers {
@@ -1044,7 +899,7 @@ rules {
 #[test]
 fn layers_schema_terms_can_use_later_tag_sets() {
     let source = r#"
-title = layers_schema_later_tags
+const title = layers_schema_later_tags
 
 puzzle board {
 layers {
@@ -1087,7 +942,7 @@ rules {
 #[test]
 fn top_level_sounds_keeps_only_seed_and_settings() {
     let source = r#"
-title = sounds_game
+const title = sounds_game
 
 sounds {
 sfx effect { seed = 746670; type = jump; volume = 0.35 }
@@ -1133,7 +988,7 @@ P
 #[test]
 fn top_level_sfx_volume_defaults_to_existing_full_gain() {
     let source = r#"
-title = sounds_game
+const title = sounds_game
 
 sounds {
 sfx effect { seed = 746670; type = jump }
@@ -1167,7 +1022,7 @@ P
 #[test]
 fn top_level_sounds_allow_volume_above_full_gain() {
     let source = r#"
-title = sounds_game
+const title = sounds_game
 
 sounds {
 sfx effect { seed = 746670; type = jump; volume = 1.5 }
@@ -1203,7 +1058,7 @@ P
 #[test]
 fn top_level_sounds_reject_negative_volume() {
     let sfx_source = r#"
-title = sounds_game
+const title = sounds_game
 
 sounds {
 sfx effect { seed = 746670; type = jump; volume = -0.1 }
@@ -1237,7 +1092,7 @@ P
     );
 
     let music_source = r#"
-title = sounds_game
+const title = sounds_game
 
 sounds {
 music loop { seed = 123456; bars = 16; height = 0.62; bpm = 104; volume = -0.1 }
@@ -1274,7 +1129,7 @@ P
 #[test]
 fn model_sounds_resolve_against_whole_puzzle_scope() {
     let source = r#"
-title = scoped_model_sounds
+const title = scoped_model_sounds
 
 sounds {
 sfx push { seed = push01; type = jump }
@@ -1313,7 +1168,7 @@ input directions [ Player ] -> [ > Player ]
 #[test]
 fn model_sounds_parse_undo_and_restart_sfx_operations() {
     let source = r#"
-title = operation_sounds
+const title = operation_sounds
 
 sounds {
 sfx back { seed = back01; type = hit }
@@ -1365,7 +1220,7 @@ rules {
 #[test]
 fn model_sounds_report_selector_errors_at_sound_entry() {
     let source = r#"
-title = bad_model_sound_selector
+const title = bad_model_sound_selector
 
 sounds {
 sfx push { seed = push01; type = jump }
@@ -1407,7 +1262,7 @@ input directions [ Player ] -> [ > Player ]
 #[test]
 fn top_level_audio_block_is_rejected() {
     let source = r#"
-title = old_sounds_keyword
+const title = old_sounds_keyword
 
 audio {
   sfx effect { seed = 746670; type = jump }
@@ -1424,7 +1279,7 @@ audio {
 #[test]
 fn scene_lifecycle_blocks_lower_to_lifecycle_transitions() {
     let source = r#"
-title = scene_lifecycle_blocks
+const title = scene_lifecycle_blocks
 
 puzzle default {
 layers {
@@ -1473,7 +1328,7 @@ stop_music music_name
 #[test]
 fn scene_lifecycle_accepts_bare_next_level_effect() {
     let source = r#"
-title = scene_next_level_effect
+const title = scene_next_level_effect
 
 puzzle default {
 layers {
@@ -1520,7 +1375,7 @@ next_level
 #[test]
 fn scene_message_effect_parses_literal_and_path() {
     let source = r#"
-title = scene_message_effect
+const title = scene_message_effect
 var hint = "Push the box"
 
 puzzle default {
@@ -1584,7 +1439,7 @@ message hint
 fn again_interval_is_not_canonical_syntax() {
     let err = parse_game(
         r#"
-title = again_interval_fixture
+const title = again_interval_fixture
 again_interval = 75ms
 
 puzzle main {
@@ -1612,7 +1467,7 @@ P
 }
 
 #[test]
-fn top_level_metadata_requires_assignment_syntax() {
+fn title_is_not_a_root_setting() {
     let err = parse_game(
         r#"
 title "Old Metadata"
@@ -1637,14 +1492,14 @@ P
     .unwrap_err()
     .to_string();
 
-    assert!(err.contains("title metadata must be: title = <text>"));
+    assert!(err.contains("unknown top-level directive `title`"));
 }
 
 #[test]
 fn puzzle_render_tween_parses_to_game_settings() {
     let loaded = parse_game(
         r#"
-title = tween_fixture
+const title = tween_fixture
 
 puzzle main {
 render {
@@ -1678,7 +1533,7 @@ P
 fn puzzle_render_tween_duration_requires_enabled_tween() {
     let error = parse_game(
         r#"
-title = tween_fixture
+const title = tween_fixture
 
 puzzle main {
 render {
@@ -1711,7 +1566,7 @@ P
 fn puzzle_render_rejects_old_inline_tween_node() {
     let error = parse_game(
         r#"
-title = tween_fixture
+const title = tween_fixture
 
 puzzle main {
 render {
@@ -1744,7 +1599,7 @@ P
 fn top_level_render_tween_is_not_shell_syntax() {
     let error = parse_game(
         r#"
-title = tween_fixture
+const title = tween_fixture
 render {
 tween = true
 tween_duration = 90ms
@@ -1778,7 +1633,7 @@ P
 fn top_level_input_buffer_parses_to_game_settings() {
     let loaded = parse_game(
         r#"
-title = input_buffer_fixture
+const title = input_buffer_fixture
 input_buffer {
 queue_during_wait = false
 fast_forward_wait = true
@@ -1813,7 +1668,7 @@ P
 #[test]
 fn render_tween_rejects_old_block_form() {
     let source = r#"
-title = tween_fixture
+const title = tween_fixture
 
 puzzle main {
 render {
@@ -1846,7 +1701,7 @@ P
 fn render_tween_adds_move_rule_animation_without_sounds() {
     let loaded = parse_game(
         r#"
-title = tween_animation_fixture
+const title = tween_animation_fixture
 
 puzzle main {
 render {
@@ -1887,7 +1742,7 @@ P.
 fn tween_metadata_marks_direction_variant_rewrites_but_not_nominal_tag_rewrites() {
     let loaded = parse_game(
         r#"
-title = tween_direction_metadata
+const title = tween_direction_metadata
 
 puzzle main {
 render {
@@ -1938,7 +1793,7 @@ P
 #[test]
 fn scene_on_level_start_is_rejected() {
     let source = r#"
-title = scene_level_lifecycle
+const title = scene_level_lifecycle
 
 puzzle default {
 layers {
@@ -1975,7 +1830,7 @@ message "no"
 #[test]
 fn scene_current_level_syntax_is_rejected() {
     let source = r#"
-title = current_level_syntax
+const title = current_level_syntax
 
 puzzle default {
 layers {
@@ -2009,7 +1864,7 @@ puzzle board = current_level
 #[test]
 fn puzzle_presentation_message_parses_literal_and_path() {
     let source = r#"
-title = rewrite_message_effect
+const title = rewrite_message_effect
 
 puzzle default {
 layers {
@@ -2059,7 +1914,7 @@ P
 #[test]
 fn puzzle_presentation_effect_parses_commands() {
     let source = r#"
-title = puzzle_presentation_effect
+const title = puzzle_presentation_effect
 default_wait_time = 350ms
 
 puzzle default {
@@ -2107,7 +1962,7 @@ P
 #[test]
 fn rewrite_suffix_wait_lowers_to_after_triggered_animation_barrier() {
     let source = r#"
-title = rewrite_wait_suffix
+const title = rewrite_wait_suffix
 
 puzzle default {
 layers {
@@ -2151,7 +2006,7 @@ P
 #[test]
 fn rule_condition_can_emit_win_effect() {
     let source = r#"
-title = rule_condition_win_effect
+const title = rule_condition_win_effect
 
 puzzle default {
 layers {
@@ -2190,7 +2045,7 @@ P
 #[test]
 fn puzzle_rule_effect_accepts_goto_scene() {
     let source = r#"
-title = puzzle_rule_goto_effect
+const title = puzzle_rule_goto_effect
 
 puzzle default {
 layers {
@@ -2235,7 +2090,7 @@ text "Menu"
 #[test]
 fn puzzle_wait_animation_lowers_to_ordered_boundary_effect() {
     let source = r#"
-title = puzzle_wait_animation_effect
+const title = puzzle_wait_animation_effect
 
 puzzle default {
 layers {
@@ -2266,7 +2121,7 @@ P
 #[test]
 fn puzzle_emit_is_rejected() {
     let source = r#"
-title = puzzle_emit_rejected
+const title = puzzle_emit_rejected
 
 puzzle default {
 layers {
@@ -2294,7 +2149,7 @@ P
 #[test]
 fn puzzle_emit_is_rejected_for_state_mutating_effects() {
     let source = r#"
-title = puzzle_emit_rejects_state_mutation
+const title = puzzle_emit_rejects_state_mutation
 
 puzzle default {
 layers {
@@ -2323,7 +2178,7 @@ P
 #[test]
 fn do_statement_is_rejected() {
     let source = r#"
-title = do_statement_rejected
+const title = do_statement_rejected
 
 puzzle default {
 layers {
@@ -2351,7 +2206,7 @@ P
 #[test]
 fn routine_can_group_effect_statements() {
     let source = r#"
-title = routine_effect_statements
+const title = routine_effect_statements
 
 puzzle default {
 layers {
@@ -2422,7 +2277,7 @@ P
 #[test]
 fn effect_definition_is_rejected() {
     let source = r#"
-title = effect_definition_rejected
+const title = effect_definition_rejected
 
 puzzle default {
 layers {
@@ -2449,7 +2304,7 @@ P
 #[test]
 fn scene_input_handler_requires_arrow_block_syntax() {
     let source = r#"
-title = old_scene_input_handler
+const title = old_scene_input_handler
 
 puzzle board {
 layers {
@@ -2485,7 +2340,7 @@ back
 #[test]
 fn scene_template_rejects_using_keyword() {
     let source = r#"
-title = old_using_scene
+const title = old_using_scene
 
 puzzle board {
 layers {
@@ -2518,7 +2373,7 @@ scene menu using menu {
 #[test]
 fn scene_header_rejects_assignment_form() {
     let source = r#"
-title = scene_assignment_header
+const title = scene_assignment_header
 
 puzzle board {
 layers {
@@ -2539,7 +2394,7 @@ scene = title {
 #[test]
 fn scene_key_command_assignment_can_feed_input_rule() {
     let source = r#"
-title = scene_key_command_assignment
+const title = scene_key_command_assignment
 
 puzzle board {
 layers {
@@ -2590,7 +2445,7 @@ scene title {
 #[test]
 fn scene_keys_accept_routine_target() {
     let source = r#"
-title = input_sugar
+const title = input_sugar
 
 puzzle board {
 layers {
@@ -2638,7 +2493,7 @@ scene level_select {
 #[test]
 fn scene_rules_accept_condition_arrow_effect_rows() {
     let source = r#"
-title = scene_condition_block_arrow
+const title = scene_condition_block_arrow
 
 puzzle board {
 layers {
@@ -2698,7 +2553,7 @@ text "Playing"
 #[test]
 fn scene_if_block_lowers_to_condition_transition() {
     let source = r#"
-title = scene_if_block
+const title = scene_if_block
 
 puzzle board {
 layers {
@@ -2755,7 +2610,7 @@ text "Playing"
 #[test]
 fn layout_if_keeps_structural_block_syntax() {
     let source = r#"
-title = layout_if_block
+const title = layout_if_block
 
 puzzle board {
 layers {
@@ -2806,7 +2661,7 @@ button "New Game" -> input new_game
 #[test]
 fn scene_keys_accept_arrow_to_input_or_effect() {
     let source = r#"
-title = keys_arrow
+const title = keys_arrow
 
 puzzle board {
 layers {
@@ -2865,7 +2720,7 @@ scene pause {
 #[test]
 fn scene_keys_accept_multiline_effect_block() {
     let source = r#"
-title = keys_effect_block
+const title = keys_effect_block
 
 puzzle board {
 layers {
@@ -2917,7 +2772,7 @@ scene playing {
 #[test]
 fn scene_effect_blocks_share_nested_if_parsing() {
     let source = r#"
-title = keys_nested_effect_block
+const title = keys_nested_effect_block
 
 puzzle board {
 layers {
@@ -2974,7 +2829,7 @@ scene playing {
 #[test]
 fn scene_keys_reject_equals_assignment() {
     let source = r#"
-title = keys_equals
+const title = keys_equals
 
 puzzle board {
 layers {
@@ -3008,7 +2863,7 @@ q = goto level_select
 #[test]
 fn puzzle_default_scene_keys_accept_scene_effects_without_stealing_model_inputs() {
     let source = r#"
-title = model_keys_scene_effect
+const title = model_keys_scene_effect
 
 puzzle board {
 layers {
@@ -3064,7 +2919,7 @@ Escape q -> goto title
 #[test]
 fn bare_scene_key_action_rejects_input_routine_ambiguity() {
     let source = r#"
-title = ambiguous_key_action
+const title = ambiguous_key_action
 
 puzzle board {
 layers {
@@ -3100,7 +2955,7 @@ goto title
 #[test]
 fn scene_keys_accept_multiple_keys_per_row() {
     let source = r#"
-title = keys_multiple
+const title = keys_multiple
 
 puzzle board {
 layers {
@@ -3144,12 +2999,12 @@ scene level_select {
 }
 
 #[test]
-fn scene_text_roles_can_reference_game_metadata() {
+fn scene_text_roles_can_reference_top_level_constants() {
     let source = r#"
-title = "Display Title"
-subtitle = "Display Subtitle"
-author = "Display Author"
-homepage = "https://example.com"
+const title = "Display Title"
+const subtitle = "Display Subtitle"
+const author = "Display Author"
+const homepage = "https://example.com"
 
 puzzle board {
 layers {
@@ -3211,7 +3066,7 @@ caption homepage
 #[test]
 fn scene_can_use_model_name_as_default_puzzle_slot() {
     let source = r#"
-title = default_slot
+const title = default_slot
 
 puzzle sokoban {
 layers {
@@ -3260,7 +3115,7 @@ step sokoban
 #[test]
 fn scene_signal_input_handler_can_step_puzzle_for_direction_set() {
     let source = r#"
-title = signal_handler_step
+const title = signal_handler_step
 
 puzzle board {
 input right
@@ -3327,7 +3182,7 @@ step board
 #[test]
 fn scene_rules_reject_component_rules_path() {
     let source = r#"
-title = old_component_rules_path
+const title = old_component_rules_path
 
 puzzle board {
 layers {
@@ -3361,7 +3216,7 @@ board.rules
 #[test]
 fn scene_frame_component_places_content_slot_without_model_kind() {
     let source = r#"
-title = frame_slot
+const title = frame_slot
 
 puzzle board {
 layers {
@@ -3397,7 +3252,7 @@ frame board
 #[test]
 fn scene_rejects_old_rhs_puzzle_slot_declaration() {
     let source = r#"
-title = old_rhs_puzzle_slot
+const title = old_rhs_puzzle_slot
 
 puzzle default {
 layers {
@@ -3430,7 +3285,7 @@ board = puzzle default
 #[test]
 fn scene_can_still_name_multiple_puzzle_slots_explicitly() {
     let source = r#"
-title = named_slots
+const title = named_slots
 
 puzzle sokoban {
 layers {
@@ -3475,7 +3330,7 @@ step sokoban1
 #[test]
 fn input_declaration_defines_direction_input() {
     let source = r#"
-title = command_direction
+const title = command_direction
 
 puzzle board {
 layers {
@@ -3502,7 +3357,7 @@ P.
 #[test]
 fn scene_inputs_reject_equals_assignment_syntax() {
     let source = r#"
-title = old_scene_inputs
+const title = old_scene_inputs
 
 puzzle board {
 layers {
@@ -3541,7 +3396,7 @@ resume = Escape
 #[test]
 fn button_action_assignment_uses_equals() {
     let source = r#"
-title = button_action_assignment
+const title = button_action_assignment
 
 puzzle board {
 layers {
@@ -3584,7 +3439,7 @@ button "Resume" -> input resume
 #[test]
 fn scene_box_is_layout_container_and_panel_is_not_scene_syntax() {
     let source = r#"
-title = scene_box_layout
+const title = scene_box_layout
 
 puzzle board {
 layers {
@@ -3648,7 +3503,7 @@ text "Ready"
 #[test]
 fn explicit_scene_input_and_component_effect_parse_separately() {
     let source = r#"
-title = explicit_scene_input_effects
+const title = explicit_scene_input_effects
 
 puzzle board {
 layers {
@@ -3702,7 +3557,7 @@ r -> board.restart
 #[test]
 fn scene_effect_wrapper_marks_scene_commands_explicitly() {
     let source = r#"
-title = scene_effect_wrapper
+const title = scene_effect_wrapper
 
 puzzle board {
 layers {
@@ -3741,7 +3596,7 @@ button "Restart" -> board.restart
 #[test]
 fn button_arrow_rejects_plain_action_rhs() {
     let source = r#"
-title = old_button_action_arrow
+const title = old_button_action_arrow
 
 puzzle board {
 layers {
@@ -3774,7 +3629,7 @@ button "Resume" -> resume
 #[test]
 fn component_navigation_rejects_an_unknown_target() {
     let source = r#"
-title = component_target_validation
+const title = component_target_validation
 
 puzzle board {
 layers { actor = Player }
@@ -3811,7 +3666,7 @@ goto titile
 #[test]
 fn scene_root_rejects_layout_components() {
     let source = r#"
-title = title_scene
+const title = title_scene
 
 scene title {
 heading title
@@ -3834,7 +3689,7 @@ text "Playing"
 #[test]
 fn title_scene_keeps_layout_buttons_and_rules_explicit() {
     let source = r#"
-title = title_scene
+const title = title_scene
 
 puzzle default {
 layers {
@@ -3890,12 +3745,12 @@ text "Levels"
 }
 
 #[test]
-fn top_level_metadata_is_available_to_scenes() {
+fn top_level_constants_are_available_to_scenes() {
     let source = r#"
-title = Tiny Metadata Game
-subtitle = "Small Metadata Puzzle"
-author = "Puzzle Person"
-homepage = "https://example.com/puzzle"
+const title = "Tiny Metadata Game"
+const subtitle = "Small Metadata Puzzle"
+const author = "Puzzle Person"
+const homepage = "https://example.com/puzzle"
 
 puzzle default {
 layers {
@@ -3927,17 +3782,46 @@ text homepage
 "#;
     let loaded = parse_game(source).unwrap();
 
-    assert_eq!(loaded.title, "Tiny Metadata Game");
-    assert_eq!(loaded.subtitle.as_deref(), Some("Small Metadata Puzzle"));
-    assert_eq!(loaded.author.as_deref(), Some("Puzzle Person"));
+    let values = loaded
+        .variables
+        .iter()
+        .map(|variable| {
+            (
+                variable.name.clone(),
+                variable.default.clone(),
+                variable.mutable,
+            )
+        })
+        .collect::<Vec<_>>();
     assert_eq!(
-        loaded.homepage.as_deref(),
-        Some("https://example.com/puzzle")
+        values,
+        vec![
+            (
+                "title".to_string(),
+                SceneValue::Text("Tiny Metadata Game".to_string()),
+                false
+            ),
+            (
+                "subtitle".to_string(),
+                SceneValue::Text("Small Metadata Puzzle".to_string()),
+                false
+            ),
+            (
+                "author".to_string(),
+                SceneValue::Text("Puzzle Person".to_string()),
+                false
+            ),
+            (
+                "homepage".to_string(),
+                SceneValue::Text("https://example.com/puzzle".to_string()),
+                false
+            ),
+        ]
     );
 }
 
 #[test]
-fn top_level_name_metadata_is_rejected() {
+fn bare_name_directive_is_rejected() {
     let source = r#"
 name Old Metadata
 
@@ -3962,13 +3846,13 @@ P
 "#;
 
     let error = parse_game(source).unwrap_err().to_string();
-    assert!(error.contains("top-level `name` metadata was removed; use `title = <text>`"));
+    assert!(error.contains("unknown top-level directive `name`"));
 }
 
 #[test]
 fn top_level_lifecycle_blocks_point_to_puzzle_scope() {
     let source = r#"
-title = lifecycle_scope
+const title = lifecycle_scope
 
 on_level_clear {
 next_level
@@ -3990,7 +3874,7 @@ fn all_top_level_puzzle_lifecycle_blocks_share_scope_diagnostic() {
     for lifecycle in ["on_level_start", "on_level_clear", "on_last_level_clear"] {
         let source = format!(
             r#"
-title = lifecycle_scope
+const title = lifecycle_scope
 
 {lifecycle} {{
 next_level
@@ -4009,7 +3893,7 @@ next_level
 #[test]
 fn level_menu_lowers_to_scrollable_common_choices() {
     let source = r#"
-title = level_menu_lowering
+const title = level_menu_lowering
 
 puzzle board {
 layers {
@@ -4085,7 +3969,7 @@ button "Back" -> goto title
 #[test]
 fn level_menu_solved_marker_lowers_through_public_level_progress_path() {
     let source = r#"
-title = level_menu_progress_contract
+const title = level_menu_progress_contract
 
 puzzle board {
 layers {
@@ -4145,7 +4029,7 @@ show_solved = true
 #[test]
 fn layout_for_projects_public_level_records() {
     let source = r#"
-title = public_level_records
+const title = public_level_records
 
 puzzle board {
 layers {
@@ -4198,7 +4082,7 @@ choice level.name -> goto level.puzzle(level.name)
 #[test]
 fn layout_for_level_records_do_not_restore_label_aliases() {
     let source = r#"
-title = public_level_record_fields
+const title = public_level_record_fields
 
 puzzle board {
 layers {
@@ -4234,7 +4118,7 @@ text level.title
 #[test]
 fn layout_for_records_require_an_explicit_field() {
     let source = r#"
-title = explicit_level_record_fields
+const title = explicit_level_record_fields
 
 puzzle board {
 layers {
@@ -4270,7 +4154,7 @@ text level
 #[test]
 fn occurrence_mark_supports_multiple_marks_direction_and_int_values() {
     let source = r#"
-title = mark_marks
+const title = mark_marks
 
 puzzle default {
 layers {
@@ -4308,7 +4192,7 @@ B
 #[test]
 fn bool_mark_uses_presence_and_no_syntax() {
     let source = r#"
-title = bool_mark
+const title = bool_mark
 
 puzzle default {
 layers {
@@ -4345,7 +4229,7 @@ B
 #[test]
 fn colon_mark_name_does_not_mean_value_assignment() {
     let source = r#"
-title = mark_colon
+const title = mark_colon
 
 puzzle default {
 layers {
@@ -4375,7 +4259,7 @@ B
 #[test]
 fn mark_names_can_use_numeric_colon_parts() {
     let source = r#"
-title = numeric_qualified_mark
+const title = numeric_qualified_mark
 
 puzzle default {
 layers {
@@ -4411,7 +4295,7 @@ B
 #[test]
 fn mark_names_can_use_direction_glyph_colon_parts() {
     let source = r#"
-title = glyph_qualified_mark
+const title = glyph_qualified_mark
 
 puzzle default {
 layers {
@@ -4450,7 +4334,7 @@ B
 #[test]
 fn qualified_mark_names_can_use_colons() {
     let source = r#"
-title = qualified_mark
+const title = qualified_mark
 
 puzzle default {
 layers {
@@ -4487,7 +4371,7 @@ B
 #[test]
 fn unmentioned_occurrence_mark_is_preserved_when_same_occurrence_moves() {
     let source = r#"
-title = moving_mark
+const title = moving_mark
 
 puzzle default {
 layers {
@@ -4524,7 +4408,7 @@ B.
 #[test]
 fn omitted_rhs_mark_removes_explicit_lhs_mark_on_moved_occurrence() {
     let source = r#"
-title = moving_mark_remove
+const title = moving_mark_remove
 
 puzzle default {
 layers {
@@ -4558,7 +4442,7 @@ B.
 #[test]
 fn same_cell_occurrence_is_preserved_before_move_inference() {
     let source = r#"
-title = same_cell_preserve
+const title = same_cell_preserve
 
 puzzle default {
 layers {
@@ -4598,7 +4482,7 @@ B.
 #[test]
 fn group_selectors_accept_mark_blocks() {
     let source = r#"
-title = group_mark
+const title = group_mark
 
 puzzle default {
 layers {
@@ -4637,7 +4521,7 @@ B
 #[test]
 fn group_selector_removal_also_removes_movement_mark() {
     let source = r#"
-title = group_remove_movement_mark
+const title = group_remove_movement_mark
 
 puzzle default {
 layers {
@@ -4680,7 +4564,7 @@ PKL
 #[test]
 fn cell_and_occurrence_mark_share_names_but_have_distinct_anchors() {
     let source = r#"
-title = cell_mark
+const title = cell_mark
 
 puzzle default {
 layers {
@@ -4730,7 +4614,7 @@ B
 #[test]
 fn rewrite_rejects_same_layer_rhs_cell_conflict_with_author_message() {
     let source = r#"
-title = rhs_layer_conflict
+const title = rhs_layer_conflict
 
 puzzle default {
 layers {
@@ -4760,7 +4644,7 @@ P
 #[test]
 fn movement_mark_prefix_and_legacy_inline_sugar_work_with_transition_local_lifetime() {
     let source = r#"
-title = anonymous_mark
+const title = anonymous_mark
 
 puzzle default {
 layers {
@@ -4802,7 +4686,7 @@ B
 #[test]
 fn default_repeat_rewrite_stops_after_rhs_removes_movement_mark_in_2d() {
     let source = r#"
-title = move_once
+const title = move_once
 
 puzzle default {
 layers {
@@ -4834,7 +4718,7 @@ P....
 #[test]
 fn action_statement_is_rejected() {
     let source = r#"
-title = action_button
+const title = action_button
 
 puzzle board {
 layers {
@@ -4873,7 +4757,7 @@ x -> input action
 #[test]
 fn move_call_without_explicit_routine_reports_unknown_routine() {
     let source = r#"
-title = move_requires_explicit_routine
+const title = move_requires_explicit_routine
 
 puzzle default {
 layers {
@@ -4905,7 +4789,7 @@ B
 #[test]
 fn explicit_move_routine_remains_callable() {
     let source = r#"
-title = explicit_move_routine
+const title = explicit_move_routine
 
 puzzle default {
 layers {
@@ -4949,7 +4833,7 @@ B..
 #[test]
 fn directions_mark_sugar_matches_any_movement_value() {
     let source = r#"
-title = directions_sugar
+const title = directions_sugar
 
 puzzle default {
 layers {
@@ -4994,7 +4878,7 @@ B
 #[test]
 fn prefix_movement_mark_sugar_matches_braced_selector_mark() {
     let source = r#"
-title = prefix_movement_mark_sugar
+const title = prefix_movement_mark_sugar
 
 puzzle default {
 layers {
@@ -5036,7 +4920,7 @@ P
 #[test]
 fn prefix_directions_mark_sugar_matches_any_movement_value() {
     let source = r#"
-title = prefix_directions_mark_sugar
+const title = prefix_directions_mark_sugar
 
 puzzle default {
 layers {
@@ -5078,7 +4962,7 @@ P
 #[test]
 fn no_directions_mark_sugar_forbids_any_movement_value() {
     let source = r#"
-title = no_directions_sugar
+const title = no_directions_sugar
 
 puzzle default {
 layers {
@@ -5120,7 +5004,7 @@ B
 #[test]
 fn parallel_and_perpendicular_mark_sets_expand_relative_to_rule_orientation() {
     let source = r#"
-title = relative_movement_sets
+const title = relative_movement_sets
 
 puzzle default {
 layers {
@@ -5166,7 +5050,7 @@ BC
 #[test]
 fn parallel_mark_prefix_sugar_matches_object_movement_set() {
     let source = r#"
-title = parallel_prefix_sugar
+const title = parallel_prefix_sugar
 
 puzzle default {
 layers {
@@ -5205,7 +5089,7 @@ B
 #[test]
 fn prefixless_parallel_mark_pattern_expands_cardinal_directions() {
     let source = r#"
-title = prefixless_parallel
+const title = prefixless_parallel
 
 puzzle default {
 layers {
@@ -5244,7 +5128,7 @@ B
 #[test]
 fn variant_axis_values_can_define_mark_without_becoming_value_sets() {
     let source = r#"
-title = variant_mark
+const title = variant_mark
 
 puzzle default {
 layers {
@@ -5285,7 +5169,7 @@ B
 #[test]
 fn level_start_keeps_raw_initial_state_and_keeps_runtime_program() {
     let source = r#"
-title = level_start
+const title = level_start
 
 puzzle default {
 layers {
@@ -5323,7 +5207,7 @@ S
 #[test]
 fn rules_block_accepts_scope_local_routine() {
     let source = r#"
-title = local_rules_routine
+const title = local_rules_routine
 
 puzzle default {
 layers {
@@ -5358,7 +5242,7 @@ P
 #[test]
 fn level_start_accepts_scope_local_routine() {
     let source = r#"
-title = local_level_start_routine
+const title = local_level_start_routine
 
 puzzle default {
 layers {
@@ -5404,7 +5288,7 @@ S
 #[test]
 fn scope_local_routine_does_not_leak_to_lifecycle_block() {
     let source = r#"
-title = local_routine_no_leak
+const title = local_routine_no_leak
 
 puzzle default {
 layers {
@@ -5438,7 +5322,7 @@ S
 #[test]
 fn variable_routine_does_not_capture_caller_local_routine() {
     let source = r#"
-title = local_routine_lexical_scope
+const title = local_routine_lexical_scope
 
 puzzle default {
 layers {
@@ -5474,7 +5358,7 @@ S
 #[test]
 fn level_start_rejects_input_dependent_rules() {
     let source = r#"
-title = level_start_input
+const title = level_start_input
 
 puzzle default {
 layers {
@@ -5509,7 +5393,7 @@ P.
 #[test]
 fn level_start_rejects_input_dependent_local_routine() {
     let source = r#"
-title = level_start_local_input
+const title = level_start_local_input
 
 puzzle default {
 layers {
@@ -5548,7 +5432,7 @@ P.
 #[test]
 fn at_prefixed_level_start_routine_uses_normal_runtime_program() {
     let source = r#"
-title = at_prefixed_level_start
+const title = at_prefixed_level_start
 
 puzzle default {
 layers {
@@ -5594,7 +5478,7 @@ S
 #[test]
 fn at_prefixed_level_start_rejects_input_dependent_rules() {
     let source = r#"
-title = at_prefixed_level_start_input
+const title = at_prefixed_level_start_input
 
 puzzle default {
 layers {
@@ -5634,7 +5518,7 @@ P.
 #[test]
 fn at_prefixed_level_start_routine_accepts_normal_object_writes() {
     let source = r#"
-title = at_prefixed_level_start_main_write
+const title = at_prefixed_level_start_main_write
 
 puzzle default {
 layers {
@@ -5672,7 +5556,7 @@ S
 #[test]
 fn level_clear_rejects_input_dependent_rules() {
     let source = r#"
-title = level_clear_input
+const title = level_clear_input
 
 puzzle default {
 layers {
@@ -5707,7 +5591,7 @@ P.
 #[test]
 fn independent_lifecycle_lowering_errors_are_reported_together() {
     let source = r#"
-title = multiple_lifecycle_errors
+const title = multiple_lifecycle_errors
 
 puzzle default {
 layers {
@@ -5758,7 +5642,7 @@ P.
 #[test]
 fn independent_statement_parse_errors_are_reported_together() {
     let source = r#"
-title = multiple_statement_parse_errors
+const title = multiple_statement_parse_errors
 
 puzzle default {
 layers {
@@ -5807,7 +5691,7 @@ P
 #[test]
 fn sibling_statement_blocks_are_parsed_after_inner_errors() {
     let source = r#"
-title = sibling_statement_block_errors
+const title = sibling_statement_block_errors
 
 puzzle default {
 layers {
@@ -5862,7 +5746,7 @@ P
 #[test]
 fn old_on_level_start_syntax_is_rejected() {
     let source = r#"
-title = old_on_level_start
+const title = old_on_level_start
 
 puzzle default {
 layers {
@@ -5891,7 +5775,7 @@ P
 #[test]
 fn conditional_rule_call_short_form_runs_named_rule_when_pattern_matches() {
     let source = r#"
-title = conditional_short
+const title = conditional_short
 
 puzzle default {
 layers {
@@ -5927,7 +5811,7 @@ PW
 #[test]
 fn conditional_rule_call_accepts_some_and_none_forms() {
     let source = r#"
-title = conditional_some_none
+const title = conditional_some_none
 
 puzzle default {
 layers {
@@ -5963,7 +5847,7 @@ P.
 #[test]
 fn pattern_condition_block_accepts_else() {
     let source = r#"
-title = pattern_condition_else
+const title = pattern_condition_else
 
 puzzle default {
 layers {
@@ -6000,7 +5884,7 @@ B.
 #[test]
 fn unknown_directive_is_rejected() {
     let source = r#"
-title = old_keyword
+const title = old_keyword
 
 puzzle default {
 layers {
@@ -6031,7 +5915,7 @@ P
 #[test]
 fn singular_group_block_is_rejected() {
     let source = r#"
-title = old_group_block
+const title = old_group_block
 
 puzzle default {
 layers {
@@ -6050,7 +5934,7 @@ solid = Wall
 #[test]
 fn singular_group_directive_is_rejected() {
     let source = r#"
-title = old_group_directive
+const title = old_group_directive
 
 puzzle default {
 layers {
@@ -6067,7 +5951,7 @@ group solid = Wall
 #[test]
 fn group_aliases_named_like_layout_keywords_stay_in_group_scope() {
     let source = r#"
-title = group_alias_layout_keywords
+const title = group_alias_layout_keywords
 
 puzzle main {
 layers {
@@ -6106,7 +5990,7 @@ P
 #[test]
 fn domain_keyword_is_not_part_of_public_syntax() {
     let source = r#"
-title = old_domain
+const title = old_domain
 
 puzzle default {
 layers {
@@ -6134,7 +6018,7 @@ B
 #[test]
 fn end_is_allowed_as_user_defined_object_name() {
     let source = r#"
-title = end_name
+const title = end_name
 
 puzzle default {
 layers {
@@ -6165,7 +6049,7 @@ E
 #[test]
 fn layer_is_allowed_as_user_defined_object_name() {
     let source = r#"
-title = layer_name
+const title = layer_name
 
 puzzle default {
 layers {
@@ -6196,7 +6080,7 @@ L
 #[test]
 fn bare_tag_set_assignment_is_not_canonical_syntax() {
     let source = r#"
-title = old_tag_assignment
+const title = old_tag_assignment
 
 puzzle default {
 layers {
@@ -6228,7 +6112,7 @@ level "start"
 #[test]
 fn directions_directive_is_not_part_of_public_syntax() {
     let source = r#"
-title = old_directions
+const title = old_directions
 
 puzzle default {
 layers {
@@ -6256,7 +6140,7 @@ P.
 #[test]
 fn parses_declared_assets() {
     let source = r#"
-title = assets_test
+const title = assets_test
 
 assets {
 "game.css"
@@ -6295,7 +6179,7 @@ P
 #[test]
 fn assets_reject_typed_entry_syntax() {
     let source = r#"
-title = assets_old_syntax
+const title = assets_old_syntax
 
 assets {
 css "game.css"
@@ -6324,7 +6208,7 @@ P
 #[test]
 fn top_level_levels_and_visuals_are_canonical_resources() {
     let source = r##"
-title = top_resources
+const title = top_resources
 
 puzzle default {
 layers {
@@ -6338,8 +6222,7 @@ rules {
 }
 
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #fff
 }
 }
@@ -6367,7 +6250,7 @@ P
 #[test]
 fn top_level_visuals_with_nested_tables_do_not_leak_after_prior_model_error() {
     let source = r##"
-title = recovered_visuals_scope
+const title = recovered_visuals_scope
 
 puzzle default {
 layers {
@@ -6430,16 +6313,8 @@ P
 
 #[test]
 fn model_error_recovery_keeps_scope_after_prior_if_else_block() {
-    let dir = std::env::temp_dir().join(format!(
-        "puzzlestudio_error_recovery_scope_test_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let game_path = dir.join("game.puzzle");
-    std::fs::write(
-        &game_path,
-        r##"
-title = recovered_after_if_else
+    let source = r##"
+const title = recovered_after_if_else
 
 puzzle default {
 tags {
@@ -6473,19 +6348,16 @@ visuals {
 palette {
 white = #ffffff
 }
-visual {
-selector = Player
+visual Player {
 colors = white
 shape = {
 0
 }
 }
 }
-"##,
-    )
-    .unwrap();
+"##;
 
-    let error = super::parse_game_file(&game_path).unwrap_err().to_string();
+    let error = super::parse_game(source).unwrap_err().to_string();
 
     assert!(
         error.contains("unknown object selector: no [ Missing ]"),
@@ -6504,7 +6376,7 @@ shape = {
 #[test]
 fn scene_resources_can_select_level_and_visual_sets() {
     let source = r##"
-title = scene_resources
+const title = scene_resources
 
 puzzle default {
 layers {
@@ -6518,12 +6390,10 @@ rules {
 }
 
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #fff
 }
-visual {
-selector = Box
+visual Box {
 colors = #000
 }
 }
@@ -6561,17 +6431,9 @@ text "Select"
 }
 
 #[test]
-fn game_file_can_declare_theme_metadata() {
-    let dir = std::env::temp_dir().join(format!(
-        "puzzlestudio_import_theme_test_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let game_path = dir.join("game.puzzle");
-    std::fs::write(
-        &game_path,
-        r##"
-title = themed
+fn game_can_declare_theme_metadata() {
+    let source = r##"
+const title = themed
 
 puzzle default {
 layers {
@@ -6597,11 +6459,9 @@ theme {
 preset = "clean"
 accent_color = #2f7ebc
 }
-"##,
-    )
-    .unwrap();
+"##;
 
-    let loaded = super::parse_game2d_file(&game_path).unwrap();
+    let loaded = super::parse_game2d(source).unwrap();
 
     assert_eq!(loaded.theme.name.as_deref(), Some("clean"));
     assert_eq!(
@@ -6617,15 +6477,9 @@ accent_color = #2f7ebc
 }
 
 #[test]
-fn game_file_import_expansion_preserves_top_level_resource_braces() {
-    let dir = std::env::temp_dir().join(format!(
-        "puzzlestudio_import_resource_scope_test_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let game_path = dir.join("game.puzzle");
+fn top_level_resource_braces_parse_without_source_rewriting() {
     let source = r##"
-title = file_resources
+const title = file_resources
 
 puzzle default {
 layers {
@@ -6640,8 +6494,7 @@ visuals {
 palette {
 white = #ffffff
 }
-visual {
-selector = Player
+visual Player {
 colors = white
 shape = {
 0
@@ -6658,19 +6511,7 @@ level "1"
 P
 }
 "##;
-    std::fs::write(&game_path, source).unwrap();
-
-    assert_eq!(
-        super::expand_game_imports_for_file(source, &game_path).unwrap(),
-        source
-    );
-    let parsed_from_source = super::parse_game(source).unwrap();
-    let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = parsed_from_source.single_model() else {
-        panic!("expected 2D model");
-    };
-    assert_eq!(game.visuals.entries.len(), 1);
-
-    let document = super::parse_game_file(&game_path).unwrap();
+    let document = super::parse_game(source).unwrap();
 
     let Some(LoadedDocumentModel::Puzzle2d { game, .. }) = document.single_model() else {
         panic!("expected 2D model");
@@ -6683,7 +6524,7 @@ P
 fn theme_background_alias_sets_background_variable() {
     let loaded = parse_game(
         r##"
-title = themed
+const title = themed
 theme {
 preset = "puzzlescript"
 background = #123456
@@ -6759,7 +6600,7 @@ LEVELS
 fn theme_preset_can_be_selected_without_block() {
     let loaded = parse_game(
         r##"
-title = themed
+const title = themed
 theme = "pixel"
 puzzle default {
 layers {
@@ -6788,7 +6629,7 @@ P
 fn theme_setting_accepts_assignment_syntax() {
     let loaded = parse_game(
         r##"
-title = themed
+const title = themed
 theme {
 preset = "clean"
 background_color = #123456
@@ -6838,7 +6679,7 @@ P
 fn theme_rejects_non_public_color_settings() {
     let error = parse_game(
         r##"
-title = themed
+const title = themed
 theme {
 preset = "clean"
 board_color = #edf1f2
@@ -6872,7 +6713,7 @@ P
 fn theme_rejects_non_color_style_settings() {
     let error = parse_game(
         r##"
-title = themed
+const title = themed
 theme {
 preset = "clean"
 ui_font = Inter
@@ -6910,7 +6751,7 @@ P
 fn theme_block_requires_quoted_preset_value() {
     let error = parse_game(
         r##"
-title = themed
+const title = themed
 theme {
 preset = pixel
 }
@@ -6938,58 +6779,53 @@ P
 }
 
 #[test]
-fn game_entry_resolution_uses_declared_puzzle_models() {
+fn game_entry_resolution_requires_an_explicit_puzzle_file() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_entry_resolution_test_{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let game_path = dir.join("game.puzzle");
-    let levels_path = dir.join("levels.puzzle");
+    let game_path = dir.join("entry.puzzle");
     std::fs::write(&game_path, "puzzle entry {}\n").unwrap();
-    std::fs::write(&levels_path, "levels {}\n").unwrap();
 
-    assert_eq!(super::resolve_game_entry(&dir).unwrap(), game_path);
+    assert!(super::resolve_game_entry(&dir).is_err());
     assert_eq!(
-        super::resolve_game_entry(&dir.join("game.puzzle")).unwrap(),
+        super::resolve_game_entry(&dir.join("entry.puzzle")).unwrap(),
         game_path
     );
-    assert_eq!(super::resolve_game_entry(&levels_path).unwrap(), game_path);
 }
 
 #[test]
-fn game_entry_resolution_allows_non_game_named_model_files() {
+fn game_entry_resolution_preserves_an_explicit_fragment_path() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_named_entry_resolution_test_{}",
         std::process::id()
     ));
     std::fs::create_dir_all(dir.join("fragments")).unwrap();
-    let entry_path = dir.join("arcade.puzzle");
     let fragment_path = dir.join("fragments").join("levels.puzzle");
-    std::fs::write(&entry_path, "puzzle arcade {}\n").unwrap();
     std::fs::write(&fragment_path, "levels {}\n").unwrap();
 
-    assert_eq!(super::resolve_game_entry(&dir).unwrap(), entry_path);
     assert_eq!(
         super::resolve_game_entry(&fragment_path).unwrap(),
-        entry_path
+        fragment_path
     );
 }
 
 #[test]
-fn game_entry_resolution_accepts_puzzle3_extension() {
+fn game_entry_resolution_accepts_3d_model_in_puzzle_file() {
     let dir = std::env::temp_dir().join(format!(
         "puzzlestudio_puzzle3_entry_resolution_test_{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let game_path = dir.join("game.puzzle3");
+    let game_path = dir.join("spatial.puzzle");
     std::fs::write(
         &game_path,
         r#"
-title = "3D Entry"
+const title = "3D Entry"
 
 puzzle cube {
+  dimension = 3
   layers {
     actor = Player
   }
@@ -7000,21 +6836,13 @@ puzzle cube {
     )
     .unwrap();
 
-    assert_eq!(super::resolve_game_entry(&dir).unwrap(), game_path);
+    assert_eq!(super::resolve_game_entry(&game_path).unwrap(), game_path);
 }
 
 #[test]
-fn parse_game_file_rejects_removed_puzzle3_keyword() {
-    let dir = std::env::temp_dir().join(format!(
-        "puzzlestudio_puzzle_profile_mismatch_test_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let game_path = dir.join("game.puzzle");
-    std::fs::write(
-        &game_path,
-        r#"
-title = "Wrong Extension"
+fn parse_game_rejects_removed_puzzle3_keyword() {
+    let source = r#"
+const title = "Wrong Extension"
 
 puzzle3 cube {
   layers {
@@ -7023,27 +6851,17 @@ puzzle3 cube {
   rules {
   }
 }
-"#,
-    )
-    .unwrap();
+"#;
 
-    let error = super::parse_game_file(&game_path).unwrap_err().to_string();
+    let error = super::parse_game(source).unwrap_err().to_string();
     assert!(error.contains("`puzzle3` was removed"));
     assert!(error.contains("use `puzzle <name> { dimension = 3 ... }`"));
 }
 
 #[test]
-fn parse_game_file_accepts_puzzle_keyword_in_puzzle3_file() {
-    let dir = std::env::temp_dir().join(format!(
-        "puzzlestudio_puzzle3_profile_mismatch_test_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let game_path = dir.join("game.puzzle3");
-    std::fs::write(
-        &game_path,
-        r#"
-title = "Wrong Extension"
+fn parse_game_uses_model_dimension_in_puzzle_file() {
+    let source = r#"
+const title = "3D Model"
 
 puzzle board {
   dimension = 3
@@ -7062,11 +6880,9 @@ levels default of board {
     P
   }
 }
-"#,
-    )
-    .unwrap();
+"#;
 
-    let document = super::parse_game_file(&game_path).unwrap();
+    let document = super::parse_game(source).unwrap();
     assert!(matches!(
         document.models.as_slice(),
         [LoadedDocumentModel::Puzzle3d { name, .. }] if name == "board"
@@ -7074,21 +6890,9 @@ levels default of board {
 }
 
 #[test]
-fn folder_without_puzzle_model_is_not_auto_resolved() {
-    let dir = std::env::temp_dir().join(format!(
-        "puzzlestudio_entry_missing_test_{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("only.puzzle"), "levels {}\n").unwrap();
-
-    assert!(super::resolve_game_entry(&dir).is_err());
-}
-
-#[test]
 fn puzzle_visuals_expand_schema_tables() {
     let source = r#"
-title = visual_schema
+const title = visual_schema
 
 puzzle default {
 tags {
@@ -7125,13 +6929,11 @@ B {
 }
 }
 }
-visual {
-selector = Box:kind
+visual Box:kind {
 colors = piece_color:kind transparent
 shape = mark:kind
 }
-visual {
-selector = Wall
+visual Wall {
 colors = #444
 shape = {
 0
@@ -7183,7 +6985,7 @@ A.
 #[test]
 fn puzzle_visuals_accept_braced_inline_ascii_visual() {
     let source = r##"
-title = braced_inline_ascii_visual
+const title = braced_inline_ascii_visual
 
 puzzle default {
 layers {
@@ -7194,8 +6996,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #e94f64 #2f80ed
 shape = {
 0.
@@ -7244,7 +7045,7 @@ P
 #[test]
 fn puzzle_visuals_accept_line_style_solid_visual() {
     let source = r##"
-title = line_style_solid_visual
+const title = line_style_solid_visual
 
 puzzle default {
 layers {
@@ -7255,8 +7056,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Box
+visual Box {
 colors = #aaa
 }
 }
@@ -7287,7 +7087,7 @@ B
 #[test]
 fn puzzle_visuals_accept_at_prefixed_object_single_color_solid_visual() {
     let source = r##"
-title = at_prefixed_object_single_color_solid_visual
+const title = at_prefixed_object_single_color_solid_visual
 
 puzzle default {
 layers {
@@ -7297,8 +7097,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = @Floor
+visual @Floor {
 colors = #eeeeee
 }
 }
@@ -7329,7 +7128,7 @@ level "start"
 #[test]
 fn prefixed_and_unprefixed_objects_keep_distinct_visual_keys() {
     let source = r##"
-title = distinct_symbol_visual_keys
+const title = distinct_symbol_visual_keys
 
 puzzle default {
 layers {
@@ -7339,12 +7138,10 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Floor
+visual Floor {
 colors = #111111
 }
-visual {
-selector = @Floor
+visual @Floor {
 colors = #eeeeee
 }
 }
@@ -7375,12 +7172,11 @@ level "start"
 #[test]
 fn puzzle_visuals_can_reference_layers_declared_later() {
     let source = r##"
-title = visuals_before_layers
+const title = visuals_before_layers
 
 puzzle default {
 visuals {
-visual {
-selector = @Floor
+visual @Floor {
 colors = #eeeeee
 }
 }
@@ -7415,7 +7211,7 @@ level "start"
 #[test]
 fn puzzle_levels_can_reference_layers_declared_later_and_keep_order() {
     let source = r##"
-title = levels_before_layers
+const title = levels_before_layers
 
 puzzle default {
 levels {
@@ -7460,7 +7256,7 @@ rules {
 #[test]
 fn top_level_levels_can_reference_puzzle_declared_later_and_keep_order() {
     let source = r##"
-title = top_level_levels_before_puzzle
+const title = top_level_levels_before_puzzle
 
 levels of default {
 legend {
@@ -7506,7 +7302,7 @@ rules {
 #[test]
 fn puzzle_visuals_accept_at_prefixed_object_after_another_visual() {
     let source = r##"
-title = at_prefixed_object_after_visual
+const title = at_prefixed_object_after_visual
 
 puzzle default {
 layers {
@@ -7518,12 +7314,10 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #ff0000
 }
-visual {
-selector = @Floor
+visual @Floor {
 colors = #eeeeee
 }
 }
@@ -7563,7 +7357,7 @@ P
 #[test]
 fn puzzle_visuals_accept_unused_named_asset_without_object_binding() {
     let source = r##"
-title = unused_named_visual_asset
+const title = unused_named_visual_asset
 
 puzzle default {
 layers {
@@ -7574,8 +7368,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #ff0000
 }
 visual Flag {
@@ -7613,9 +7406,37 @@ P
 }
 
 #[test]
-fn puzzle_visuals_reject_unknown_compound_object_selector() {
+fn puzzle_visuals_reject_selector_property() {
     let source = r##"
-title = unknown_compound_visual_selector
+const title = visual_selector_property
+
+puzzle default {
+layers {
+solid = Player
+}
+visuals {
+visual {
+selector = Player
+colors = #eeeeee
+}
+}
+rules {
+}
+levels {
+level "start"
+.
+}
+}
+"##;
+
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(error.contains("`selector` is not a visual property"));
+}
+
+#[test]
+fn puzzle_visuals_accept_unused_compound_asset_name() {
+    let source = r##"
+const title = unused_compound_visual_asset
 
 puzzle default {
 layers {
@@ -7639,15 +7460,70 @@ P
 }
 }
 "##;
-    let error = parse_game(source).unwrap_err().to_string();
+    let loaded = parse_game(source).unwrap();
+    let flag = loaded
+        .visuals
+        .entries
+        .iter()
+        .find(|visual| visual.name == "Flag-state")
+        .expect("unused compound visual asset should be retained");
+    assert!(matches!(flag.kind, VisualKind::Solid(_)));
+    assert!(
+        loaded
+            .visuals
+            .aliases
+            .iter()
+            .all(|alias| alias.visual != "Flag-state")
+    );
+}
 
-    assert!(error.contains("unknown visual object selector"), "{error}");
+#[test]
+fn puzzle_visuals_keep_nonmatching_schema_like_name_as_asset() {
+    let source = r##"
+const title = nonmatching_schema_like_visual_name
+
+puzzle default {
+tags {
+state = open closed
+}
+layers {
+solid = Gate:state
+}
+visuals {
+visual Gate:missing {
+colors = #eeeeee
+}
+}
+rules {
+}
+levels {
+level "start"
+.
+}
+}
+"##;
+
+    let loaded = parse_game(source).unwrap();
+    assert!(
+        loaded
+            .visuals
+            .entries
+            .iter()
+            .any(|visual| visual.name == "Gate-missing")
+    );
+    assert!(
+        loaded
+            .visuals
+            .aliases
+            .iter()
+            .all(|alias| alias.visual != "Gate-missing")
+    );
 }
 
 #[test]
 fn puzzle_visuals_accept_visual_names_that_are_css_color_names() {
     let source = r##"
-title = color_named_visuals
+const title = color_named_visuals
 
 puzzle default {
 layers {
@@ -7659,12 +7535,10 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = red
+visual red {
 colors = #ff0000
 }
-visual {
-selector = blue
+visual blue {
 colors = #0000ff
 }
 }
@@ -7704,7 +7578,7 @@ rb
 #[test]
 fn puzzle_visuals_accept_line_style_solid_color_table_visual() {
     let source = r##"
-title = line_style_solid_color_table_visual
+const title = line_style_solid_color_table_visual
 
 puzzle default {
 tags {
@@ -7724,8 +7598,7 @@ A = #4a4
 B = #a4a
 }
 }
-visual {
-selector = Light:kind
+visual Light:kind {
 colors = piece_color:kind
 }
 }
@@ -7756,7 +7629,7 @@ level "start"
 #[test]
 fn puzzle_visuals_accept_line_style_ascii_visual() {
     let source = r##"
-title = line_style_ascii_visual
+const title = line_style_ascii_visual
 
 puzzle default {
 layers {
@@ -7768,8 +7641,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Box
+visual Box {
 colors = #aaa
 shape = {
 00000
@@ -7779,8 +7651,7 @@ shape = {
 00000
 }
 }
-visual {
-selector = Wall
+visual Wall {
 colors = #444
 }
 }
@@ -7837,7 +7708,7 @@ B
 #[test]
 fn puzzle_visuals_keep_solid_entry_before_line_style_shape_visual() {
     let source = r##"
-title = solid_before_line_style_shape_visual
+const title = solid_before_line_style_shape_visual
 
 puzzle default {
 tags {
@@ -7859,19 +7730,16 @@ Box {
 }
 }
 
-visual {
-selector = Hole
+visual Hole {
 colors = #000
 }
 
-visual {
-selector = Box:open
+visual Box:open {
 colors = #45667d #2f485d
 shape = Box
 }
 
-visual {
-selector = Box:close
+visual Box:close {
 colors = #34444e #262f38
 shape = Box
 }
@@ -7926,7 +7794,7 @@ HB
 #[test]
 fn puzzle_visuals_warn_when_generated_visual_key_is_overwritten() {
     let source = r##"
-title = duplicate_visual
+const title = duplicate_visual
 
 puzzle default {
 layers {
@@ -7937,8 +7805,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Crack
+visual Crack {
 colors = #2cc511
 shape = {
 .....
@@ -7949,8 +7816,7 @@ shape = {
 }
 }
 
-visual {
-selector = Crack
+visual Crack {
 colors = #000
 shape = {
 0
@@ -7986,7 +7852,7 @@ C
 #[test]
 fn puzzle_visuals_warn_when_visual_grid_does_not_divide_largest_grid() {
     let source = r##"
-title = visual_grid_warning
+const title = visual_grid_warning
 
 puzzle default {
 layers {
@@ -7997,8 +7863,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Box
+visual Box {
 colors = #aaa
 shape = {
 0000
@@ -8008,8 +7873,7 @@ shape = {
 }
 }
 
-visual {
-selector = Pull
+visual Pull {
 colors = #bbb
 shape = {
 000
@@ -8038,7 +7902,7 @@ B
 #[test]
 fn puzzle_visuals_do_not_warn_when_visual_grid_divides_largest_grid() {
     let source = r##"
-title = visual_grid_divides
+const title = visual_grid_divides
 
 puzzle default {
 layers {
@@ -8049,8 +7913,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Box
+visual Box {
 colors = #aaa
 shape = {
 0000
@@ -8060,8 +7923,7 @@ shape = {
 }
 }
 
-visual {
-selector = Pull
+visual Pull {
 colors = #bbb
 shape = {
 00
@@ -8091,7 +7953,7 @@ B
 #[test]
 fn puzzle_visuals_accept_line_style_tagged_ascii_visual_after_pattern() {
     let source = r##"
-title = line_style_tagged_ascii_visual
+const title = line_style_tagged_ascii_visual
 
 puzzle default {
 tags {
@@ -8105,15 +7967,13 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Box:base
+visual Box:base {
 colors = #aaa
 shape = {
 0
 }
 }
-visual {
-selector = Box:movable
+visual Box:movable {
 colors = #bbb
 shape = {
 0
@@ -8153,7 +8013,7 @@ B
 #[test]
 fn puzzle_visuals_accept_schema_visual_with_color_alias_row() {
     let source = r##"
-title = schema_visual_color_alias_row
+const title = schema_visual_color_alias_row
 
 puzzle default {
 tags {
@@ -8171,8 +8031,7 @@ palette {
 Gate_color_1 = #111111
 Gate_color_2 = #222222
 }
-visual {
-selector = Gate:num
+visual Gate:num {
 colors = Gate_color_1 Gate_color_2
 shape = {
 01
@@ -8219,7 +8078,7 @@ level "start"
 #[test]
 fn puzzle_visuals_do_not_parse_tagged_entry_header_as_transform() {
     let source = r##"
-title = tagged_visual_header_not_transform
+const title = tagged_visual_header_not_transform
 
 puzzle default {
 tags {
@@ -8249,17 +8108,31 @@ B
 }
 }
 "##;
-    let error = parse_game(source).unwrap_err().to_string();
-    assert!(
-        !error.contains("translate visual transforms were removed"),
-        "{error}"
+    let loaded = parse_game(source).expect("tagged visual headers are selectors");
+    assert_eq!(
+        loaded
+            .visuals
+            .aliases
+            .iter()
+            .map(|alias| (alias.object.as_str(), alias.visual.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("Box:base", "Box-base")]
+    );
+    assert_eq!(
+        loaded
+            .visuals
+            .entries
+            .iter()
+            .map(|visual| (visual.name.as_str(), visual.transforms.len()))
+            .collect::<Vec<_>>(),
+        vec![("Box-base", 0), ("Box-movable", 0)]
     );
 }
 
 #[test]
 fn puzzle_visuals_reject_braces_in_ascii_rows() {
     let source = r##"
-title = visual_ascii_braces
+const title = visual_ascii_braces
 
 puzzle default {
 layers {
@@ -8294,7 +8167,7 @@ B
 #[test]
 fn puzzle_visuals_reject_translate_transform_offset() {
     let source = r##"
-title = translated_visual_removed
+const title = translated_visual_removed
 
 puzzle default {
 layers {
@@ -8305,8 +8178,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #fff
 shape = {
 00000
@@ -8337,7 +8209,7 @@ P
 #[test]
 fn puzzle_visuals_reject_malformed_translate_transform() {
     let source = r##"
-title = malformed_translated_visual
+const title = malformed_translated_visual
 
 puzzle default {
 layers {
@@ -8348,8 +8220,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #fff
 shape = {
 0
@@ -8376,7 +8247,7 @@ P
 #[test]
 fn puzzle_visuals_accept_line_style_color_and_shape_refs() {
     let source = r##"
-title = line_style_color_shape_refs
+const title = line_style_color_shape_refs
 
 puzzle default {
 layers {
@@ -8394,8 +8265,7 @@ box_shape {
 010
 }
 }
-visual {
-selector = Box
+visual Box {
 colors = #111 #eee
 shape = box_shape
 }
@@ -8433,7 +8303,7 @@ B
 #[test]
 fn puzzle_visuals_accept_bare_shape_reference_after_colors() {
     let source = r##"
-title = bare_shape_reference
+const title = bare_shape_reference
 
 puzzle default {
 layers {
@@ -8446,8 +8316,7 @@ box_shape {
 10
 }
 }
-visual {
-selector = Box
+visual Box {
 colors = #111 #eee
 shape = box_shape
 }
@@ -8487,7 +8356,7 @@ B
 #[test]
 fn unbraced_visual_attachment_colors_property_does_not_enter_palette() {
     let source = r##"
-title = unbraced_visual_colors_property
+const title = unbraced_visual_colors_property
 
 puzzle default {
 layers {
@@ -8539,7 +8408,7 @@ P
 #[test]
 fn puzzle_visuals_accept_unbraced_shorthand_animation_body() {
     let source = r##"
-title = shorthand_animation_visual
+const title = shorthand_animation_visual
 
 puzzle default {
 layers {
@@ -8603,15 +8472,14 @@ B
 #[test]
 fn puzzle_visuals_accept_explicit_braced_inline_shape() {
     let source = r##"
-title = explicit_braced_inline_shape
+const title = explicit_braced_inline_shape
 
 puzzle default {
 layers {
 __legacy_layer_0 = Player
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #fff #000
 shape = {
 000
@@ -8651,15 +8519,14 @@ P
 #[test]
 fn puzzle_visuals_reject_legacy_unbraced_shape_marker() {
     let source = r##"
-title = reject_legacy_unbraced_shape_marker
+const title = reject_legacy_unbraced_shape_marker
 
 puzzle default {
 layers {
 __legacy_layer_0 = Player
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #fff #000
 shape =
 000
@@ -8689,7 +8556,7 @@ P
 #[test]
 fn puzzle_visuals_accept_frame_duration_for_animation_body() {
     let source = r##"
-title = frame_duration_animation_visual
+const title = frame_duration_animation_visual
 
 puzzle default {
 layers {
@@ -8742,7 +8609,7 @@ B
 #[test]
 fn puzzle_visuals_reject_conflicting_duration_and_frame_duration() {
     let source = r##"
-title = conflicting_duration_animation_visual
+const title = conflicting_duration_animation_visual
 
 puzzle default {
 layers {
@@ -8791,7 +8658,7 @@ B
 #[test]
 fn puzzle_visuals_accept_unbraced_shape_table_values_and_bare_refs() {
     let source = r##"
-title = unbraced_shape_table_values
+const title = unbraced_shape_table_values
 
 puzzle default {
 tags {
@@ -8824,13 +8691,11 @@ B
 floor
 0
 }
-visual {
-selector = Box:kind
+visual Box:kind {
 colors = piece_color:kind transparent
 shape = mark:kind
 }
-visual {
-selector = @Floor
+visual @Floor {
 colors = #111 #eee
 shape = floor
 }
@@ -8882,7 +8747,7 @@ B
 #[test]
 fn puzzle_visuals_accept_individual_shape_table_values() {
     let source = r##"
-title = individual_shape_table_values
+const title = individual_shape_table_values
 
 puzzle default {
 tags {
@@ -8905,8 +8770,7 @@ mark:B
 11
 00
 }
-visual {
-selector = Box:kind
+visual Box:kind {
 colors = #111 #eee
 shape = mark:kind
 }
@@ -8942,7 +8806,7 @@ B
 #[test]
 fn puzzle_visuals_accept_terminal_unbraced_shape_block_before_colors() {
     let source = r##"
-title = terminal_unbraced_shape_block_before_colors
+const title = terminal_unbraced_shape_block_before_colors
 
 puzzle default {
 layers {
@@ -8964,8 +8828,7 @@ palette {
 box_color = #eee
 }
 
-visual {
-selector = Box
+visual Box {
 colors = box_color #111
 shape = box_shape
 }
@@ -9011,7 +8874,7 @@ B
 #[test]
 fn puzzle_visuals_accept_multiple_unbraced_shapes_in_one_shapes_block() {
     let source = r##"
-title = multiple_unbraced_shapes
+const title = multiple_unbraced_shapes
 
 puzzle default {
 layers {
@@ -9035,14 +8898,12 @@ Pull
 000
 }
 
-visual {
-selector = Box
+visual Box {
 colors = #111 #eee
 shape = Box
 }
 
-visual {
-selector = Pull
+visual Pull {
 colors = #222 #0f0
 shape = Pull
 }
@@ -9095,7 +8956,7 @@ BP
 #[test]
 fn puzzle_visuals_do_not_extend_unbraced_shape_by_row_width() {
     let source = r##"
-title = unbraced_shape_boundary
+const title = unbraced_shape_boundary
 
 puzzle default {
 layers {
@@ -9117,14 +8978,12 @@ Pad
 0
 }
 
-visual {
-selector = Box
+visual Box {
 colors = #111 #eee
 shape = Box
 }
 
-visual {
-selector = Pad
+visual Pad {
 colors = #222
 shape = Pad
 }
@@ -9174,7 +9033,7 @@ BP
 #[test]
 fn puzzle_visuals_allow_duplicate_color_refs() {
     let source = r##"
-title = duplicate_color_refs
+const title = duplicate_color_refs
 
 puzzle default {
 tags {
@@ -9200,8 +9059,7 @@ box_shape {
 0123
 }
 }
-visual {
-selector = Box
+visual Box {
 colors = shared shared tagged:A tagged:A
 shape = box_shape
 }
@@ -9241,7 +9099,7 @@ B
 #[test]
 fn puzzle_visuals_accept_blank_separated_visual_attachment() {
     let source = r##"
-title = blank_separated_visual_attachment
+const title = blank_separated_visual_attachment
 
 puzzle default {
 layers {
@@ -9282,7 +9140,7 @@ B
 #[test]
 fn puzzle_visuals_reject_same_line_visual_attachment_body() {
     let source = r##"
-title = image_visual_ref
+const title = image_visual_ref
 
 puzzle default {
 layers {
@@ -9311,7 +9169,7 @@ B
 #[test]
 fn puzzle_visuals_accept_braced_visual_attachment_properties() {
     let source = r##"
-title = braced_visual_attachment
+const title = braced_visual_attachment
 
 puzzle default {
 layers {
@@ -9363,7 +9221,7 @@ B
 #[test]
 fn puzzle_visuals_accept_visual_node_image_properties() {
     let source = r##"
-title = visual_node_image_ref
+const title = visual_node_image_ref
 
 puzzle default {
 layers {
@@ -9374,8 +9232,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Box
+visual Box {
 image = "visuals/box.png"
 translate (0, -1/4)
 sampling = smooth
@@ -9417,7 +9274,7 @@ B
 #[test]
 fn puzzle_visuals_reject_removed_offset_property() {
     let source = r##"
-title = removed_visual_offset
+const title = removed_visual_offset
 
 puzzle default {
 layers {
@@ -9444,7 +9301,7 @@ level "start" {
 #[test]
 fn puzzle_visuals_reject_gif_image_visual_refs() {
     let source = r##"
-title = image_visual_ref
+const title = image_visual_ref
 
 puzzle default {
 layers {
@@ -9455,8 +9312,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Box
+visual Box {
 image = "visuals/box.gif"
 }
 }
@@ -9476,7 +9332,7 @@ B
 #[test]
 fn puzzle_visuals_accept_more_than_ten_inline_colors() {
     let source = r##"
-title = inline_visual_many_colors
+const title = inline_visual_many_colors
 
 puzzle default {
 layers {
@@ -9487,8 +9343,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #000000 #111111 #222222 #333333 #444444 #555555 #666666 #777777 #888888 #999999 #aaaaaa
 shape = {
 a
@@ -9528,7 +9383,7 @@ P
 #[test]
 fn puzzle_visuals_accept_alpha_hex_colors() {
     let source = r##"
-title = inline_visual_alpha_colors
+const title = inline_visual_alpha_colors
 
 puzzle default {
 layers {
@@ -9539,8 +9394,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #ff004d80 #00000000
 shape = {
 01
@@ -9585,7 +9439,7 @@ P
 #[test]
 fn puzzle_visuals_count_leading_alpha_hex_transparent_as_palette_color() {
     let source = r##"
-title = leading_alpha_transparent_palette_color
+const title = leading_alpha_transparent_palette_color
 
 puzzle default {
 layers {
@@ -9596,8 +9450,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #00000000 #555555
 shape = {
 01.
@@ -9643,7 +9496,7 @@ P
 #[test]
 fn puzzle_visuals_count_transparent_as_palette_color() {
     let source = r##"
-title = transparent_palette_color
+const title = transparent_palette_color
 
 puzzle default {
 layers {
@@ -9654,8 +9507,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = transparent #555
 shape = {
 01
@@ -9701,7 +9553,7 @@ P
 #[test]
 fn puzzle_visuals_reject_pattern_colors_outside_palette() {
     let source = r##"
-title = visual_palette_overflow
+const title = visual_palette_overflow
 
 puzzle default {
 layers {
@@ -9712,8 +9564,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = transparent
 shape = {
 01
@@ -9736,7 +9587,7 @@ P
 #[test]
 fn puzzle_visuals_accept_bare_reusable_shape_ref() {
     let source = r##"
-title = bare_reusable_shape_ref
+const title = bare_reusable_shape_ref
 
 puzzle default {
 layers {
@@ -9754,8 +9605,7 @@ player_shape {
 }
 }
 
-visual {
-selector = Player
+visual Player {
 colors = #e94f64 #2f80ed
 shape = player_shape
 }
@@ -9791,7 +9641,7 @@ P
 #[test]
 fn puzzle_visuals_reject_old_ascii_visual_syntax() {
     let source = r##"
-title = old_visual_syntax
+const title = old_visual_syntax
 
 puzzle default {
 layers {
@@ -9833,7 +9683,7 @@ P
 #[test]
 fn puzzle_visuals_reject_legacy_palettes_block() {
     let source = r##"
-title = legacy_palettes_block
+const title = legacy_palettes_block
 
 puzzle default {
 layers {
@@ -9870,7 +9720,7 @@ P
 #[test]
 fn puzzle_visuals_reject_legacy_colors_block_for_palette_defs() {
     let source = r##"
-title = legacy_colors_block
+const title = legacy_colors_block
 
 puzzle default {
 layers {
@@ -9907,7 +9757,7 @@ P
 #[test]
 fn directions_is_builtin_value_set_for_objects_visuals_and_for() {
     let source = r#"
-title = directions_value_set
+const title = directions_value_set
 
 puzzle default {
 layers {
@@ -9939,8 +9789,7 @@ right {
 }
 }
 }
-visual {
-selector = Boundary:directions
+visual Boundary:directions {
 colors = transparent #555
 shape = edge:directions
 }
@@ -9992,7 +9841,7 @@ level "start"
 #[test]
 fn tag_sets_expand_inclusive_numeric_ranges() {
     let source = r#"
-title = numeric_tag_range
+const title = numeric_tag_range
 
 puzzle default {
 tags {
@@ -10034,7 +9883,7 @@ B
 #[test]
 fn visual_shape_table_can_define_direction_variants() {
     let source = r#"
-title = rotated_visuals
+const title = rotated_visuals
 
 puzzle default {
 map rotate directions {
@@ -10074,8 +9923,7 @@ left {
 }
 }
 }
-visual {
-selector = Boundary:directions
+visual Boundary:directions {
 colors = transparent #555
 shape = edge:directions
 }
@@ -10118,7 +9966,7 @@ level "start"
 #[test]
 fn unbraced_visual_entry_can_use_direction_shape_table() {
     let source = r#"
-title = unbraced_rotated_visual
+const title = unbraced_rotated_visual
 
 puzzle default {
 map rotate directions {
@@ -10158,8 +10006,7 @@ left {
 }
 }
 }
-visual {
-selector = Boundary:directions
+visual Boundary:directions {
 colors = transparent #555
 shape = edge:directions
 }
@@ -10202,7 +10049,7 @@ level "start"
 #[test]
 fn unbraced_at_prefixed_visual_entry_can_use_direction_shape_table() {
     let source = r#"
-title = unbraced_at_prefixed_rotated_visual_header
+const title = unbraced_at_prefixed_rotated_visual_header
 
 puzzle default {
 layers {
@@ -10249,8 +10096,7 @@ left {
 }
 }
 }
-visual {
-selector = @WallFrame:directions
+visual @WallFrame:directions {
 colors = #585858
 shape = wall_frame:directions
 }
@@ -10316,7 +10162,7 @@ level "start"
 #[test]
 fn consecutive_unbraced_at_prefixed_visual_entries_can_use_rotation_and_shape_metadata() {
     let source = r#"
-title = unbraced_at_prefixed_rotated_visuals
+const title = unbraced_at_prefixed_rotated_visuals
 
 puzzle default {
 map rotate directions {
@@ -10387,18 +10233,15 @@ left {
 }
 }
 }
-visual {
-selector = @Boundary:directions
+visual @Boundary:directions {
 colors = #000 #fff
 shape = boundary:directions
 }
-visual {
-selector = @Corner:directions
+visual @Corner:directions {
 colors = #111 #fff
 shape = corner:directions
 }
-visual {
-selector = Goal:state
+visual Goal:state {
 colors = #222 #333
 shape = Flag
 }
@@ -10438,7 +10281,7 @@ level "start"
 #[test]
 fn unbraced_shape_visual_entry_can_be_followed_by_braced_rotated_at_prefixed_visual() {
     let source = r#"
-title = shape_before_braced_rotated_at_prefixed_visual
+const title = shape_before_braced_rotated_at_prefixed_visual
 
 puzzle default {
 map rotate directions {
@@ -10486,13 +10329,11 @@ left {
 }
 }
 }
-visual {
-selector = Goal:state
+visual Goal:state {
 colors = #222 #333
 shape = Flag
 }
-visual {
-selector = @LockedFrame:directions
+visual @LockedFrame:directions {
 colors = #000 #fff
 shape = locked_frame:directions
 }
@@ -10525,7 +10366,7 @@ level "start"
 #[test]
 fn visual_shape_lookup_can_use_named_map_directive() {
     let source = r#"
-title = rotated_visuals_named_map
+const title = rotated_visuals_named_map
 
 puzzle default {
 map clockwise directions {
@@ -10565,8 +10406,7 @@ left {
 }
 }
 }
-visual {
-selector = Boundary:directions
+visual Boundary:directions {
 colors = transparent #555
 shape = edge:clockwise(directions)
 }
@@ -10603,7 +10443,7 @@ level "start"
 #[test]
 fn visual_entry_accepts_canonical_metadata_colors_and_ascii_order() {
     let source = r##"
-title = canonical_visual_metadata
+const title = canonical_visual_metadata
 
 puzzle default {
 layers {
@@ -10614,8 +10454,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 translate (0.5, -1/4)
 sampling = smooth
 colors = #e94f64 #2f80ed
@@ -10676,7 +10515,7 @@ P
 #[test]
 fn visual_entry_accepts_canonical_selector_block() {
     let source = r##"
-title = canonical_visual_selector
+const title = canonical_visual_selector
 
 puzzle default {
 layers {
@@ -10687,8 +10526,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #e94f64 #2f80ed
 shape = {
 ........
@@ -10737,7 +10575,7 @@ P
 #[test]
 fn visual_entry_accepts_canonical_property_shape_block() {
     let source = r##"
-title = canonical_visual_property_shape
+const title = canonical_visual_property_shape
 
 puzzle default {
 layers {
@@ -10748,8 +10586,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Player
+visual Player {
 colors = #e94f64 #2f80ed
 shape = {
 ........
@@ -10798,7 +10635,7 @@ P
 #[test]
 fn visual_entry_accepts_explicit_shape_reference_property() {
     let source = r##"
-title = canonical_visual_shape_ref
+const title = canonical_visual_shape_ref
 
 puzzle default {
 layers {
@@ -10815,8 +10652,7 @@ BoxShape {
 01
 }
 }
-visual {
-selector = Player
+visual Player {
 colors = #e94f64 #2f80ed
 shape = BoxShape
 }
@@ -10854,7 +10690,7 @@ P
 #[test]
 fn visual_entry_can_rotate_inline_ascii_from_selector_axis() {
     let source = r#"
-title = inline_rotated_visual
+const title = inline_rotated_visual
 
 puzzle default {
 layers {
@@ -10864,8 +10700,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Boundary:directions
+visual Boundary:directions {
 rotate directions from up
 colors = transparent #555
 111
@@ -10918,7 +10753,7 @@ level "start"
 #[test]
 fn visual_rotation_does_not_depend_on_user_map_named_rotate() {
     let source = r#"
-title = inline_rotated_visual_with_unrelated_rotate_map
+const title = inline_rotated_visual_with_unrelated_rotate_map
 
 puzzle default {
 tags {
@@ -10935,8 +10770,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Boundary:directions
+visual Boundary:directions {
 rotate directions from up
 colors = transparent #555
 111
@@ -10974,7 +10808,7 @@ level "start"
 #[test]
 fn visual_rotation_ignores_user_map_named_rotate_on_same_axis() {
     let source = r#"
-title = inline_rotated_visual_with_same_axis_rotate_map
+const title = inline_rotated_visual_with_same_axis_rotate_map
 
 puzzle default {
 map rotate directions {
@@ -10990,8 +10824,7 @@ legend {
 . = empty
 }
 visuals {
-visual {
-selector = Boundary:directions
+visual Boundary:directions {
 rotate directions from up
 colors = transparent #555
 111
@@ -11029,7 +10862,7 @@ level "start"
 #[test]
 fn visual_ascii_lookup_can_map_selector_axis_values() {
     let source = r#"
-title = mapped_visual_lookup
+const title = mapped_visual_lookup
 
 puzzle default {
 map rotate directions {
@@ -11069,8 +10902,7 @@ left {
 }
 }
 }
-visual {
-selector = Boundary:directions
+visual Boundary:directions {
 colors = transparent #555
 shape = edge:rotate(directions)
 }
@@ -11113,7 +10945,7 @@ level "start"
 #[test]
 fn visual_selector_can_map_axis_values() {
     let source = r#"
-title = mapped_visual_selector
+const title = mapped_visual_selector
 
 puzzle default {
 map rotate directions {
@@ -11153,8 +10985,7 @@ left {
 }
 }
 }
-visual {
-selector = Boundary:rotate(directions)
+visual Boundary:rotate(directions) {
 colors = transparent #555
 shape = edge:directions
 }
@@ -11197,7 +11028,7 @@ level "start"
 #[test]
 fn input_in_directions_scopes_input_oriented_rewrite() {
     let source = r#"
-title = input_in_directions
+const title = input_in_directions
 
 puzzle default {
 layers {
@@ -11229,7 +11060,7 @@ level "start"
 #[test]
 fn horizontal_orientation_set_expands_rewrite() {
     let source = r#"
-title = horizontal_orientation_set
+const title = horizontal_orientation_set
 
 puzzle default {
 layers {
@@ -11264,7 +11095,7 @@ level "start"
 #[test]
 fn directions_orientation_set_expands_rewrite() {
     let source = r#"
-title = directions_orientation_set
+const title = directions_orientation_set
 
 puzzle default {
 layers {
@@ -11299,7 +11130,7 @@ level "start"
 #[test]
 fn vertical_orientation_set_expands_condition_pattern() {
     let source = r#"
-title = vertical_orientation_set_condition
+const title = vertical_orientation_set_condition
 
 puzzle default {
 layers {
@@ -11336,7 +11167,7 @@ PD
 #[test]
 fn input_horizontal_rewrite_adds_input_guard_and_expands_orientation() {
     let source = r#"
-title = input_horizontal_rewrite
+const title = input_horizontal_rewrite
 
 puzzle default {
 layers {
@@ -11375,7 +11206,7 @@ level "start"
 #[test]
 fn input_prefix_without_set_is_directions_sugar() {
     let source = r#"
-title = input_directions_sugar
+const title = input_directions_sugar
 
 puzzle default {
 layers {
@@ -11405,7 +11236,7 @@ level "start"
 #[test]
 fn input_directions_condition_pattern_adds_input_guard_and_expands_orientation() {
     let source = r#"
-title = input_directions_condition
+const title = input_directions_condition
 
 puzzle default {
 layers {
@@ -11446,7 +11277,7 @@ P#D
 #[test]
 fn input_condition_pattern_without_set_is_directions_sugar() {
     let source = r#"
-title = input_condition_directions_sugar
+const title = input_condition_directions_sugar
 
 puzzle default {
 layers {
@@ -11485,7 +11316,7 @@ P#D
 #[test]
 fn input_condition_can_use_map_call_inside_for_expansion() {
     let source = r#"
-title = mapped_input_condition
+const title = mapped_input_condition
 
 puzzle default {
 map rotate directions {
@@ -11529,7 +11360,7 @@ level "start"
 #[test]
 fn object_selector_map_call_can_use_tag_set_argument() {
     let source = r#"
-title = mapped_tag_set_selector
+const title = mapped_tag_set_selector
 
 puzzle default {
 tags {
@@ -11573,7 +11404,7 @@ bc
 #[test]
 fn prefixless_spatial_rewrite_expands_to_cardinal_directions() {
     let source = r#"
-title = implicit_cardinal_rewrite
+const title = implicit_cardinal_rewrite
 
 puzzle default {
 layers {
@@ -11615,7 +11446,7 @@ level "start" {
 #[test]
 fn rewrite_allows_lhs_and_rhs_pattern_line_breaks() {
     let source = r#"
-title = multiline_rewrite
+const title = multiline_rewrite
 
 puzzle default {
 layers {
@@ -11650,7 +11481,7 @@ A
 #[test]
 fn multiline_rewrite_rejects_rhs_with_nested_arrow() {
     let source = r#"
-title = multiline_rewrite_nested_arrow
+const title = multiline_rewrite_nested_arrow
 
 puzzle default {
 layers {
@@ -11678,7 +11509,7 @@ A
 #[test]
 fn prefixless_pattern_condition_expands_to_cardinal_directions() {
     let source = r#"
-title = implicit_cardinal_condition
+const title = implicit_cardinal_condition
 
 puzzle default {
 layers {
@@ -11714,7 +11545,7 @@ WP
 #[test]
 fn named_query_patterns_expand_to_cardinal_directions() {
     let source = r#"
-title = implicit_cardinal_condition
+const title = implicit_cardinal_condition
 
 puzzle default {
 layers {
@@ -11750,7 +11581,7 @@ WP
 #[test]
 fn condition_declaration_is_rejected() {
     let source = r#"
-title = old_condition_declaration
+const title = old_condition_declaration
 
 puzzle default {
 layers {
@@ -11777,7 +11608,7 @@ P
 #[test]
 fn if_condition_block_arrow_accepts_mixed_rule_body() {
     let source = r#"
-title = if_condition_block_arrow
+const title = if_condition_block_arrow
 
 puzzle default {
 layers {
@@ -11815,7 +11646,7 @@ P
 #[test]
 fn if_condition_arrow_block_accepts_rule_body() {
     let source = r#"
-title = if_condition_arrow_block
+const title = if_condition_arrow_block
 
 puzzle default {
 layers {
@@ -11849,7 +11680,7 @@ P
 #[test]
 fn fix_once_sets_default_rewrite_application_for_nested_lines() {
     let source = r#"
-title = fix_once
+const title = fix_once
 
 puzzle default {
 layers {
@@ -11883,7 +11714,7 @@ A..
 #[test]
 fn explicit_rewrite_prefix_overrides_fix_default() {
     let source = r#"
-title = fix_explicit_override
+const title = fix_explicit_override
 
 puzzle default {
 layers {
@@ -11923,7 +11754,7 @@ A..
 #[test]
 fn once_all_rewrite_applies_to_all_current_matches() {
     let source = r#"
-title = once_all_rewrite
+const title = once_all_rewrite
 
 puzzle default {
 layers {
@@ -11957,7 +11788,7 @@ AAA
 #[test]
 fn repeat_rewrite_progresses_past_idempotent_earlier_matches() {
     let source = r#"
-title = repeat_progressing_match
+const title = repeat_progressing_match
 
 puzzle default {
 layers {
@@ -11998,7 +11829,7 @@ AAA
 #[test]
 fn random_rewrite_applies_to_one_current_match() {
     let source = r#"
-title = random_rewrite
+const title = random_rewrite
 
 puzzle default {
 layers {
@@ -12032,7 +11863,7 @@ AAA
 #[test]
 fn random_block_applies_one_firing_statement() {
     let source = r#"
-title = random_block
+const title = random_block
 
 puzzle default {
 layers {
@@ -12068,7 +11899,7 @@ AA
 #[test]
 fn random_routine_applies_one_firing_statement() {
     let source = r#"
-title = random_routine
+const title = random_routine
 
 puzzle default {
 layers {
@@ -12106,7 +11937,7 @@ AA
 #[test]
 fn once_per_level_rewrite_fires_only_once_for_current_level_state() {
     let source = r#"
-title = once_per_level_rewrite
+const title = once_per_level_rewrite
 
 puzzle default {
 layers {
@@ -12143,7 +11974,7 @@ A
 #[test]
 fn routine_default_application_runs_effect_statement_once() {
     let source = r#"
-title = routine_default_once
+const title = routine_default_once
 
 puzzle default {
 layers {
@@ -12177,7 +12008,7 @@ A
 #[test]
 fn routine_default_application_runs_statement_list_once() {
     let source = r#"
-title = routine_default_statement_list_once
+const title = routine_default_statement_list_once
 
 puzzle default {
 layers {
@@ -12215,7 +12046,7 @@ A
 #[test]
 fn explicit_routine_repeat_runs_block_until_stable() {
     let source = r#"
-title = explicit_routine_repeat
+const title = explicit_routine_repeat
 
 puzzle default {
 layers {
@@ -12251,7 +12082,7 @@ AC
 #[test]
 fn rewrite_suffix_calls_routine_after_rewrite_statement_triggers() {
     let source = r#"
-title = rewrite_suffix_after_call
+const title = rewrite_suffix_after_call
 
 puzzle default {
 layers {
@@ -12289,7 +12120,7 @@ AC
 #[test]
 fn rewrite_suffix_after_call_uses_lhs_match_not_rhs_change() {
     let source = r#"
-title = rewrite_suffix_after_lhs_match
+const title = rewrite_suffix_after_lhs_match
 
 puzzle default {
 layers {
@@ -12323,7 +12154,7 @@ A
 #[test]
 fn directional_condition_call_binds_move_mark_and_offset_to_same_direction() {
     let source = r#"
-title = directional_condition_call
+const title = directional_condition_call
 
 puzzle main {
 layers {
@@ -12391,7 +12222,7 @@ P#
 #[test]
 fn pattern_condition_preserves_embedded_move_mark_as_mark() {
     let source = r#"
-title = directional_pattern_condition
+const title = directional_pattern_condition
 
 puzzle main {
 layers {
@@ -12457,7 +12288,7 @@ P#
 #[test]
 fn embedded_move_mark_condition_uses_relative_direction() {
     let source = r#"
-title = relative_embedded_move_mark_condition
+const title = relative_embedded_move_mark_condition
 
 puzzle main {
 layers {
@@ -12520,7 +12351,7 @@ P.
 #[test]
 fn rhs_keep_marker_preserves_matching_cell() {
     let source = r#"
-title = rhs_keep_marker
+const title = rhs_keep_marker
 
 puzzle default {
 layers {
@@ -12555,7 +12386,7 @@ AB
 #[test]
 fn keep_marker_is_only_valid_as_whole_rhs_cell() {
     let lhs_source = r#"
-title = rhs_keep_marker_lhs_reject
+const title = rhs_keep_marker_lhs_reject
 
 puzzle default {
 layers {
@@ -12576,7 +12407,7 @@ AB
     assert!(error.contains("`=` is only valid as a RHS cell"), "{error}");
 
     let mixed_rhs_source = r#"
-title = rhs_keep_marker_mixed_reject
+const title = rhs_keep_marker_mixed_reject
 
 puzzle default {
 layers {
@@ -12603,7 +12434,7 @@ A
 #[test]
 fn fix_default_applies_through_nested_blocks() {
     let source = r#"
-title = fix_nested_block
+const title = fix_nested_block
 
 puzzle default {
 layers {
@@ -12638,7 +12469,7 @@ A..
 #[test]
 fn fix_does_not_prefix_top_level_directives() {
     let source = r#"
-title = fix_input
+const title = fix_input
 
 puzzle default {
 layers {
@@ -12669,7 +12500,7 @@ level "start" {
 #[test]
 fn scene_keys_define_action_bindings_and_puzzle_controls() {
     let source = r#"
-title = scene_keys
+const title = scene_keys
 
 puzzle default {
 layers {
@@ -12747,7 +12578,7 @@ goto playing
 #[test]
 fn scene_effects_parse_targeted_goto_level_paths() {
     let source = r#"
-title = goto_effects
+const title = goto_effects
 
 puzzle default {
 layers {
@@ -12837,7 +12668,7 @@ puzzle board = default
 #[test]
 fn scene_effects_parse_targeted_restart() {
     let source = r#"
-title = targeted_restart
+const title = targeted_restart
 
 puzzle default {
 layers {
@@ -12889,7 +12720,7 @@ button "Restart Board" -> board.restart
 #[test]
 fn scene_effects_parse_inline_sequences_by_effect_vocabulary() {
     let source = r#"
-title = inline_effect_sequence
+const title = inline_effect_sequence
 
 sounds {
 music music { seed = 123456 }
@@ -12972,7 +12803,7 @@ puzzle board = default
 #[test]
 fn scene_button_effect_blocks_reject_end_form() {
     let source = r#"
-title = old_button_effect_block
+const title = old_button_effect_block
 
 scene title {
 layout {
@@ -13015,7 +12846,7 @@ P
 #[test]
 fn scene_effects_reject_start_level_scene_commands() {
     let source = r#"
-title = start_level_scene
+const title = start_level_scene
 
 puzzle default {
 layers {
@@ -13380,7 +13211,7 @@ fn scene_variable_assignment_effect_parses_path_rhs() {
 #[test]
 fn var_scopes_parse_by_owner() {
     let source = r#"
-title = var_scopes
+const title = var_scopes
 var session_label = "Session Label"
 persistent var high_score = 0
 
@@ -13417,13 +13248,19 @@ puzzle board = default
 "#;
     let loaded = parse_game(source).unwrap();
 
-    assert_eq!(loaded.variables.len(), 2);
-    assert_eq!(loaded.variables[0].name, "session_label");
+    assert_eq!(loaded.variables.len(), 3);
+    assert_eq!(loaded.variables[0].name, "title");
     assert_eq!(
         loaded.variables[0].default,
+        SceneValue::Symbol("var_scopes".to_string())
+    );
+    assert!(!loaded.variables[0].mutable);
+    assert_eq!(loaded.variables[1].name, "session_label");
+    assert_eq!(
+        loaded.variables[1].default,
         SceneValue::Text("Session Label".to_string())
     );
-    assert_eq!(loaded.variables[1].lifetime, SceneStateLifetime::Persistent);
+    assert_eq!(loaded.variables[2].lifetime, SceneStateLifetime::Persistent);
     assert_eq!(loaded.variable_labels.len(), 2);
     assert!(loaded.variable_labels.values().any(|name| name == "moved"));
     assert!(
@@ -13449,7 +13286,7 @@ puzzle board = default
 #[test]
 fn layers_and_legend_use_reserved_dot_empty_without_a_declaration() {
     let source = r#"
-title = object_blocks
+const title = object_blocks
 
 puzzle default {
 layers {
@@ -13536,7 +13373,7 @@ P.
 #[test]
 fn level_body_legend_adds_level_local_chars() {
     let source = r#"
-title = level_local_legend
+const title = level_local_legend
 
 puzzle default {
 layers {
@@ -13592,7 +13429,7 @@ P
 #[test]
 fn level_body_legend_does_not_leak_to_other_levels() {
     let source = r#"
-title = level_local_legend_no_leak
+const title = level_local_legend_no_leak
 
 puzzle default {
 layers {
@@ -13626,7 +13463,7 @@ x
 #[test]
 fn detects_goal_completion_after_solving_sample_game() {
     let source = r#"
-title = goal_fixture
+const title = goal_fixture
 puzzle sokoban {
 layers {
 __legacy_layer_0 = Goal
@@ -13678,7 +13515,7 @@ level "second"
 #[test]
 fn detects_goal_completion_on_second_stage() {
     let source = r#"
-title = goal_fixture
+const title = goal_fixture
 puzzle sokoban {
 layers {
 __legacy_layer_0 = Goal
@@ -13730,7 +13567,7 @@ level "second"
 #[test]
 fn parses_lose_conditions_with_some_pattern_row() {
     let source = r#"
-title = lose_fixture
+const title = lose_fixture
 puzzle default {
 layers {
 __legacy_layer_0 = Box Wall
@@ -13767,7 +13604,7 @@ B#
 #[test]
 fn parses_lose_conditions_with_exists_pattern_expr() {
     let source = r#"
-title = lose_fixture
+const title = lose_fixture
 puzzle default {
 layers {
 __legacy_layer_0 = Box Wall
@@ -13801,7 +13638,7 @@ B#
 #[test]
 fn condition_prefix_patterns_accept_wrapping_parentheses() {
     let source = r#"
-title = condition_prefix_pattern_parens
+const title = condition_prefix_pattern_parens
 puzzle default {
 layers {
 __legacy_layer_0 = Goal
@@ -13832,7 +13669,7 @@ level "start"
 #[test]
 fn condition_patterns_accept_family_wildcard_tag_selector() {
     let source = r#"
-title = condition_family_wildcard_tag
+const title = condition_family_wildcard_tag
 puzzle default {
 tags {
 state = open close
@@ -13864,7 +13701,7 @@ d
 #[test]
 fn no_function_alias_accepts_pattern_conditions() {
     let source = r#"
-title = no_function_pattern_alias
+const title = no_function_pattern_alias
 puzzle default {
 layers {
 __legacy_layer_0 = Goal
@@ -13890,7 +13727,7 @@ level "start"
 #[test]
 fn condition_blocks_accept_explicit_any_combinator() {
     let source = r#"
-title = condition_any_fixture
+const title = condition_any_fixture
 puzzle default {
 layers {
 __legacy_layer_0 = Goal
@@ -13929,7 +13766,7 @@ level "start"
 #[test]
 fn condition_blocks_expand_for_value_sets() {
     let source = r#"
-title = condition_for_fixture
+const title = condition_for_fixture
 puzzle default {
 tags {
 kind = A B
@@ -13970,7 +13807,7 @@ AB
 #[test]
 fn condition_blocks_expand_nested_for_value_sets() {
     let source = r#"
-title = nested_condition_for_fixture
+const title = nested_condition_for_fixture
 puzzle default {
 tags {
 kind = A B
@@ -14013,7 +13850,7 @@ A
 #[test]
 fn rules_expand_for_in_inclusive_numeric_range() {
     let source = r#"
-title = numeric_for_range
+const title = numeric_for_range
 
 puzzle default {
 layers {
@@ -14051,7 +13888,7 @@ B
 #[test]
 fn rules_expand_for_in_numeric_range_with_integer_var_endpoint() {
     let source = r#"
-title = numeric_for_var_range
+const title = numeric_for_var_range
 
 puzzle default {
 layers {
@@ -14091,7 +13928,7 @@ B
 #[test]
 fn rules_expand_for_inline_value_list_as_object_tokens() {
     let source = r#"
-title = inline_for_objects
+const title = inline_for_objects
 
 puzzle default {
 layers {
@@ -14128,7 +13965,7 @@ W
 #[test]
 fn rules_expand_for_inline_value_list_as_tag_tokens() {
     let source = r#"
-title = inline_for_tags
+const title = inline_for_tags
 
 puzzle default {
 tags {
@@ -14168,7 +14005,7 @@ B
 #[test]
 fn for_statement_body_uses_balanced_brace_depth() {
     let source = r#"
-title = for_if_else_checked_mark
+const title = for_if_else_checked_mark
 
 puzzle default {
 tags {
@@ -14213,7 +14050,7 @@ locked_room_count -= n
 #[test]
 fn inline_if_condition_accepts_inclusive_numeric_comparisons() {
     let source = r#"
-title = inclusive_compare_if
+const title = inclusive_compare_if
 
 puzzle default {
 var count = 2
@@ -14253,7 +14090,7 @@ B
 #[test]
 fn routine_for_condition_accepts_inclusive_loop_binding_comparison() {
     let source = r#"
-title = routine_inclusive_loop_compare
+const title = routine_inclusive_loop_compare
 
 sounds {
 sfx bump { seed = 746670; type = jump }
@@ -14312,7 +14149,7 @@ level "start" {
 #[test]
 fn routine_if_without_else_uses_one_condition_snapshot_for_all_then_statements() {
     let source = r#"
-title = routine_if_without_else_condition_snapshot
+const title = routine_if_without_else_condition_snapshot
 
 puzzle default {
 tags {
@@ -14372,7 +14209,7 @@ c
 #[test]
 fn routine_if_without_else_uses_updated_variable_for_later_dynamic_display_write() {
     let source = r#"
-title = routine_if_without_else_dynamic_display_update
+const title = routine_if_without_else_dynamic_display_update
 
 puzzle default {
 tags {
@@ -14432,7 +14269,7 @@ c
 #[test]
 fn routine_for_condition_runs_inclusive_loop_binding_else_branch() {
     let source = r#"
-title = routine_inclusive_loop_compare_else
+const title = routine_inclusive_loop_compare_else
 
 sounds {
 sfx bump { seed = 746670; type = jump }
@@ -14491,7 +14328,7 @@ level "start" {
 #[test]
 fn schema_selector_can_read_current_integer_var_tag_value() {
     let source = r#"
-title = dynamic_selector_var
+const title = dynamic_selector_var
 
 puzzle default {
 var count = 2
@@ -14534,7 +14371,7 @@ B
 #[test]
 fn schema_tag_slot_capture_updates_var_from_matched_variant() {
     let source = r#"
-title = schema_tag_slot_capture
+const title = schema_tag_slot_capture
 
 puzzle default {
 var captured = 0
@@ -14572,7 +14409,7 @@ X
 #[test]
 fn schema_tag_slot_labeled_capture_updates_var_from_matched_variant() {
     let source = r#"
-title = schema_tag_slot_labeled_capture
+const title = schema_tag_slot_labeled_capture
 
 puzzle default {
 var captured = 0
@@ -14609,7 +14446,7 @@ X
 #[test]
 fn schema_tag_slot_labeled_capture_can_feed_map_call_selector() {
     let source = r#"
-title = schema_tag_capture_map_call
+const title = schema_tag_capture_map_call
 
 puzzle default {
 tags {
@@ -14648,7 +14485,7 @@ X
 #[test]
 fn schema_wildcard_capture_updates_var_when_single_tag_slot_is_unambiguous() {
     let source = r#"
-title = schema_wildcard_capture
+const title = schema_wildcard_capture
 
 puzzle default {
 var captured = 0
@@ -14685,7 +14522,7 @@ X
 #[test]
 fn schema_wildcard_labeled_capture_updates_var() {
     let source = r#"
-title = schema_wildcard_labeled_capture
+const title = schema_wildcard_labeled_capture
 
 puzzle default {
 var captured = 0
@@ -14722,7 +14559,7 @@ X
 #[test]
 fn schema_tag_capture_reference_is_rejected_when_ambiguous() {
     let source = r#"
-title = schema_tag_capture_ambiguous
+const title = schema_tag_capture_ambiguous
 
 puzzle default {
 var captured = 0
@@ -14760,7 +14597,7 @@ level "start" {
 #[test]
 fn schema_tag_capture_reference_requires_matching_lhs_binding() {
     let source = r#"
-title = schema_tag_capture_missing
+const title = schema_tag_capture_missing
 
 puzzle default {
 var captured = 0
@@ -14796,7 +14633,7 @@ X
 #[test]
 fn schema_tag_capture_var_update_requires_numeric_tag_value() {
     let source = r#"
-title = schema_tag_capture_non_numeric
+const title = schema_tag_capture_non_numeric
 
 puzzle default {
 var captured = 0
@@ -14832,7 +14669,7 @@ R
 #[test]
 fn schema_selector_tracks_var_value_on_later_turns() {
     let source = r#"
-title = dynamic_selector_updates
+const title = dynamic_selector_updates
 
 puzzle default {
 var count = 2
@@ -14882,7 +14719,7 @@ BC
 #[test]
 fn schema_selector_reads_var_updated_by_previous_statement_in_same_turn() {
     let source = r#"
-title = dynamic_selector_same_turn_update
+const title = dynamic_selector_same_turn_update
 
 puzzle default {
 var count = 0
@@ -14924,7 +14761,7 @@ level "start" {
 #[test]
 fn repeated_schema_selector_reads_var_updated_by_previous_statement_in_same_turn() {
     let source = r#"
-title = dynamic_selector_same_turn_update_repeated
+const title = dynamic_selector_same_turn_update_repeated
 
 puzzle default {
 var count = 0
@@ -14966,7 +14803,7 @@ level "start" {
 #[test]
 fn schema_selector_rhs_uses_current_var_value() {
     let source = r#"
-title = dynamic_selector_rhs_current_value
+const title = dynamic_selector_rhs_current_value
 
 puzzle default {
 var count = 1
@@ -15007,7 +14844,7 @@ level "start" {
 #[test]
 fn schema_selector_rhs_mutable_var_tag_does_not_warn() {
     let source = r#"
-title = dynamic_selector_rhs_no_warning
+const title = dynamic_selector_rhs_no_warning
 
 puzzle default {
 var count = 1
@@ -15048,7 +14885,7 @@ level "start" {
 #[test]
 fn schema_selector_rhs_lowers_to_guarded_concrete_write() {
     let source = r#"
-title = dynamic_selector_rhs_lowering
+const title = dynamic_selector_rhs_lowering
 
 puzzle default {
 var count = 1
@@ -15109,7 +14946,7 @@ level "start" {
 #[test]
 fn dynamic_selector_suffix_update_runs_once_after_rewrite_triggers() {
     let source = r#"
-title = dynamic_selector_same_rewrite_effect_order
+const title = dynamic_selector_same_rewrite_effect_order
 
 puzzle default {
 var count = 0
@@ -15150,7 +14987,7 @@ level "start" {
 #[test]
 fn schema_selector_out_of_domain_var_value_does_not_match() {
     let source = r#"
-title = dynamic_selector_out_of_domain
+const title = dynamic_selector_out_of_domain
 
 puzzle default {
 var count = 2
@@ -15194,7 +15031,7 @@ BC
 #[test]
 fn const_backed_schema_selector_does_not_warn() {
     let source = r#"
-title = dynamic_selector_const
+const title = dynamic_selector_const
 
 puzzle default {
 const count = 2
@@ -15233,7 +15070,7 @@ B
 #[test]
 fn dynamic_schema_selector_rejects_var_and_tag_set_name_collision() {
     let source = r#"
-title = dynamic_selector_tag_set_collision
+const title = dynamic_selector_tag_set_collision
 
 puzzle default {
 var count = 2
@@ -15269,7 +15106,7 @@ B
 #[test]
 fn dynamic_schema_selector_rejects_var_and_tag_value_name_collision() {
     let source = r#"
-title = dynamic_selector_tag_value_collision
+const title = dynamic_selector_tag_value_collision
 
 puzzle default {
 var count = 2
@@ -15305,7 +15142,7 @@ B
 #[test]
 fn condition_blocks_accept_no_pattern_all_on_and_count_compare() {
     let source = r#"
-title = condition_fixture
+const title = condition_fixture
 puzzle default {
 layers {
 __legacy_layer_0 = Goal
@@ -15343,7 +15180,7 @@ level "start"
 #[test]
 fn condition_blocks_lower_none_function_to_short_circuit_condition_def() {
     let source = r#"
-title = none_condition_fixture
+const title = none_condition_fixture
 puzzle default {
 layers {
 __legacy_layer_0 = Goal
@@ -15391,7 +15228,7 @@ level "start"
 #[test]
 fn all_on_lowers_to_generic_goal_and_generates_solver_strategy() {
     let source = r#"
-title = all_on_semantics
+const title = all_on_semantics
 puzzle default {
 empty .
 layers {
@@ -15432,7 +15269,7 @@ GB
 #[test]
 fn schema_selector_tag_can_be_subset_value_set() {
     let source = r#"
-title = subset_selector
+const title = subset_selector
 
 puzzle default {
 empty .
@@ -15472,7 +15309,7 @@ abcd
 #[test]
 fn schema_selector_subset_value_set_must_fit_axis_values() {
     let source = r#"
-title = subset_selector_bad_value
+const title = subset_selector_bad_value
 
 puzzle default {
 empty .
@@ -15510,7 +15347,7 @@ a
 #[test]
 fn schema_selector_tag_cannot_be_both_value_and_value_set() {
     let source = r#"
-title = subset_selector_ambiguous_tag
+const title = subset_selector_ambiguous_tag
 
 puzzle default {
 empty .
@@ -15545,7 +15382,7 @@ a
 #[test]
 fn schema_selector_direction_symbols_are_relative_to_rule_orientation() {
     let source = r#"
-title = relative_direction_selector
+const title = relative_direction_selector
 
 puzzle default {
 empty .
@@ -15579,7 +15416,7 @@ r
 #[test]
 fn schema_selector_subset_value_sets_are_positional_for_multiple_axes() {
     let source = r#"
-title = subset_selector_two_axes
+const title = subset_selector_two_axes
 
 puzzle default {
 empty .
@@ -15625,7 +15462,7 @@ abcx
 #[test]
 fn schema_selector_subset_value_sets_do_not_skip_axes() {
     let source = r#"
-title = subset_selector_no_axis_skip
+const title = subset_selector_no_axis_skip
 
 puzzle default {
 empty .
@@ -15666,7 +15503,7 @@ a
 #[test]
 fn star_selector_matches_all_schema_variants() {
     let source = r#"
-title = star_selector
+const title = star_selector
 
 puzzle default {
 empty .
@@ -15708,7 +15545,7 @@ r.
 #[test]
 fn layers_declare_new_variant_tag_values() {
     let source = r#"
-title = layer_declares_new_variant_tag
+const title = layer_declares_new_variant_tag
 
 puzzle default {
 empty .
@@ -15744,7 +15581,7 @@ z
 #[test]
 fn layers_reject_undeclared_tag_set_schema_slots() {
     let source = r#"
-title = layer_rejects_undeclared_tag_set
+const title = layer_rejects_undeclared_tag_set
 
 puzzle default {
 empty .
@@ -15771,7 +15608,7 @@ level "start" {
 #[test]
 fn layers_can_use_later_groups_to_declare_variant_values() {
     let source = r#"
-title = later_group_declares_layer_objects
+const title = later_group_declares_layer_objects
 
 puzzle default {
 empty .
@@ -15811,7 +15648,7 @@ z
 #[test]
 fn groups_do_not_declare_variant_values_outside_layers() {
     let source = r#"
-title = group_does_not_declare_variant
+const title = group_does_not_declare_variant
 
 puzzle default {
 empty .
@@ -15851,7 +15688,7 @@ a
 #[test]
 fn bare_star_selector_matches_any_concrete_object() {
     let source = r#"
-title = bare_star_selector
+const title = bare_star_selector
 
 puzzle default {
 empty .
@@ -15893,7 +15730,7 @@ Pb.
 #[test]
 fn typed_tags_declare_angle_and_vec2_variant_domains() {
     let source = r#"
-title = geometric_axes
+const title = geometric_axes
 
 puzzle default {
 empty .
@@ -15929,7 +15766,7 @@ bo
 #[test]
 fn frame3_tags_accept_domain_sugar_and_require_parenthesized_object_slots() {
     let source = r#"
-title = frame3_axis
+const title = frame3_axis
 
 puzzle default {
 empty .
@@ -15962,7 +15799,7 @@ d
 #[test]
 fn frame3_object_slots_reject_unparenthesized_values() {
     let source = r#"
-title = frame3_slot_requires_parentheses
+const title = frame3_slot_requires_parentheses
 
 puzzle default {
 empty .
@@ -16005,7 +15842,7 @@ fn vec2_domain_expansion_accepts_independent_component_domains_internally() {
 #[test]
 fn visual_transforms_bind_typed_slots_and_preserve_source_order() {
     let source = r#"
-title = typed_visual_transforms
+const title = typed_visual_transforms
 
 puzzle default {
 empty .
@@ -16118,7 +15955,7 @@ fn visual_direction_minus_angle_matches_rotate_from_sugar() {
 #[test]
 fn visual_flip_binds_boolean_tag_values() {
     let source = r#"
-title = visual_flip
+const title = visual_flip
 
 puzzle default {
 empty .
@@ -16177,7 +16014,7 @@ p
 #[test]
 fn vec2_domain_accepts_literal_and_component_range_items() {
     let source = r#"
-title = vec2_domain_items
+const title = vec2_domain_items
 
 puzzle default {
 empty .
@@ -16210,7 +16047,7 @@ b
 #[test]
 fn computed_rotation_axis_replacement_uses_captured_axis() {
     let source = r#"
-title = computed_rotation
+const title = computed_rotation
 
 puzzle default {
 empty .
@@ -16249,7 +16086,7 @@ b
 #[test]
 fn computed_translation_axis_accepts_coordinate_and_direction_sum() {
     let source = r#"
-title = computed_translation
+const title = computed_translation
 
 puzzle default {
 empty .
@@ -16292,7 +16129,7 @@ ba
 #[test]
 fn computed_translation_rejects_undeclared_offset_target() {
     let source = r#"
-title = computed_translation_error
+const title = computed_translation_error
 
 puzzle default {
 empty .
@@ -16324,7 +16161,7 @@ b
 #[test]
 fn angle_tag_domains_accept_literal_lists() {
     let source = r#"
-title = typed_tag_range_required
+const title = typed_tag_range_required
 
 puzzle default {
 empty .
@@ -16355,7 +16192,7 @@ p
 #[test]
 fn legacy_geometric_axis_kinds_fail_visibly() {
     let source = r#"
-title = legacy_geometric_type
+const title = legacy_geometric_type
 
 puzzle default {
 empty .
@@ -16385,7 +16222,7 @@ level "start" {
 #[test]
 fn vec2_tag_values_require_parentheses() {
     let source = r#"
-title = vec2_parentheses
+const title = vec2_parentheses
 
 puzzle default {
 empty .
@@ -16417,7 +16254,7 @@ b
 #[test]
 fn underscore_selector_is_a_literal_tag_value() {
     let source = r#"
-title = underscore_selector
+const title = underscore_selector
 
 puzzle default {
 empty .
@@ -16453,7 +16290,7 @@ u
 #[test]
 fn selector_syntax_literals_cannot_be_declared_as_tag_values() {
     let source = r#"
-title = selector_literal_tag_value
+const title = selector_literal_tag_value
 
 puzzle default {
 tags {
@@ -16482,7 +16319,7 @@ level "start" {
 #[test]
 fn bare_schema_family_selector_is_rejected() {
     let source = r#"
-title = bare_schema_selector
+const title = bare_schema_selector
 
 puzzle default {
 empty .
@@ -16519,7 +16356,7 @@ l
 #[test]
 fn star_selector_fills_unconstrained_variant_slots() {
     let source = r#"
-title = star_selector_slots
+const title = star_selector_slots
 
 puzzle default {
 empty .
@@ -16558,7 +16395,7 @@ abx
 #[test]
 fn family_wildcard_selector_matches_tag_across_schema_families() {
     let source = r#"
-title = family_wildcard_selector
+const title = family_wildcard_selector
 
 puzzle default {
 empty .
@@ -16594,7 +16431,7 @@ dsx
 #[test]
 fn family_wildcard_selector_maps_matching_family_on_rhs() {
     let source = r#"
-title = family_wildcard_rewrite
+const title = family_wildcard_rewrite
 
 puzzle default {
 empty .
@@ -16631,7 +16468,7 @@ ds
 #[test]
 fn family_wildcard_rhs_allows_tag_set_and_group_name_overlap() {
     let source = r#"
-title = family_wildcard_group_tag_overlap
+const title = family_wildcard_group_tag_overlap
 
 puzzle default {
 empty .
@@ -16669,7 +16506,7 @@ c
 #[test]
 fn qualified_tag_selector_expands_object_name_atoms_mechanically() {
     let source = r#"
-title = qualified_tag_selector
+const title = qualified_tag_selector
 
 puzzle default {
 empty .
@@ -16707,7 +16544,7 @@ abc
 #[test]
 fn group_rows_reject_bare_family_terms_instead_of_deferring_them() {
     let source = r#"
-title = bare_family_group_rejected
+const title = bare_family_group_rejected
 
 puzzle default {
 empty .
@@ -16745,7 +16582,7 @@ a
 #[test]
 fn qualified_tag_selector_rhs_maps_matching_object_name_atoms() {
     let source = r#"
-title = qualified_tag_selector_rhs
+const title = qualified_tag_selector_rhs
 
 puzzle default {
 empty .
@@ -16786,7 +16623,7 @@ xyz
 #[test]
 fn qualified_tag_selector_occurrence_labels_attach_before_suffix() {
     let source = r#"
-title = qualified_tag_selector_occurrence_labels
+const title = qualified_tag_selector_occurrence_labels
 
 puzzle default {
 empty .
@@ -16824,7 +16661,7 @@ xy
 #[test]
 fn qualified_tag_selector_errors_when_an_atom_cannot_take_the_suffix() {
     let source = r#"
-title = qualified_tag_selector_bad_atom
+const title = qualified_tag_selector_bad_atom
 
 puzzle default {
 empty .
@@ -16860,7 +16697,7 @@ a#
 #[test]
 fn group_selector_suffix_is_not_a_group_feature() {
     let source = r#"
-title = group_suffix_rejected
+const title = group_suffix_rejected
 
 puzzle default {
 empty .
@@ -16898,7 +16735,7 @@ a
 #[test]
 fn object_family_base_can_also_be_a_concrete_object() {
     let source = r#"
-title = family_exact_object
+const title = family_exact_object
 
 puzzle main {
 tags {
@@ -16951,7 +16788,7 @@ RM
 #[test]
 fn bare_schema_family_selector_without_exact_object_is_rejected() {
     let source = r#"
-title = family_base_without_exact_object
+const title = family_base_without_exact_object
 
 puzzle main {
 tags {
@@ -16984,7 +16821,7 @@ r
 #[test]
 fn blank_lines_split_level_into_auto_placed_regions() {
     let source = r#"
-title = region_level
+const title = region_level
 
 puzzle default {
 layers {
@@ -17032,7 +16869,7 @@ P.
 #[test]
 fn levels_block_accepts_unbraced_named_levels_split_by_blank_lines() {
     let source = r#"
-title = unbraced_named_levels
+const title = unbraced_named_levels
 
 puzzle default {
 layers {
@@ -17063,7 +16900,7 @@ B
 #[test]
 fn levels_block_accepts_unnamed_levels_split_by_blank_lines() {
     let source = r#"
-title = unnamed_levels
+const title = unnamed_levels
 
 puzzle default {
 layers {
@@ -17092,7 +16929,7 @@ B
 #[test]
 fn levels_block_accepts_braced_unnamed_multi_region_level() {
     let source = r#"
-title = unnamed_multi_region
+const title = unnamed_multi_region
 
 puzzle default {
 layers {
@@ -17123,7 +16960,7 @@ P.
 #[test]
 fn levels_block_accepts_canonical_level_name_definition() {
     let source = r#"
-title = canonical_level_name
+const title = canonical_level_name
 
 puzzle default {
 layers {
@@ -17151,7 +16988,7 @@ P
 #[test]
 fn levels_block_rejects_legacy_braced_name_without_level_keyword() {
     let source = r#"
-title = legacy_braced_level_name
+const title = legacy_braced_level_name
 
 puzzle default {
 layers {
@@ -17176,7 +17013,7 @@ P
 #[test]
 fn levels_block_rejects_braces_in_ascii_rows() {
     let source = r#"
-title = level_ascii_braces
+const title = level_ascii_braces
 
 puzzle default {
 layers {
@@ -17201,7 +17038,7 @@ P{
 #[test]
 fn level_ascii_layers_overlay_empty_cells_as_transparent() {
     let source = r#"
-title = level_ascii_layers
+const title = level_ascii_layers
 
 puzzle default {
 layers {
@@ -17242,7 +17079,7 @@ fff
 #[test]
 fn level_ascii_layers_reject_different_sizes_in_same_region() {
     let source = r#"
-title = level_ascii_layer_size
+const title = level_ascii_layer_size
 
 puzzle default {
 layers {
@@ -17269,7 +17106,7 @@ P
 #[test]
 fn level_ascii_layers_reject_separator_without_following_layer() {
     let source = r#"
-title = level_ascii_layer_separator
+const title = level_ascii_layer_separator
 
 puzzle default {
 layers {
@@ -17295,7 +17132,7 @@ P
 #[test]
 fn level_ascii_layers_preserve_blank_line_region_split() {
     let source = r#"
-title = level_ascii_layer_regions
+const title = level_ascii_layer_regions
 
 puzzle default {
 layers {
@@ -17346,7 +17183,7 @@ ff
 #[test]
 fn level_ascii_layers_prefer_upper_object_on_same_core_layer() {
     let source = r#"
-title = level_ascii_layer_priority
+const title = level_ascii_layer_priority
 
 puzzle default {
 layers {
@@ -17378,7 +17215,7 @@ B
 #[test]
 fn puzzle_view_parses_flickscreen_viewport_controls() {
     let source = r#"
-title = frame_view
+const title = frame_view
 
 puzzle default {
 layers {
@@ -17417,7 +17254,7 @@ P..
 #[test]
 fn puzzle_view_parses_full_flickscreen() {
     let full_source = r#"
-title = full_frame
+const title = full_frame
 
 puzzle default {
 layers 1
@@ -17441,7 +17278,7 @@ level "start" {
 #[test]
 fn puzzle_view_rejects_removed_frame_size_syntax() {
     let source = r#"
-title = region_frame
+const title = region_frame
 
 puzzle default {
 layers 1
@@ -17465,7 +17302,7 @@ level "start" {
 #[test]
 fn puzzle_view_rejects_removed_frame_focus_syntax() {
     let source = r#"
-title = region_frame
+const title = region_frame
 
 puzzle default {
 layers 1
@@ -17489,7 +17326,7 @@ level "start" {
 #[test]
 fn puzzle_view_parses_zoomscreen_as_centered_viewport() {
     let source = r#"
-title = zoom_view
+const title = zoom_view
 
 puzzle default {
 layers 1
@@ -17520,7 +17357,7 @@ level "start" {
 #[test]
 fn puzzle_render_parses_grid_type_all_cells() {
     let source = r#"
-title = grid_render
+const title = grid_render
 
 puzzle default {
 layers 1
@@ -17550,7 +17387,7 @@ level "start" {
 #[test]
 fn puzzle_render_parses_grid_type_occupied_cells() {
     let source = r#"
-title = grid_render
+const title = grid_render
 
 puzzle default {
 layers 1
@@ -17580,7 +17417,7 @@ level "start" {
 #[test]
 fn puzzle_render_rejects_removed_cell_size() {
     let source = r#"
-title = cell_size_render
+const title = cell_size_render
 
 puzzle default {
 layers 1
@@ -17607,7 +17444,7 @@ level "start" {
 #[test]
 fn puzzle_render_rejects_old_boolean_grid_assignments() {
     let source = r#"
-title = grid_render
+const title = grid_render
 
 puzzle default {
 layers 1
@@ -17635,7 +17472,7 @@ level "start" {
 #[test]
 fn puzzle_render_rejects_old_bare_grid_type_rows() {
     let source = r#"
-title = grid_render
+const title = grid_render
 
 puzzle default {
 layers 1
@@ -17663,7 +17500,7 @@ level "start" {
 #[test]
 fn repeated_group_selector_expands_independently_and_preserves_occurrence_order() {
     let source = r#"
-title = repeated_group_selector
+const title = repeated_group_selector
 
 puzzle default {
 layers {
@@ -17701,7 +17538,7 @@ BC.
 #[test]
 fn selector_occurrence_labels_can_swap_group_members() {
     let source = r#"
-title = selector_occurrence_labels
+const title = selector_occurrence_labels
 
 puzzle swap {
 layers {
@@ -17737,7 +17574,7 @@ BC
 #[test]
 fn selector_occurrence_labels_can_duplicate_group_members_on_rhs() {
     let source = r#"
-title = duplicate_selector_occurrence_label_rhs
+const title = duplicate_selector_occurrence_label_rhs
 
 puzzle copy {
 layers {
@@ -17774,7 +17611,7 @@ BC
 #[test]
 fn single_group_occurrence_duplicates_to_multiple_rhs_cells() {
     let source = r#"
-title = duplicate_single_group_occurrence_rhs
+const title = duplicate_single_group_occurrence_rhs
 
 puzzle copy {
 layers {
@@ -17811,7 +17648,7 @@ B.
 #[test]
 fn repeated_group_occurrences_do_not_allow_extra_unlabeled_rhs_copy() {
     let source = r#"
-title = reject_ambiguous_extra_group_rhs
+const title = reject_ambiguous_extra_group_rhs
 
 puzzle copy {
 layers {
@@ -17842,7 +17679,7 @@ BC.
 #[test]
 fn selector_occurrence_labels_must_be_unique_in_before_pattern() {
     let source = r#"
-title = duplicate_selector_occurrence_label
+const title = duplicate_selector_occurrence_label
 
 puzzle swap {
 layers {
@@ -17872,7 +17709,7 @@ BC
 #[test]
 fn object_occurrence_labels_swap_occurrence_mark() {
     let source = r#"
-title = object_occurrence_label_mark_swap
+const title = object_occurrence_label_mark_swap
 
 puzzle swap {
 layers {
@@ -17912,7 +17749,7 @@ BB
 #[test]
 fn repeated_schema_selector_expands_independently_and_preserves_occurrence_order() {
     let source = r#"
-title = repeated_schema_selector
+const title = repeated_schema_selector
 
 puzzle default {
 empty .
@@ -17951,7 +17788,7 @@ rb.
 #[test]
 fn set_prefix_supports_integer_assignment_ops() {
     let source = r#"
-title = set_prefix_math_effects
+const title = set_prefix_math_effects
 
 puzzle default {
 var count = 2
@@ -17989,7 +17826,7 @@ once [ Button ] -> [ Button ] count = 9
 #[test]
 fn none_query_is_first_class_boolean_guard() {
     let source = r#"
-title = none_condition
+const title = none_condition
 
 puzzle default {
 layers {
@@ -18028,7 +17865,7 @@ BD
 #[test]
 fn win_conditions_accept_exists_and_none_as_canonical_query_functions() {
     let source = r#"
-title = canonical_condition_goal
+const title = canonical_condition_goal
 
 puzzle default {
 layers {
@@ -18063,7 +17900,7 @@ level "start"
 #[test]
 fn count_matches_is_no_longer_accepted() {
     let source = r#"
-title = old_condition_name
+const title = old_condition_name
 
 puzzle default {
 layers {
@@ -18094,7 +17931,7 @@ X
 #[test]
 fn at_prefixed_routine_is_part_of_the_normal_game_program() {
     let source = r#"
-title = display_split
+const title = display_split
 
 puzzle default {
 layers {
@@ -18155,7 +17992,7 @@ P.
 #[test]
 fn at_prefixed_layer_objects_use_regular_layers() {
     let source = r#"
-title = unified_objects
+const title = unified_objects
 
 puzzle default {
 
@@ -18204,7 +18041,7 @@ fn at_prefixed_object_is_a_normal_object() {
 
 fn at_prefixed_object_source() -> &'static str {
     r#"
-title = at_prefixed_object
+const title = at_prefixed_object
 
 puzzle default {
 layers {
@@ -18234,7 +18071,7 @@ level "start" {
 #[test]
 fn main_program_can_call_at_prefixed_routine() {
     let source = r#"
-title = display_call_site_guard
+const title = display_call_site_guard
 
 puzzle default {
 layers {
@@ -18282,7 +18119,7 @@ P
 #[test]
 fn at_prefixed_routine_can_write_any_normal_object() {
     let source = r#"
-title = display_write_guard
+const title = display_write_guard
 
 puzzle default {
 layers {
@@ -18320,7 +18157,7 @@ P
 #[test]
 fn at_prefixed_object_match_can_change_other_objects() {
     let source = r#"
-title = main_display_read_guard
+const title = main_display_read_guard
 
 puzzle default {
 layers {
@@ -18354,7 +18191,7 @@ P
 #[test]
 fn display_match_can_emit_sfx_without_rhs_block() {
     let source = r#"
-title = display_match_sfx
+const title = display_match_sfx
 
 puzzle default {
 layers {
@@ -18404,7 +18241,7 @@ P
 #[test]
 fn at_prefixed_object_match_can_emit_gameplay_effect_without_rhs_block() {
     let source = r#"
-title = display_match_gameplay_effect_guard
+const title = display_match_gameplay_effect_guard
 
 puzzle default {
 layers {
@@ -18437,7 +18274,7 @@ P
 #[test]
 fn display_match_can_write_display_group_movement_mark() {
     let source = r#"
-title = display_group_movement_mark
+const title = display_group_movement_mark
 
 puzzle default {
 tags {
@@ -18472,7 +18309,7 @@ A
 #[test]
 fn normal_routine_can_write_at_prefixed_object() {
     let source = r#"
-title = bare_display_rule
+const title = bare_display_rule
 
 puzzle default {
 layers {
@@ -18520,7 +18357,7 @@ P
 #[test]
 fn normal_rule_can_write_at_prefixed_object() {
     let source = r#"
-title = composite_display_effect
+const title = composite_display_effect
 
 puzzle default {
 layers {
@@ -18573,7 +18410,7 @@ P.
 #[test]
 fn at_prefixed_routine_accepts_composite_normal_rule() {
     let source = r#"
-title = display_routine_composite_guard
+const title = display_routine_composite_guard
 
 puzzle default {
 layers {
@@ -18611,7 +18448,7 @@ P.
 #[test]
 fn main_block_can_read_at_prefixed_objects_through_query_defs() {
     let source = r#"
-title = main_display_condition_guard
+const title = main_display_condition_guard
 
 puzzle default {
 layers {
@@ -18651,7 +18488,7 @@ fn unsupported_object_block_aliases_are_rejected() {
     for header in ["main_objects", "main objects", "objects"] {
         let source = format!(
             r#"
-title = alias_rejection
+const title = alias_rejection
 
 puzzle default {{
 {header} {{
@@ -18679,7 +18516,7 @@ level "start"
 #[test]
 fn separate_slot_rows_keep_at_prefixed_objects_in_their_declared_slot() {
     let source = r#"
-title = mixed_layers
+const title = mixed_layers
 
 puzzle default {
 layers {
@@ -18738,7 +18575,7 @@ P
 #[test]
 fn layer_can_mix_prefixed_and_unprefixed_objects() {
     let source = r#"
-title = mixed_layer_rejected
+const title = mixed_layer_rejected
 
 puzzle default {
 layers {
@@ -18767,7 +18604,7 @@ P
 #[test]
 fn groups_can_use_at_prefixed_names() {
     let source = r#"
-title = at_prefixed_group
+const title = at_prefixed_group
 
 puzzle default {
 layers {
@@ -18802,7 +18639,7 @@ P
 #[test]
 fn at_prefixed_layer_name_can_contain_any_objects() {
     let source = r#"
-title = at_prefixed_slot
+const title = at_prefixed_slot
 
 puzzle default {
 layers {
@@ -18830,7 +18667,7 @@ P
 #[test]
 fn unprefixed_layer_name_can_contain_at_prefixed_objects() {
     let source = r#"
-title = main_layer_rejected
+const title = main_layer_rejected
 
 puzzle default {
 layers {
@@ -18859,7 +18696,7 @@ P
 #[test]
 fn at_prefixed_group_name_can_contain_any_objects() {
     let source = r#"
-title = display_group_rejected
+const title = display_group_rejected
 
 puzzle default {
 layers {
@@ -18893,7 +18730,7 @@ P
 #[test]
 fn unprefixed_group_name_can_contain_at_prefixed_objects() {
     let source = r#"
-title = main_group_rejected
+const title = main_group_rejected
 
 puzzle default {
 layers {
@@ -18927,7 +18764,7 @@ P
 #[test]
 fn each_layer_row_expands_selector_alternatives_to_ordered_layers() {
     let source = r#"
-title = each_layers
+const title = each_layers
 
 puzzle default {
 layers {
@@ -19059,7 +18896,7 @@ levels default of board {
   }
 }
 "#,
-        "default_3d_keys.puzzle3",
+        "default_3d_keys.puzzle",
     )
     .unwrap();
     let Some(LoadedDocumentModel::Puzzle3d { game, .. }) = document.single_model() else {
@@ -19090,18 +18927,18 @@ levels default of board {
 }
 
 #[test]
-fn document_without_title_uses_neutral_default() {
-    assert_eq!(super::DocumentShell::default().title, "Untitled puzzle");
+fn document_without_top_level_constants_has_no_session_values() {
+    assert!(super::DocumentShell::default().variables.is_empty());
 }
 
 #[test]
 fn parse_game_returns_document_for_2d_model() {
     let document = super::parse_game(
         r#"
-title = "Two Dee"
-subtitle = "Flat puzzle"
-author = Tester
-homepage = "https://example.com/2d"
+const title = "Two Dee"
+const subtitle = "Flat puzzle"
+const author = Tester
+const homepage = "https://example.com/2d"
 
 puzzle default {
 layers {
@@ -19127,10 +18964,14 @@ P
     let Some(LoadedDocumentModel::Puzzle2d { name, game }) = document.single_model() else {
         panic!("expected one 2D puzzle model");
     };
-    assert_eq!(document.title, "Two Dee");
-    assert_eq!(document.subtitle.as_deref(), Some("Flat puzzle"));
-    assert_eq!(document.author.as_deref(), Some("Tester"));
-    assert_eq!(document.homepage.as_deref(), Some("https://example.com/2d"));
+    assert_eq!(
+        document
+            .variables
+            .iter()
+            .map(|variable| variable.name.as_str())
+            .collect::<Vec<_>>(),
+        ["title", "subtitle", "author", "homepage"]
+    );
     assert!(
         matches!(document.scenes.as_slice(), [scene] if scene.name == "default")
             && matches!(
@@ -19155,7 +18996,7 @@ P
 #[test]
 fn parse_game2d_document_owns_scene_blocks() {
     let source = r#"
-title = "Two Dee"
+const title = "Two Dee"
 
 sounds {
   sfx push { seed = push01; type = hit }
@@ -19210,7 +19051,7 @@ scene title {
 fn explicit_model_named_scene_overrides_implicit_scene_sugar() {
     let loaded = super::parse_game2d(
         r#"
-title = explicit_scene_override
+const title = explicit_scene_override
 
 puzzle sokoban {
 layers {
@@ -19308,7 +19149,7 @@ P
 fn puzzle_model_layout_block_lowers_to_default_scene() {
     let document = super::parse_game(
         r#"
-title = Inline Scene
+const title = "Inline Scene"
 
 puzzle sokoban {
 layers {
@@ -19361,7 +19202,7 @@ P
 fn puzzle_model_layout_resolves_nested_bare_puzzle() {
     let document = super::parse_game(
         r#"
-title = Nested Inline Scene
+const title = "Nested Inline Scene"
 
 puzzle sokoban {
 layers {
@@ -19410,10 +19251,10 @@ P
 fn parse_game_returns_document_for_3d_model() {
     let document = super::parse_game_for_path(
         r#"
-title = "Three Dee"
-subtitle = "Cubic puzzle"
-author = Tester
-homepage = "https://example.com/3d"
+const title = "Three Dee"
+const subtitle = "Cubic puzzle"
+const author = Tester
+const homepage = "https://example.com/3d"
 default_wait_time = 100ms
 sounds {
   sfx push { seed = push01; type = jump }
@@ -19477,17 +19318,21 @@ scene level_select {
   }
 }
 "#,
-        "test.puzzle3",
+        "test.puzzle",
     )
     .unwrap();
 
     let Some(LoadedDocumentModel::Puzzle3d { name, game, .. }) = document.single_model() else {
         panic!("expected one 3D puzzle model");
     };
-    assert_eq!(document.title, "Three Dee");
-    assert_eq!(document.subtitle.as_deref(), Some("Cubic puzzle"));
-    assert_eq!(document.author.as_deref(), Some("Tester"));
-    assert_eq!(document.homepage.as_deref(), Some("https://example.com/3d"));
+    assert_eq!(
+        document
+            .variables
+            .iter()
+            .map(|variable| variable.name.as_str())
+            .collect::<Vec<_>>(),
+        ["title", "subtitle", "author", "homepage"]
+    );
     assert_eq!(document.default_wait_ms, 100);
     assert_eq!(document.sounds.sfx[0].name, "push");
     assert_eq!(document.theme.name.as_deref(), Some("clean"));
@@ -19509,7 +19354,7 @@ scene level_select {
     assert_eq!(game.game.rules().len(), 9);
     assert_eq!(game.levels.len(), 1);
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
-    assert!(fixture_json.contains("\"title\": \"Three Dee\""));
+    assert!(!fixture_json.contains("\"title\":"));
     assert!(fixture_json.contains("\"theme\": {\"name\":\"clean\""));
     assert!(fixture_json.contains("\"variables\":[{\"name\":\"accent\",\"value\":\"#ff0000\"}]"));
     assert!(fixture_json.contains("\"focus\": \"push3\""));
@@ -19526,7 +19371,7 @@ scene level_select {
 fn parse_game_accepts_3d_input_rule_without_orientation_set() {
     let document = super::parse_game_for_path(
         r#"
-title = "Bare 3D Input"
+const title = "Bare 3D Input"
 
 puzzle push3 {
   dimension = 3
@@ -19550,7 +19395,7 @@ levels demo of push3 {
   }
 }
 "#,
-        "test.puzzle3",
+        "test.puzzle",
     )
     .unwrap();
 
@@ -19565,7 +19410,7 @@ levels demo of push3 {
 fn theme_preset_statement_before_puzzle3_does_not_capture_model_block() {
     let document = super::parse_game_for_path(
         r#"
-title = "Themed 3D"
+const title = "Themed 3D"
 theme = "puzzlescript"
 
 puzzle push3 {
@@ -19586,7 +19431,7 @@ levels demo of push3 {
   }
 }
 "#,
-        "test.puzzle3",
+        "test.puzzle",
     )
     .unwrap();
 
@@ -19601,7 +19446,7 @@ levels demo of push3 {
 #[test]
 fn canonical_document_associates_resources_by_puzzle_owner() {
     let source = r#"
-title = "Mixed Runtime"
+const title = "Mixed Runtime"
 theme = "puzzlescript"
 
 puzzle flat {
@@ -19663,7 +19508,7 @@ puzzle cube_board = cube
 fn puzzle3_model_layout_block_lowers_to_default_scene() {
     let document = super::parse_game_for_path(
         r#"
-title = Inline Scene 3D
+const title = "Inline Scene 3D"
 
 puzzle push3 {
 dimension = 3
@@ -19687,7 +19532,7 @@ P
 }
 }
 "#,
-        "test.puzzle3",
+        "test.puzzle",
     )
     .unwrap();
 
@@ -19721,8 +19566,8 @@ P
 #[test]
 fn spec_3d_exports_playable_puzzle_scene() {
     let document = super::parse_game_for_path(
-        include_str!("../tests/fixtures/spec_3d_full.puzzle3"),
-        "spec_3d_full.puzzle3",
+        include_str!("../tests/fixtures/spec_3d_full.puzzle"),
+        "spec_3d_full.puzzle",
     )
     .unwrap();
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
@@ -19744,8 +19589,8 @@ fn spec_3d_exports_playable_puzzle_scene() {
 #[test]
 fn puzzle3_camera_projection_is_typed_and_exported() {
     let document = super::parse_game_for_path(
-        include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle3"),
-        "spec_3d_preview_contract.puzzle3",
+        include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle"),
+        "spec_3d_preview_contract.puzzle",
     )
     .unwrap();
     let LoadedDocumentModel::Puzzle3d { game, .. } = &document.models[0] else {
@@ -19759,10 +19604,10 @@ fn puzzle3_camera_projection_is_typed_and_exported() {
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
     assert!(fixture_json.contains("\"projection\": \"orthographic\""));
 
-    let default_source = include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle3")
+    let default_source = include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle")
         .replace("    orthographic = true\n", "");
     let default_document =
-        super::parse_game_for_path(&default_source, "default_projection.puzzle3").unwrap();
+        super::parse_game_for_path(&default_source, "default_projection.puzzle").unwrap();
     let LoadedDocumentModel::Puzzle3d {
         game: default_game, ..
     } = &default_document.models[0]
@@ -19778,10 +19623,10 @@ fn puzzle3_camera_projection_is_typed_and_exported() {
     assert!(default_fixture_json.contains("\"projection\": \"perspective\""));
 
     let explicit_perspective_source =
-        include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle3")
+        include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle")
             .replace("orthographic = true", "orthographic = false");
     let explicit_perspective_document =
-        super::parse_game_for_path(&explicit_perspective_source, "explicit_perspective.puzzle3")
+        super::parse_game_for_path(&explicit_perspective_source, "explicit_perspective.puzzle")
             .unwrap();
     let LoadedDocumentModel::Puzzle3d {
         game: explicit_perspective_game,
@@ -19795,9 +19640,9 @@ fn puzzle3_camera_projection_is_typed_and_exported() {
         CameraProjection3::Perspective
     );
 
-    let invalid = include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle3")
+    let invalid = include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle")
         .replace("orthographic = true", "orthographic = maybe");
-    let error = super::parse_game_for_path(&invalid, "invalid_projection.puzzle3")
+    let error = super::parse_game_for_path(&invalid, "invalid_projection.puzzle")
         .expect_err("non-boolean orthographic setting must be rejected");
     assert!(
         error
@@ -19808,7 +19653,7 @@ fn puzzle3_camera_projection_is_typed_and_exported() {
 
 #[test]
 fn puzzle3_lifecycle_diagnostic_uses_shared_source_line_mapping() {
-    let source = r#"title = = "Line Probe"
+    let source = r#"const title = "Line Probe"
 
 puzzle lifecycle {
 dimension = 3
@@ -19821,7 +19666,7 @@ messag "END"
 }
 }
 "#;
-    let report = super::parse_game_for_path(source, "test.puzzle3").unwrap_err();
+    let report = super::parse_game_for_path(source, "test.puzzle").unwrap_err();
     let diagnostic = report
         .diagnostics()
         .iter()
@@ -19853,7 +19698,7 @@ messag "END"
 fn scene_viewports_resolve_projection_from_their_world_dimension() {
     let flat_document = super::parse_game(
         r#"
-title = Implicit Flat Slot
+const title = "Implicit Flat Slot"
 
 puzzle flat {
 layers {
@@ -19894,7 +19739,7 @@ flat
 
     let cube_document = super::parse_game_for_path(
         r#"
-title = Implicit Cube Slot
+const title = "Implicit Cube Slot"
 
 puzzle cube {
 dimension = 3
@@ -19920,7 +19765,7 @@ cube
 }
 }
 "#,
-        "test.puzzle3",
+        "test.puzzle",
     )
     .unwrap();
 
@@ -19952,7 +19797,7 @@ cube
 fn puzzle3_fixture_serializes_shared_scene_effects() {
     let document = super::parse_game_for_path(
         r#"
-title = Shared Effects 3D
+const title = "Shared Effects 3D"
 
 puzzle demo {
 dimension = 3
@@ -19980,7 +19825,7 @@ P
 }
 }
 "#,
-        "test.puzzle3",
+        "test.puzzle",
     )
     .unwrap();
     let fixture_json = crate::export_loaded_document_visual_fixture_json(&document).unwrap();
@@ -20000,7 +19845,7 @@ P
 fn parse_game_rejects_old_model_prefix_for_2d_puzzles() {
     let error = super::parse_game(
         r#"
-title = Old Model Prefix
+const title = "Old Model Prefix"
 
 model puzzle default {
 layers {
@@ -20050,7 +19895,7 @@ model puzzle3 push3 {
 fn parse_game_for_path_rejects_removed_puzzle3_keyword() {
     let error = super::parse_game_for_path(
         r#"
-title = Mixed Game
+const title = "Mixed Game"
 
 puzzle flat {
 layers {
@@ -20103,7 +19948,7 @@ scene mixed_play {
   }
 }
 "#,
-        "mixed.puzzle3",
+        "mixed.puzzle",
     )
     .unwrap_err()
     .to_string();
@@ -20115,7 +19960,7 @@ scene mixed_play {
 fn removed_command_directive_is_not_accepted_as_input_compatibility() {
     let error = super::parse_game2d(
         r#"
-title = removed_command_directive
+const title = removed_command_directive
 puzzle board {
 command jump
 rules {
@@ -20133,7 +19978,7 @@ rules {
 fn music_effect_in_puzzle_statement_lowers_to_rule_effect() {
     let loaded = super::parse_game2d(
         r#"
-title = music_effect_in_puzzle_statement
+const title = music_effect_in_puzzle_statement
 
 puzzle main {
 layers {
@@ -20170,7 +20015,7 @@ P
 fn parse_game_reports_sibling_unknown_routine_calls() {
     let report = super::parse_game2d(
         r#"
-title = "Multi Error Probe"
+const title = "Multi Error Probe"
 
 puzzle main {
 layers {
@@ -20225,7 +20070,7 @@ level "first"
 
 #[test]
 fn diagnostic_source_location_resolves_split_structural_line() {
-    let source = r#"title = probe
+    let source = r#"const title = probe
 
 puzzle main {
 layers {
@@ -20270,7 +20115,7 @@ level "first"
 
 #[test]
 fn split_rewrite_selector_diagnostic_keeps_source_line_and_dedupes_calls() {
-    let source = r#"title = split_selector_diagnostic
+    let source = r#"const title = split_selector_diagnostic
 
 puzzle main {
 layers {
@@ -20327,7 +20172,7 @@ B
 
 #[test]
 fn diagnostic_source_location_uses_statement_line_for_duplicate_lines() {
-    let source = r#"title = probe
+    let source = r#"const title = probe
 
 puzzle main {
 layers {
@@ -20368,7 +20213,7 @@ level "first"
 
 #[test]
 fn statement_parse_diagnostic_carries_source_line_number() {
-    let source = r#"title = probe
+    let source = r#"const title = probe
 
 puzzle main {
 layers {
@@ -20414,7 +20259,7 @@ level "first"
 
 #[test]
 fn parser_boundary_resolves_source_line_only_diagnostic_line_number() {
-    let source = r#"title = probe
+    let source = r#"const title = probe
 
 unknown_top_level
 

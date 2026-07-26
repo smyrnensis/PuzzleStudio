@@ -1,6 +1,6 @@
-title = "TENETEN"
-author = "smyrnensis"
-homepage = "smyrnensis.itch.io"
+const title = "TENETEN"
+const author = "smyrnensis"
+const homepage = "smyrnensis.itch.io"
 
 theme {
 preset = "puzzlescript"
@@ -188,36 +188,30 @@ shape_You_F {
 }
 }
 
-visual {
-selector = Background
+visual Background {
 colors = #8fcf6f
 }
 
-visual {
-selector = Background2
+visual Background2 {
 colors = #0000000a
 }
 
-visual {
-selector = You:F
+visual You:F {
 colors = #fff #000 #00000015
 shape = shape_You_F
 }
 
-visual {
-selector = You:B
+visual You:B {
 colors = #000 #fff #00000015
 shape = shape_You_F
 }
 
-visual {
-selector = TargetYou
+visual TargetYou {
 colors = #0003 #0003 #0000
 shape = shape_You_F
 }
 
-visual {
-selector = Crate
+visual Crate {
 colors = #b85 #a74 #00000015
 ..............
 ..............
@@ -235,8 +229,7 @@ colors = #b85 #a74 #00000015
 ..2222222222..
 }
 
-visual {
-selector = CrateW
+visual CrateW {
 colors = #88c
 ..............
 ..............
@@ -254,8 +247,7 @@ colors = #88c
 ..............
 }
 
-visual {
-selector = TargetCrate
+visual TargetCrate {
 colors = #0003
 ..............
 ..............
@@ -273,20 +265,17 @@ colors = #0003
 ..............
 }
 
-visual {
-selector = Ball
+visual Ball {
 colors = #83d #a7f #00000015
 shape = shape_Ball
 }
 
-visual {
-selector = BallW
+visual BallW {
 colors = #43d #65d #0000
 shape = shape_Ball
 }
 
-visual {
-selector = TargetBall
+visual TargetBall {
 colors = #0003
 ..............
 ..............
@@ -304,8 +293,7 @@ colors = #0003
 ..............
 }
 
-visual {
-selector = Fly
+visual Fly {
 colors = #fd0 #220 #6cf #00000015
 ..............
 ..............
@@ -323,8 +311,7 @@ colors = #fd0 #220 #6cf #00000015
 ..............
 }
 
-visual {
-selector = TargetFly
+visual TargetFly {
 colors = #0003
 ..............
 ..............
@@ -342,8 +329,7 @@ colors = #0003
 ..............
 }
 
-visual {
-selector = Headlong
+visual Headlong {
 colors = #f82 #201a00 #00000015
 ..............
 ..............
@@ -361,8 +347,7 @@ colors = #f82 #201a00 #00000015
 ....22..22....
 }
 
-visual {
-selector = TargetHeadlong
+visual TargetHeadlong {
 colors = #0003
 ..............
 ..............
@@ -380,8 +365,7 @@ colors = #0003
 ..............
 }
 
-visual {
-selector = NoGo
+visual NoGo {
 colors = #b44
 ..............
 ..............
@@ -399,8 +383,7 @@ colors = #b44
 ..............
 }
 
-visual {
-selector = Pond
+visual Pond {
 colors = #3373d3 #3575d5
 00000000000000
 11111111111111
@@ -418,8 +401,7 @@ colors = #3373d3 #3575d5
 11111111111111
 }
 
-visual {
-selector = Crack
+visual Crack {
 colors = #037
 ..............
 ..............
@@ -437,8 +419,7 @@ colors = #037
 ..............
 }
 
-visual {
-selector = Puddle
+visual Puddle {
 colors = #3373d3 #3575d5 #8fcf6f
 22000000000022
 22111111111122
@@ -456,13 +437,11 @@ colors = #3373d3 #3575d5 #8fcf6f
 22111111111122
 }
 
-visual {
-selector = CrackFlag
+visual CrackFlag {
 colors = transparent
 }
 
-visual {
-selector = Hole
+visual Hole {
 colors = #332a11 #3a2f1a
 00000000000000
 01111111111110
@@ -480,8 +459,7 @@ colors = #332a11 #3a2f1a
 00000000000000
 }
 
-visual {
-selector = Button
+visual Button {
 colors = #777 #b44 #6a6a6a
 ..............
 ..............
@@ -499,8 +477,7 @@ colors = #777 #b44 #6a6a6a
 ..............
 }
 
-visual {
-selector = GateC
+visual GateC {
 colors = #b44 #00000015
 ..............
 ..............
@@ -518,8 +495,7 @@ colors = #b44 #00000015
 ......11......
 }
 
-visual {
-selector = GateO
+visual GateO {
 colors = #b443
 ..............
 ..............
@@ -537,8 +513,7 @@ colors = #b443
 ..............
 }
 
-visual {
-selector = Wall
+visual Wall {
 colors = #224433 #234534
 00000000010000
 01101000111011
@@ -556,22 +531,19 @@ colors = #224433 #234534
 00000000100000
 }
 
-visual {
-selector = Boundary:directions
+visual Boundary:directions {
 colors = #447755 #477a58
 rotate directions from up
 shape = shape_Boundary
 }
 
-visual {
-selector = Corner:directions
+visual Corner:directions {
 colors = #475
 rotate directions from up
 shape = shape_Corner
 }
 
-visual {
-selector = WallShadow
+visual WallShadow {
 colors = #00000015
 00000000000000
 00000000000000
@@ -589,13 +561,11 @@ colors = #00000015
 ..............
 }
 
-visual {
-selector = Count:0
+visual Count:0 {
 colors = transparent
 }
 
-visual {
-selector = Count:1
+visual Count:1 {
 colors = #000 #fff #888
 ..............
 ..............
@@ -613,8 +583,7 @@ colors = #000 #fff #888
 ..............
 }
 
-visual {
-selector = Count:2
+visual Count:2 {
 colors = #000 #fff #888
 ..............
 ..............
@@ -632,8 +601,7 @@ colors = #000 #fff #888
 ..............
 }
 
-visual {
-selector = Count:3
+visual Count:3 {
 colors = #000 #fff #888
 ..............
 ..............
@@ -651,8 +619,7 @@ colors = #000 #fff #888
 ..............
 }
 
-visual {
-selector = Count:Inf
+visual Count:Inf {
 colors = #000 #fff
 ..............
 ..............
@@ -670,32 +637,27 @@ colors = #000 #fff
 ..............
 }
 
-visual {
-selector = Ink:F
+visual Ink:F {
 colors = #fff
 shape = shape_Ink_F
 }
 
-visual {
-selector = Ink:B
+visual Ink:B {
 colors = #000
 shape = shape_Ink_F
 }
 
-visual {
-selector = TimeMachine:F
+visual TimeMachine:F {
 colors = #fff #888 #00000015
 shape = shape_TimeMachine_F
 }
 
-visual {
-selector = TimeMachine:B
+visual TimeMachine:B {
 colors = #000 #888 #00000015
 shape = shape_TimeMachine_F
 }
 
-visual {
-selector = Star
+visual Star {
 colors = #fff3 #000
 ..............
 ..............
@@ -713,68 +675,55 @@ colors = #fff3 #000
 ..............
 }
 
-visual {
-selector = Satisfied
+visual Satisfied {
 colors = #ff04
 }
 
-visual {
-selector = Checked
+visual Checked {
 colors = transparent
 }
 
-visual {
-selector = Computer
+visual Computer {
 colors = transparent
 }
 
-visual {
-selector = Start
+visual Start {
 colors = transparent
 }
 
-visual {
-selector = NotEdge:directions
+visual NotEdge:directions {
 colors = transparent
 }
 
-visual {
-selector = Marker:directions
+visual Marker:directions {
 colors = transparent
 }
 
-visual {
-selector = StopFlag
+visual StopFlag {
 colors = transparent
 }
 
-visual {
-selector = CancelTurn
+visual CancelTurn {
 colors = transparent
 }
 
-visual {
-selector = OpenFlag
+visual OpenFlag {
 colors = transparent
 }
 
-visual {
-selector = OnlyOneButton
+visual OnlyOneButton {
 colors = transparent
 }
 
-visual {
-selector = Time:D
+visual Time:D {
 colors = transparent
 }
 
-visual {
-selector = Moment:directions
+visual Moment:directions {
 colors = transparent
 }
 
-visual {
-selector = FallFlag
+visual FallFlag {
 colors = transparent
 }
 }

@@ -7,51 +7,116 @@ fn join_visuals_js(base: &str, generated: &str) -> String {
     }
 }
 
+fn push_puzzle_screen(out: &mut String, loaded: &LoadedGame) {
+    out.push_str("\"screen\":{");
+    out.push_str("\"viewportSize\":");
+    match &loaded.screen.viewport_size {
+        puzzle_lang::ViewportSizeDef::Full => {
+            out.push('{');
+            push_json_pair(out, "kind", "full");
+            out.push('}');
+        }
+        puzzle_lang::ViewportSizeDef::Size { width, height } => {
+            out.push('{');
+            push_json_pair(out, "kind", "size");
+            out.push(',');
+            push_json_number(out, "width", *width as u64);
+            out.push(',');
+            push_json_number(out, "height", *height as u64);
+            out.push('}');
+        }
+    }
+    out.push(',');
+    push_json_pair(out, "viewportFocus", &loaded.screen.viewport_focus);
+    out.push_str(",\"viewportFocusObjects\":[");
+    let focus = &loaded.screen.viewport_focus;
+    let mut objects = loaded
+        .object_groups
+        .get(focus)
+        .cloned()
+        .or_else(|| {
+            loaded.object_groups.iter().find_map(|(name, objects)| {
+                name.eq_ignore_ascii_case(focus).then(|| objects.clone())
+            })
+        })
+        .unwrap_or_else(|| {
+            loaded
+                .object_labels
+                .iter()
+                .filter_map(|(object, name)| name.eq_ignore_ascii_case(focus).then_some(*object))
+                .collect()
+        });
+    objects.sort_by_key(|object| object.0);
+    objects.dedup();
+    for (index, object) in objects.iter().enumerate() {
+        if index > 0 { out.push(','); }
+        out.push_str(&object.0.to_string());
+    }
+    out.push_str("],");
+    let mode = match loaded.screen.viewport_mode {
+        puzzle_lang::ViewportModeDef::Paged => "paged",
+        puzzle_lang::ViewportModeDef::Centered => "centered",
+    };
+    push_json_pair(out, "viewportMode", mode);
+    out.push('}');
+}
+
+fn push_scene_regions(out: &mut String, level: Option<&Level>) {
+    out.push_str("\"regions\":[");
+    if let Some(level) = level {
+        for (index, region) in level.regions.iter().enumerate() {
+            if index > 0 {
+                out.push(',');
+            }
+            out.push('{');
+            push_json_number(out, "index", region.index as u64);
+            out.push(',');
+            push_json_number(out, "x", region.x as u64);
+            out.push(',');
+            push_json_number(out, "y", region.y as u64);
+            out.push(',');
+            push_json_number(out, "width", region.width as u64);
+            out.push(',');
+            push_json_number(out, "height", region.height as u64);
+            out.push('}');
+        }
+    }
+    out.push(']');
+}
+
+fn visual_name(object_name: &str) -> String {
+    let mut visual = String::new();
+    for ch in object_name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            visual.push(ch);
+        } else if !visual.ends_with('-') {
+            visual.push('-');
+        }
+    }
+    let visual = visual.trim_matches('-').to_string();
+    if visual.is_empty() {
+        "unknown".to_string()
+    } else {
+        visual
+    }
+}
+
 fn push_editor_preview_data(out: &mut String, state: &ServerState) {
     out.push('{');
-    push_json_pair(out, "title", &state.loaded.title);
-    out.push(',');
-    out.push_str("\"subtitle\":");
-    if let Some(subtitle) = &state.loaded.subtitle {
-        push_json_string(out, subtitle);
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    out.push_str("\"author\":");
-    if let Some(author) = &state.loaded.author {
-        push_json_string(out, author);
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    out.push_str("\"homepage\":");
-    if let Some(homepage) = &state.loaded.homepage {
-        push_json_string(out, homepage);
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
     push_json_pair(out, "source", &state.source);
     out.push(',');
     push_json_pair(out, "puzzlePath", &state.puzzle_path);
     out.push(',');
     push_json_pair(
         out,
-        "saveKey",
-        &progress_save_key(&state.loaded, &state.puzzle_path),
-    );
-    out.push(',');
-    push_json_number(
-        out,
-        "progressSaveVersion",
-        u64::from(puzzle_play::PROGRESS_SAVE_VERSION),
+        "progressStorageKey",
+        &progress_storage_key(&progress_save_key(&state.loaded, &state.puzzle_path)),
     );
     out.push(',');
     push_json_bool(
         out,
         "acceptsModelInput",
-        state.session.accepts_model_input(&state.loaded),
+        state.runtime.accepts_model_input(),
     );
     out.push(',');
     push_export_engine(out, &state.loaded);
@@ -93,53 +158,24 @@ fn push_export_boot_data(
     editor_preview: bool,
 ) {
     out.push('{');
-    push_json_pair(out, "title", &state.loaded.title);
-    out.push(',');
-    out.push_str("\"subtitle\":");
-    if let Some(subtitle) = &state.loaded.subtitle {
-        push_json_string(out, subtitle);
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    out.push_str("\"author\":");
-    if let Some(author) = &state.loaded.author {
-        push_json_string(out, author);
-    } else {
-        out.push_str("null");
-    }
-    out.push(',');
-    out.push_str("\"homepage\":");
-    if let Some(homepage) = &state.loaded.homepage {
-        push_json_string(out, homepage);
-    } else {
-        out.push_str("null");
-    }
     if include_source {
-        out.push(',');
         push_json_pair(out, "source", &state.source);
         out.push(',');
         push_json_pair(out, "puzzlePath", &state.puzzle_path);
+        out.push(',');
     }
-    out.push(',');
     push_json_bool(out, "editorPreview", editor_preview);
     out.push(',');
     push_json_pair(
         out,
-        "saveKey",
-        &progress_save_key(&state.loaded, &state.puzzle_path),
-    );
-    out.push(',');
-    push_json_number(
-        out,
-        "progressSaveVersion",
-        u64::from(puzzle_play::PROGRESS_SAVE_VERSION),
+        "progressStorageKey",
+        &progress_storage_key(&progress_save_key(&state.loaded, &state.puzzle_path)),
     );
     out.push(',');
     push_json_bool(
         out,
         "acceptsModelInput",
-        state.session.accepts_model_input(&state.loaded),
+        state.runtime.accepts_model_input(),
     );
     out.push(',');
     push_inputs(out, &state.loaded);
@@ -159,14 +195,20 @@ fn push_export_boot_data(
 fn progress_save_key(loaded: &LoadedGame, puzzle_path: &str) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     progress_hash_str(&mut hash, puzzle_path);
-    progress_hash_str(&mut hash, &loaded.title);
     for level in &loaded.levels {
         progress_hash_str(&mut hash, &level.name);
         hash = progress_hash_mix(hash, u64::from(level.initial_state.width));
         hash = progress_hash_mix(hash, u64::from(level.initial_state.height));
         hash = progress_hash_mix(hash, level.initial_state.hash());
     }
-    format!("{}:{hash:016x}", loaded.title)
+    format!("{puzzle_path}:{hash:016x}")
+}
+
+fn progress_storage_key(save_key: &str) -> String {
+    format!(
+        "PuzzleStudio.progress.v{}:{save_key}",
+        puzzle_play::PROGRESS_SAVE_VERSION
+    )
 }
 
 fn progress_hash_str(hash: &mut u64, value: &str) {
@@ -257,13 +299,6 @@ fn push_export_input_buffer(out: &mut String, loaded: &LoadedGame) {
     out.push(',');
     push_json_number(out, "minWaitMs", loaded.input_buffer.min_wait_ms);
     out.push('}');
-}
-
-fn push_presentation_events(out: &mut String, events: &[PresentationEvent]) {
-    out.push_str("\"presentationEvents\":");
-    let events_json = serde_json::to_string(&presentation_events_contract::<2>(events))
-        .expect("runtime presentation event contract should serialize");
-    out.push_str(&events_json);
 }
 
 fn push_export_variables(out: &mut String, variables: &[puzzle_lang::SceneVarDef]) {

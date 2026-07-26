@@ -1,4 +1,4 @@
-title = "light"
+const title = "light"
 
 theme {
 preset = "puzzlescript"
@@ -23,7 +23,7 @@ object = solid
 
 routine light_effect {
 [ effect ] -> [ ]
-[ Lump | no obstacle ] -> [ Lump | Light ]
+[ Lump ] -> [ Lump Light ]
 [ Light | no obstacle ] -> [ Light | Light ]
 [ no Light no obstacle ] -> [ Dark ]
 }
