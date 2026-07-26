@@ -131,8 +131,6 @@ function toggleVisualFillCommand(context) {
   return false;
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
 function toggleVisualGridCommand(context) {
   const dimension = visualCommandDimension(context);
   if (dimension === "3d") return (toggleVisual3dGrid(), true);
@@ -140,7 +138,6 @@ function toggleVisualGridCommand(context) {
   return false;
 }
 
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 function toggleVisualMoveCommand(context) {
   const dimension = visualCommandDimension(context);
   if (dimension === "3d") return (toggleVisual3dTranslateMode(), true);
@@ -226,14 +223,10 @@ function runVisualSaveCommand(context) {
 }
 
 function runSoundsSaveCommand(context) {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   updateSoundsDefinition(soundCommandKind(context)).catch((error) => {
     console.error(error);
     setStatus(`Could not update sounds: ${error?.message || error}`, "is-error");
   });
-=======
-  updateSoundsDefinition(soundCommandKind(context));
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   return true;
 }
 
@@ -586,8 +579,6 @@ const editorCommandDatabase = [
     run: toggleVisualFillCommand,
   },
   {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
     id: "visual.grid",
     group: "visual",
     label: "Grid",
@@ -597,7 +588,6 @@ const editorCommandDatabase = [
     run: toggleVisualGridCommand,
   },
   {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     id: "visual.move",
     group: "visual",
     label: "Move",
@@ -673,10 +663,7 @@ const editorCommandDatabase = [
     group: "visual",
     label: "Previous slice",
     shortcuts: [{ key: "ArrowUp" }],
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
     repeatable: true,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     elements: editorCommandElements("#visual3dPreviousSliceButton"),
     available: (context) => visual3dCommandActive(context) && visualNavigationCommandAvailable(context),
     run: () => (moveVisual3dSlice(-1), true),
@@ -686,10 +673,7 @@ const editorCommandDatabase = [
     group: "visual",
     label: "Next slice",
     shortcuts: [{ key: "ArrowDown" }],
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
     repeatable: true,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     elements: editorCommandElements("#visual3dNextSliceButton"),
     available: (context) => visual3dCommandActive(context) && visualNavigationCommandAvailable(context),
     run: () => (moveVisual3dSlice(1), true),
@@ -964,18 +948,11 @@ function invokeEditorCommand(id, context) {
 }
 
 function dispatchEditorCommandEvent(event, options = {}) {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-  if (event.defaultPrevented || event.repeat) return false;
-  const context = editorCommandContext(event);
-  const matches = editorCommandDatabase.filter((command) => {
-    if (typeof command.run !== "function") return false;
-=======
   if (event.defaultPrevented) return false;
   const context = editorCommandContext(event);
   const matches = editorCommandDatabase.filter((command) => {
     if (typeof command.run !== "function") return false;
     if (event.repeat && !command.repeatable) return false;
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     if (options.group && command.group !== options.group) return false;
     if (!editorCommandShortcuts(command.id).some((shortcut) => editorShortcutMatches(event, shortcut))) return false;
     if (!command.allowTextEntry && editorCommandTextEntryTarget(event.target)) return false;

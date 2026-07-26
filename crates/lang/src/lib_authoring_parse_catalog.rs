@@ -676,7 +676,9 @@ fn parser_surface_catalog_from_source_scan(
                         Ok(resource) => {
                             project_level_products(
                                 &resource.levels,
+                                &resource.legends,
                                 dimension,
+                                &catalog,
                                 &mut integrated.recognition,
                             );
                             level_count += resource.levels.len();
@@ -1031,7 +1033,13 @@ fn project_model_semantics(
     catalog: &Catalog,
     recognition: &mut crate::surface::ParserRecognition,
 ) {
-    project_level_products(&model.body.levels.levels, model.dimension, recognition);
+    project_level_products(
+        &model.body.levels.levels,
+        &model.body.levels.legends,
+        model.dimension,
+        catalog,
+        recognition,
+    );
     project_syntax_semantics(&model.body.semantics, catalog, recognition);
     for program in [
         model.body.rules.as_ref(),
@@ -1068,12 +1076,40 @@ fn project_model_semantics(
 
 fn project_level_products(
     levels: &[crate::level::LevelBlock],
+    shared_legends: &[crate::level::LevelLegendSyntax],
     dimension: crate::ModelDimension,
+    catalog: &Catalog,
     recognition: &mut crate::surface::ParserRecognition,
 ) {
+    let mut resolved_catalog = catalog.clone();
+    let mut shared_resolution = std::collections::HashMap::new();
+    for legend in shared_legends {
+        let resolved = if legend.selectors == ["empty"] {
+            Some(Vec::new())
+        } else {
+            let mut overlays = Vec::new();
+            let mut empty = Some('.');
+            let mut legend_recognition = crate::surface::ParserRecognition::default();
+            apply_level_resource_legend(
+                legend,
+                &mut resolved_catalog,
+                &mut overlays,
+                &mut empty,
+                &mut legend_recognition,
+            )
+            .ok()
+            .and_then(|_| resolved_catalog.char_objects.get(&legend.ch))
+            .map(|objects| projected_level_object_names(objects, &resolved_catalog))
+        };
+        shared_resolution.insert(legend.ch, resolved);
+    }
     recognition
         .level_products
         .extend(levels.iter().enumerate().map(|(level_index, level)| {
+            let local_resolution = parse_level_body_for_editor(level, &resolved_catalog)
+                .ok()
+                .map(|body| body.local_char_objects)
+                .unwrap_or_default();
             crate::surface::SurfaceLevelProduct {
                 span: level.source_span,
                 body_span: level.body_span,
@@ -1082,8 +1118,41 @@ fn project_level_products(
                 pack: level.pack.clone(),
                 puzzle: level.puzzle.clone(),
                 level_index,
+                rows: level.lines.iter().map(|line| line.text.clone()).collect(),
+                shared_legends: shared_legends
+                    .iter()
+                    .map(|legend| crate::surface::SurfaceLevelLegendProduct {
+                        symbol: legend.ch,
+                        selectors: legend.selectors.clone(),
+                        objects: shared_resolution.get(&legend.ch).cloned().flatten(),
+                    })
+                    .collect(),
+                local_legends: level
+                    .legends
+                    .iter()
+                    .map(|legend| crate::surface::SurfaceLevelLegendProduct {
+                        symbol: legend.ch,
+                        selectors: legend.selectors.clone(),
+                        objects: local_resolution
+                            .get(&legend.ch)
+                            .map(|objects| projected_level_object_names(objects, &resolved_catalog)),
+                    })
+                    .collect(),
             }
         }));
+}
+
+fn projected_level_object_names(objects: &[ObjectId], catalog: &Catalog) -> Vec<String> {
+    objects
+        .iter()
+        .map(|object| {
+            catalog
+                .object_labels
+                .get(object)
+                .cloned()
+                .expect("every catalog object has a public label")
+        })
+        .collect()
 }
 
 fn project_syntax_semantics(

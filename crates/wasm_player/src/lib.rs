@@ -12,8 +12,6 @@ use puzzle_runtime_contract::RuntimeProgressPersistenceOperation;
 use puzzle_runtime_contract::StandaloneProgressStorage;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
-
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 #[cfg(any(target_arch = "wasm32", test))]
 const STORAGE_RETRY_SECONDS: f64 = 5.0;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -32,85 +30,6 @@ struct BrowserProgressStorage {
     storage: web_sys::Storage,
     failed_request_id: Option<u32>,
     next_retry_seconds: f64,
-=======
-#[wasm_bindgen]
-pub fn hydrate_render_scene_images(
-    render_scene_json: &str,
-    image_assets_json: &str,
-) -> Result<String, JsValue> {
-    let scene: puzzle_runtime_contract::RuntimeResolvedRenderScene =
-        serde_json::from_str(render_scene_json).map_err(|error| {
-            JsValue::from_str(&format!("invalid resolved render scene: {error}"))
-        })?;
-    let assets: Vec<puzzle_runtime_contract::RuntimeResolvedImageAsset> =
-        serde_json::from_str(image_assets_json).map_err(|error| {
-            JsValue::from_str(&format!("invalid decoded image assets: {error}"))
-        })?;
-    let hydrated = puzzle_presentation::hydrate_external_images(&scene, &assets)
-        .map_err(|error| JsValue::from_str(&format!("render image hydration failed: {error:?}")))?;
-    serde_json::to_string(&hydrated)
-        .map_err(|error| JsValue::from_str(&format!("render scene serialization failed: {error}")))
-}
-
-#[wasm_bindgen]
-pub fn resolve_render_frame(render_scene_json: &str, elapsed_ms: u32) -> Result<String, JsValue> {
-    let scene: puzzle_runtime_contract::RuntimeResolvedRenderScene =
-        serde_json::from_str(render_scene_json).map_err(|error| {
-            JsValue::from_str(&format!("invalid resolved render scene: {error}"))
-        })?;
-    let frame = puzzle_presentation::resolve_render_frame(&scene, u64::from(elapsed_ms)).map_err(
-        |error| JsValue::from_str(&format!("render frame resolution failed: {error:?}")),
-    )?;
-    serde_json::to_string(&frame)
-        .map_err(|error| JsValue::from_str(&format!("render frame serialization failed: {error}")))
-}
-
-#[wasm_bindgen]
-pub fn resolve_render_moment(
-    render_scene_json: &str,
-    render_moment_json: &str,
-) -> Result<String, JsValue> {
-    let scene: puzzle_runtime_contract::RuntimeResolvedRenderScene =
-        serde_json::from_str(render_scene_json).map_err(|error| {
-            JsValue::from_str(&format!("invalid resolved render scene: {error}"))
-        })?;
-    let moment: puzzle_runtime_contract::RuntimeResolvedRenderMoment =
-        serde_json::from_str(render_moment_json).map_err(|error| {
-            JsValue::from_str(&format!("invalid resolved render moment: {error}"))
-        })?;
-    let frame = puzzle_presentation::resolve_render_moment(&scene, &moment).map_err(|error| {
-        JsValue::from_str(&format!("render moment resolution failed: {error:?}"))
-    })?;
-    serde_json::to_string(&frame)
-        .map_err(|error| JsValue::from_str(&format!("render frame serialization failed: {error}")))
-}
-
-#[wasm_bindgen]
-pub fn project_renderer_state(
-    runtime_export_json: &str,
-    state_json: &str,
-    level_index: u32,
-) -> Result<String, JsValue> {
-    let level_index = usize::try_from(level_index)
-        .map_err(|_| JsValue::from_str("renderer projection level index is out of range"))?;
-    let mut session = puzzle_game_runtime::RuntimeSession::from_export_json(runtime_export_json)
-        .map_err(|error| {
-            JsValue::from_str(&format!("renderer projection export failed: {error}"))
-        })?;
-    session
-        .set_current_state_json(state_json, level_index, false)
-        .map_err(|error| {
-            JsValue::from_str(&format!("renderer projection state failed: {error}"))
-        })?;
-    session
-        .renderer_state_json()
-        .map_err(|error| JsValue::from_str(&format!("renderer projection failed: {error}")))
-}
-
-#[wasm_bindgen]
-pub struct WasmStandaloneSession {
-    inner: puzzle_game_runtime::RuntimeSession,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -124,7 +43,6 @@ impl BrowserProgressStorage {
             .map_err(|error| storage_read_failure(&identity, &js_error(&error)))?
             .ok_or_else(|| storage_read_failure(&identity, "localStorage is unavailable"))?;
         Ok(Self {
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
             identity,
             storage,
             failed_request_id: None,
@@ -137,19 +55,6 @@ impl BrowserProgressStorage {
         self.storage
             .get_item(&self.identity.key)
             .map_err(|error| storage_read_failure(&self.identity, &js_error(&error)))
-=======
-            inner: puzzle_game_runtime::RuntimeSession::from_source(source, puzzle_path)
-                .map_err(|error| JsValue::from_str(&error))?,
-        })
-    }
-
-    #[wasm_bindgen(js_name = fromExport)]
-    pub fn from_export(export_json: &str) -> Result<WasmStandaloneSession, JsValue> {
-        Ok(Self {
-            inner: puzzle_game_runtime::RuntimeSession::from_export_json(export_json)
-                .map_err(|error| JsValue::from_str(&error))?,
-        })
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -166,7 +71,6 @@ impl BrowserProgressStorage {
         }
     }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     fn should_attempt(&self, request_id: u32, now_seconds: f64) -> bool {
         self.failed_request_id != Some(request_id) || now_seconds >= self.next_retry_seconds
     }
@@ -318,7 +222,7 @@ fn surface_player_fatal_diagnostic(
 fn surface_player_observation(
     host: NonSend<puzzle_bevy_player::PuzzleBevyPlayerHost>,
     observation: Res<puzzle_bevy_player::PuzzleBevyPlayerObservationState>,
-    mut last_sequence: Local<u64>,
+    mut last_submission_sequence: Local<u64>,
 ) {
     if host.fatal_error().is_some() {
         return;
@@ -326,10 +230,10 @@ fn surface_player_observation(
     let Some(latest) = observation.latest() else {
         return;
     };
-    if *last_sequence == latest.sequence {
+    if *last_submission_sequence == latest.submission_sequence {
         return;
     }
-    *last_sequence = latest.sequence;
+    *last_submission_sequence = latest.submission_sequence;
     if let Err(error) = write_player_observation(latest) {
         web_sys::console::error_1(&JsValue::from_str(&format!(
             "Player observation surface failed: {error}"
@@ -348,11 +252,39 @@ fn write_player_observation(
     for (name, value) in [
         ("data-state", "ready".to_string()),
         ("data-sequence", observation.sequence.to_string()),
+        (
+            "data-submission-sequence",
+            observation.submission_sequence.to_string(),
+        ),
         ("data-revision", observation.revision.to_string()),
         ("data-surface-focus", observation.surface_focus.clone()),
         (
             "data-viewport-count",
             observation.viewport_count.to_string(),
+        ),
+        (
+            "data-submission-interval-micros",
+            observation.submission_interval_micros.to_string(),
+        ),
+        (
+            "data-presentation-cpu-micros",
+            observation
+                .presentation_cpu_micros
+                .map_or_else(String::new, |value| value.to_string()),
+        ),
+        (
+            "data-wasm-linear-memory-bytes",
+            observation
+                .wasm_linear_memory_bytes
+                .map_or_else(String::new, |value| value.to_string()),
+        ),
+        (
+            "data-progress-fingerprint",
+            observation.progress_fingerprint.to_string(),
+        ),
+        (
+            "data-audio-capability",
+            observation.audio_capability_label().to_string(),
         ),
     ] {
         element.set_attribute(name, &value).map_err(|error| {
@@ -615,60 +547,5 @@ mod tests {
             FATAL_DIAGNOSTIC_VISIBLE_STYLE.contains("display:block"),
             "the official fatal element is hidden by stylesheet display:none, so the adapter must override display"
         );
-=======
-    pub fn resolve_scene_presentation(
-        &self,
-        scene_name: &str,
-        state_json: &str,
-    ) -> Result<String, JsValue> {
-        self.inner
-            .resolve_scene_presentation_json(scene_name, state_json)
-            .map_err(|error| JsValue::from_str(&error))
-    }
-
-    pub fn dispatch(&mut self, action_json: &str) -> Result<String, JsValue> {
-        self.inner
-            .dispatch_json(action_json)
-            .map_err(|error| JsValue::from_str(&error))
-    }
-
-    pub fn set_current_state(
-        &mut self,
-        state_json: &str,
-        level_index: u32,
-        materialize_level_start: bool,
-    ) -> Result<(), JsValue> {
-        let level_index = usize::try_from(level_index)
-            .map_err(|_| JsValue::from_str("level index is out of range"))?;
-        self.inner
-            .set_current_state_json(state_json, level_index, materialize_level_start)
-            .map_err(|error| JsValue::from_str(&error))
-    }
-
-    pub fn restore_progress_save(&mut self, save_json: &str) -> Result<(), JsValue> {
-        self.inner
-            .restore_progress_save_json(save_json)
-            .map_err(|error| JsValue::from_str(&error))
-    }
-
-    pub fn set_progress_persistence_enabled(&mut self, enabled: bool) {
-        self.inner.set_progress_persistence_enabled(enabled);
-    }
-
-    pub fn progress_save_request(&self) -> Option<String> {
-        self.inner.progress_save_request().map(|request| {
-            serde_json::to_string(&request).expect("progress save request JSON should serialize")
-        })
-    }
-
-    pub fn confirm_progress_save_written(&mut self, request_id: u32) -> Result<(), JsValue> {
-        self.inner
-            .confirm_progress_save_written(request_id)
-            .map_err(|error| JsValue::from_str(&error))
-    }
-
-    pub fn confirm_progress_save_cleared(&mut self) {
-        self.inner.confirm_progress_save_cleared();
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     }
 }

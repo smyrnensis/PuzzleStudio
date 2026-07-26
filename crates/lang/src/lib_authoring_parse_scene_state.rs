@@ -33,7 +33,7 @@ fn parse_scene_puzzle_layout_declaration(
     if let Some((declaration, attrs)) = parse_typed_scene_puzzle_declaration(line, lifetime)? {
         return Ok(Some(ParsedScenePuzzleLayoutDeclaration {
             puzzle: declaration,
-            layout: parse_scene_layout_attrs_for_line(&attrs, line)?,
+            layout: parse_model_window_layout_attrs_for_line(&attrs, line)?,
         }));
     }
     let Some((name, value)) = parse_assignment_row(line) else {

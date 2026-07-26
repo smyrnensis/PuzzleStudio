@@ -17,11 +17,7 @@ export class WasmStandaloneSession {
         const ptr = this.__destroy_into_raw();
         wasm.__wbg_wasmstandalonesession_free(ptr, 0);
     }
-    confirm_progress_save_cleared() {
-        wasm.wasmstandalonesession_confirm_progress_save_cleared(this.__wbg_ptr);
-    }
     /**
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
      * @param {string} input_name
      * @returns {string}
      */
@@ -46,8 +42,6 @@ export class WasmStandaloneSession {
         }
     }
     /**
-     * Consumes one or more queued browser audio events after the backend's
-     * owned callback wakes the session.
      * @param {number} now_seconds
      * @returns {string}
      */
@@ -63,30 +57,53 @@ export class WasmStandaloneSession {
             wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
         }
     }
-    confirm_progress_save_cleared() {
-        wasm.wasmstandalonesession_confirm_progress_save_cleared(this.__wbg_ptr);
+    /**
+     * @param {number} now_seconds
+     * @returns {string}
+     */
+    audio_tick(now_seconds) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.wasmstandalonesession_audio_tick(this.__wbg_ptr, now_seconds);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
     }
     /**
      * @param {number} request_id
      */
-    confirm_progress_save_written(request_id) {
-        const ret = wasm.wasmstandalonesession_confirm_progress_save_written(this.__wbg_ptr, request_id);
+    confirm_progress_persistence_applied(request_id) {
+        const ret = wasm.wasmstandalonesession_confirm_progress_persistence_applied(this.__wbg_ptr, request_id);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
     }
     /**
-=======
-     * @param {number} request_id
+     * @returns {string}
      */
-    confirm_progress_save_written(request_id) {
-        const ret = wasm.wasmstandalonesession_confirm_progress_save_written(this.__wbg_ptr, request_id);
-        if (ret[1]) {
-            throw takeFromExternrefTable0(ret[0]);
+    development_snapshot() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.wasmstandalonesession_development_snapshot(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
         }
     }
     /**
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
      * @param {string} action_json
      * @returns {string}
      */
@@ -141,12 +158,6 @@ export class WasmStandaloneSession {
         return this;
     }
     /**
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-     * Confirms that the browser presented the next non-audio timeline event.
-     *
-     * The event itself remains Rust-owned. JavaScript supplies only the
-     * presentation completion time; any audio commands that now reach the
-     * timeline head are applied directly to the browser audio backend.
      * @param {number} now_seconds
      * @returns {string}
      */
@@ -169,8 +180,6 @@ export class WasmStandaloneSession {
         }
     }
     /**
-     * Supplies the frame time after the browser committed the latest snapshot.
-     * Audio at the head of the Rust-owned timeline becomes eligible here.
      * @param {number} now_seconds
      * @returns {string}
      */
@@ -187,44 +196,18 @@ export class WasmStandaloneSession {
         }
     }
     /**
-=======
-     * @returns {string | undefined}
-     */
-    progress_save_request() {
-        const ret = wasm.wasmstandalonesession_progress_save_request(this.__wbg_ptr);
-        let v1;
-        if (ret[0] !== 0) {
-            v1 = getStringFromWasm0(ret[0], ret[1]).slice();
-            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-        }
-        return v1;
-    }
-    /**
-     * @param {string} scene_name
-     * @param {string} state_json
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
      * @returns {string}
      */
-    resolve_scene_presentation(scene_name, state_json) {
-        let deferred4_0;
-        let deferred4_1;
+    progress_save() {
+        let deferred1_0;
+        let deferred1_1;
         try {
-            const ptr0 = passStringToWasm0(scene_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len0 = WASM_VECTOR_LEN;
-            const ptr1 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len1 = WASM_VECTOR_LEN;
-            const ret = wasm.wasmstandalonesession_resolve_scene_presentation(this.__wbg_ptr, ptr0, len0, ptr1, len1);
-            var ptr3 = ret[0];
-            var len3 = ret[1];
-            if (ret[3]) {
-                ptr3 = 0; len3 = 0;
-                throw takeFromExternrefTable0(ret[2]);
-            }
-            deferred4_0 = ptr3;
-            deferred4_1 = len3;
-            return getStringFromWasm0(ptr3, len3);
+            const ret = wasm.wasmstandalonesession_progress_save(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
         } finally {
-            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
         }
     }
     /**
@@ -243,6 +226,52 @@ export class WasmStandaloneSession {
         }
     }
     /**
+     * @returns {string | undefined}
+     */
+    progress_storage_key() {
+        const ret = wasm.wasmstandalonesession_progress_storage_key(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]).slice();
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
+     * @returns {number | undefined}
+     */
+    progress_storage_save_version() {
+        const ret = wasm.wasmstandalonesession_progress_storage_save_version(this.__wbg_ptr);
+        return ret === Number.MAX_SAFE_INTEGER ? undefined : ret;
+    }
+    /**
+     * @param {string} render_scene_json
+     * @param {string} render_moment_json
+     * @returns {string}
+     */
+    resolve_render_moment(render_scene_json, render_moment_json) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(render_scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(render_moment_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmstandalonesession_resolve_render_moment(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
      * @param {string} save_json
      */
     restore_progress_save(save_json) {
@@ -254,11 +283,6 @@ export class WasmStandaloneSession {
         }
     }
     /**
-     * Connects asynchronous Web Audio events to this Rust-owned session.
-     *
-     * The callback is a wakeup only. Worklet payloads and voice state remain
-     * typed and are drained from `BrowserAudioBackend` by
-     * `audio_feedback_event`.
      * @param {Function} callback
      */
     set_audio_feedback_wakeup(callback) {
@@ -301,21 +325,6 @@ export class WasmStandaloneSession {
         wasm.wasmstandalonesession_set_progress_persistence_enabled(this.__wbg_ptr, enabled);
     }
     /**
-     * @returns {string}
-     */
-    snapshot() {
-        let deferred1_0;
-        let deferred1_1;
-        try {
-            const ret = wasm.wasmstandalonesession_snapshot(this.__wbg_ptr);
-            deferred1_0 = ret[0];
-            deferred1_1 = ret[1];
-            return getStringFromWasm0(ret[0], ret[1]);
-        } finally {
-            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-        }
-    }
-    /**
      * @param {number} now_seconds
      * @returns {Promise<string>}
      */
@@ -323,119 +332,15 @@ export class WasmStandaloneSession {
         const ret = wasm.wasmstandalonesession_unlock_audio(this.__wbg_ptr, now_seconds);
         return ret;
     }
+    /**
+     * @returns {number}
+     */
+    visual_image_count() {
+        const ret = wasm.wasmstandalonesession_visual_image_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
 }
 if (Symbol.dispose) WasmStandaloneSession.prototype[Symbol.dispose] = WasmStandaloneSession.prototype.free;
-
-/**
- * @param {string} render_scene_json
- * @param {string} image_assets_json
- * @returns {string}
- */
-export function hydrate_render_scene_images(render_scene_json, image_assets_json) {
-    let deferred4_0;
-    let deferred4_1;
-    try {
-        const ptr0 = passStringToWasm0(render_scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(image_assets_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.hydrate_render_scene_images(ptr0, len0, ptr1, len1);
-        var ptr3 = ret[0];
-        var len3 = ret[1];
-        if (ret[3]) {
-            ptr3 = 0; len3 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred4_0 = ptr3;
-        deferred4_1 = len3;
-        return getStringFromWasm0(ptr3, len3);
-    } finally {
-        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-    }
-}
-
-/**
- * @param {string} runtime_export_json
- * @param {string} state_json
- * @param {number} level_index
- * @returns {string}
- */
-export function project_renderer_state(runtime_export_json, state_json, level_index) {
-    let deferred4_0;
-    let deferred4_1;
-    try {
-        const ptr0 = passStringToWasm0(runtime_export_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.project_renderer_state(ptr0, len0, ptr1, len1, level_index);
-        var ptr3 = ret[0];
-        var len3 = ret[1];
-        if (ret[3]) {
-            ptr3 = 0; len3 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred4_0 = ptr3;
-        deferred4_1 = len3;
-        return getStringFromWasm0(ptr3, len3);
-    } finally {
-        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-    }
-}
-
-/**
- * @param {string} render_scene_json
- * @param {number} elapsed_ms
- * @returns {string}
- */
-export function resolve_render_frame(render_scene_json, elapsed_ms) {
-    let deferred3_0;
-    let deferred3_1;
-    try {
-        const ptr0 = passStringToWasm0(render_scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.resolve_render_frame(ptr0, len0, elapsed_ms);
-        var ptr2 = ret[0];
-        var len2 = ret[1];
-        if (ret[3]) {
-            ptr2 = 0; len2 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred3_0 = ptr2;
-        deferred3_1 = len2;
-        return getStringFromWasm0(ptr2, len2);
-    } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
-    }
-}
-
-/**
- * @param {string} render_scene_json
- * @param {string} render_moment_json
- * @returns {string}
- */
-export function resolve_render_moment(render_scene_json, render_moment_json) {
-    let deferred4_0;
-    let deferred4_1;
-    try {
-        const ptr0 = passStringToWasm0(render_scene_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passStringToWasm0(render_moment_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len1 = WASM_VECTOR_LEN;
-        const ret = wasm.resolve_render_moment(ptr0, len0, ptr1, len1);
-        var ptr3 = ret[0];
-        var len3 = ret[1];
-        if (ret[3]) {
-            ptr3 = 0; len3 = 0;
-            throw takeFromExternrefTable0(ret[2]);
-        }
-        deferred4_0 = ptr3;
-        deferred4_1 = len3;
-        return getStringFromWasm0(ptr3, len3);
-    } finally {
-        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
-    }
-}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -493,6 +398,13 @@ function __wbg_get_imports() {
         __wbg_clearTimeout_4f7dad1647aa1690: function(arg0, arg1) {
             arg0.clearTimeout(arg1);
         },
+        __wbg_close_799c82b92b486cec: function() { return handleError(function (arg0) {
+            const ret = arg0.close();
+            return ret;
+        }, arguments); },
+        __wbg_close_d8be4285bd8ec080: function(arg0) {
+            arg0.close();
+        },
         __wbg_connect_830d29a6ac4bac44: function() { return handleError(function (arg0, arg1) {
             const ret = arg0.connect(arg1);
             return ret;
@@ -511,13 +423,6 @@ function __wbg_get_imports() {
         __wbg_createGain_81d07b311ee2dece: function() { return handleError(function (arg0) {
             const ret = arg0.createGain();
             return ret;
-        }, arguments); },
-        __wbg_createObjectURL_395ba916655726cd: function() { return handleError(function (arg0, arg1) {
-            const ret = URL.createObjectURL(arg1);
-            const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len1 = WASM_VECTOR_LEN;
-            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
-            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
         }, arguments); },
         __wbg_data_bd354b70c783c66e: function(arg0) {
             const ret = arg0.data;
@@ -567,7 +472,7 @@ function __wbg_get_imports() {
                     const a = state0.a;
                     state0.a = 0;
                     try {
-                        return wasm_bindgen__convert__closures_____invoke__h709bd5d4c0b96c84(a, state0.b, arg0, arg1);
+                        return wasm_bindgen__convert__closures_____invoke__hc88b208178540d95(a, state0.b, arg0, arg1);
                     } finally {
                         state0.a = a;
                     }
@@ -580,10 +485,6 @@ function __wbg_get_imports() {
         },
         __wbg_new_with_options_8847c2a0df0188c9: function() { return handleError(function (arg0, arg1, arg2, arg3) {
             const ret = new AudioWorkletNode(arg0, getStringFromWasm0(arg1, arg2), arg3);
-            return ret;
-        }, arguments); },
-        __wbg_new_with_str_sequence_and_options_21cfcd771283a47d: function() { return handleError(function (arg0, arg1) {
-            const ret = new Blob(arg0, arg1);
             return ret;
         }, arguments); },
         __wbg_of_57145fdec12d159f: function(arg0) {
@@ -638,14 +539,14 @@ function __wbg_get_imports() {
         __wbg_set_onprocessorerror_271a6464a6b6fefb: function(arg0, arg1) {
             arg0.onprocessorerror = arg1;
         },
+        __wbg_set_onstatechange_00dc98a21ea53686: function(arg0, arg1) {
+            arg0.onstatechange = arg1;
+        },
         __wbg_set_output_channel_count_369a2448749a0952: function(arg0, arg1) {
             arg0.outputChannelCount = arg1;
         },
         __wbg_set_processor_options_bbe83c695eee20da: function(arg0, arg1) {
             arg0.processorOptions = arg1;
-        },
-        __wbg_set_type_f2ba381718ed1039: function(arg0, arg1, arg2) {
-            arg0.type = getStringFromWasm0(arg1, arg2);
         },
         __wbg_set_value_aad2f12e25c9eb5e: function(arg0, arg1) {
             arg0.value = arg1;
@@ -685,23 +586,23 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 43, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h5b8ed1e5fec17ec2);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 470, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h01a4c02d46983c91);
             return ret;
         },
         __wbindgen_cast_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("Event")], shim_idx: 139, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h44b7ab73cd046207);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("Event")], shim_idx: 436, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540);
             return ret;
         },
         __wbindgen_cast_0000000000000003: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 139, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h44b7ab73cd046207_2);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 436, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540_2);
             return ret;
         },
         __wbindgen_cast_0000000000000004: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 142, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h4681ec085113b112);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [], shim_idx: 439, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h0e52773364796bcc);
             return ret;
         },
         __wbindgen_cast_0000000000000005: function(arg0) {
@@ -731,27 +632,27 @@ function __wbg_get_imports() {
 }
 
 const lAudioContext = (typeof AudioContext !== 'undefined' ? AudioContext : (typeof webkitAudioContext !== 'undefined' ? webkitAudioContext : undefined));
-function wasm_bindgen__convert__closures_____invoke__h4681ec085113b112(arg0, arg1) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h4681ec085113b112(arg0, arg1);
+function wasm_bindgen__convert__closures_____invoke__h0e52773364796bcc(arg0, arg1) {
+    wasm.wasm_bindgen__convert__closures_____invoke__h0e52773364796bcc(arg0, arg1);
 }
 
-function wasm_bindgen__convert__closures_____invoke__h44b7ab73cd046207(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h44b7ab73cd046207(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540(arg0, arg1, arg2) {
+    wasm.wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__h44b7ab73cd046207_2(arg0, arg1, arg2) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h44b7ab73cd046207_2(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540_2(arg0, arg1, arg2) {
+    wasm.wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540_2(arg0, arg1, arg2);
 }
 
-function wasm_bindgen__convert__closures_____invoke__h5b8ed1e5fec17ec2(arg0, arg1, arg2) {
-    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h5b8ed1e5fec17ec2(arg0, arg1, arg2);
+function wasm_bindgen__convert__closures_____invoke__h01a4c02d46983c91(arg0, arg1, arg2) {
+    const ret = wasm.wasm_bindgen__convert__closures_____invoke__h01a4c02d46983c91(arg0, arg1, arg2);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }
 }
 
-function wasm_bindgen__convert__closures_____invoke__h709bd5d4c0b96c84(arg0, arg1, arg2, arg3) {
-    wasm.wasm_bindgen__convert__closures_____invoke__h709bd5d4c0b96c84(arg0, arg1, arg2, arg3);
+function wasm_bindgen__convert__closures_____invoke__hc88b208178540d95(arg0, arg1, arg2, arg3) {
+    wasm.wasm_bindgen__convert__closures_____invoke__hc88b208178540d95(arg0, arg1, arg2, arg3);
 }
 
 

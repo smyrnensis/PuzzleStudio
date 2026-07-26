@@ -14,8 +14,7 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     AudioBuffer, AudioBufferSourceNode, AudioContext, AudioContextState, AudioScheduledSourceNode,
-    AudioWorkletNode, AudioWorkletNodeOptions, Blob, BlobPropertyBag, Event, GainNode,
-    MessageEvent, Url,
+    AudioWorkletNode, AudioWorkletNodeOptions, Event, GainNode, MessageEvent,
 };
 
 use puzzle_audio::{
@@ -483,23 +482,7 @@ pub type BrowserAudioWorkletTask =
 
 pub struct BrowserAudioWorkletCompletion {
     owner: Rc<()>,
-    result: Result<WorkletModuleUrl, BrowserAudioError>,
-}
-
-struct WorkletModuleUrl(Option<String>);
-
-impl WorkletModuleUrl {
-    fn new(url: String) -> Self {
-        Self(Some(url))
-    }
-}
-
-impl Drop for WorkletModuleUrl {
-    fn drop(&mut self) {
-        if let Some(url) = self.0.take() {
-            let _ = Url::revoke_object_url(&url);
-        }
-    }
+    result: Result<(), BrowserAudioError>,
 }
 
 #[derive(Default)]
@@ -554,7 +537,6 @@ pub struct BrowserAudioBackend {
     unlock_owner: Rc<()>,
     worklet_load: WorkletLoadState,
     worklet_owner: Rc<()>,
-    worklet_module_url: Option<WorkletModuleUrl>,
     visible: bool,
     sfx_buffers: HashMap<SfxAssetId, AudioBuffer>,
     voices: Rc<RefCell<VoiceRegistry>>,
@@ -584,7 +566,6 @@ impl BrowserAudioBackend {
                     unlock_owner: Rc::new(()),
                     worklet_load: WorkletLoadState::NotAttempted,
                     worklet_owner: Rc::new(()),
-                    worklet_module_url: None,
                     visible: true,
                     sfx_buffers: HashMap::new(),
                     voices: Rc::new(RefCell::new(VoiceRegistry::default())),
@@ -604,7 +585,6 @@ impl BrowserAudioBackend {
                 unlock_owner: Rc::new(()),
                 worklet_load: WorkletLoadState::NotAttempted,
                 worklet_owner: Rc::new(()),
-                worklet_module_url: None,
                 visible: true,
                 sfx_buffers: HashMap::new(),
                 voices: Rc::new(RefCell::new(VoiceRegistry::default())),
@@ -766,8 +746,7 @@ impl BrowserAudioBackend {
             return Err(BrowserAudioError::WorkletCompletionNotInFlight);
         }
         match completion.result {
-            Ok(module_url) => {
-                self.worklet_module_url = Some(module_url);
+            Ok(()) => {
                 self.worklet_load.finish(Ok(()));
                 Ok(())
             }
@@ -1348,7 +1327,6 @@ impl Drop for BrowserAudioBackend {
             }
             let _ = context.close();
         }
-        self.worklet_module_url.take();
     }
 }
 
@@ -1400,30 +1378,38 @@ fn browser_context_capability(
     }
 }
 
-async fn load_music_worklet(context: &AudioContext) -> Result<WorkletModuleUrl, BrowserAudioError> {
-    let options = BlobPropertyBag::new();
-    options.set_type("text/javascript");
-    let source = Array::of1(&JsValue::from_str(MUSIC_WORKLET_SOURCE));
-    let blob = Blob::new_with_str_sequence_and_options(&source, &options)
-        .map_err(|error| web_error("Blob.constructor(AudioWorklet)", error))?;
-    let url = WorkletModuleUrl::new(
-        Url::create_object_url_with_blob(&blob)
-            .map_err(|error| web_error("URL.createObjectURL(AudioWorklet)", error))?,
-    );
+async fn load_music_worklet(context: &AudioContext) -> Result<(), BrowserAudioError> {
+    let module_url = embedded_worklet_data_url(MUSIC_WORKLET_SOURCE);
     let worklet = context
         .audio_worklet()
         .map_err(|error| web_error("AudioContext.audioWorklet", error))?;
     let promise = worklet
-        .add_module(
-            url.0
-                .as_deref()
-                .expect("new worklet module URL owns its value"),
-        )
+        .add_module(&module_url)
         .map_err(|error| web_error("AudioWorklet.addModule", error))?;
     JsFuture::from(promise)
         .await
         .map_err(|error| web_error("AudioWorklet.addModule promise", error))?;
-    Ok(url)
+    Ok(())
+}
+
+fn embedded_worklet_data_url(source: &str) -> String {
+    let encoded_source = percent_encode_data_url_component(source);
+    format!("data:text/javascript;charset=utf-8,{encoded_source}")
+}
+
+fn percent_encode_data_url_component(source: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(source.len());
+    for byte in source.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    encoded
 }
 
 fn worklet_node_options(
@@ -1873,5 +1859,17 @@ mod tests {
         );
         assert!(MUSIC_WORKLET_SOURCE.contains("initSync({ module: embeddedBytes })"));
         assert!(MUSIC_WORKLET_SOURCE.contains("registerProcessor("));
+    }
+
+    #[test]
+    fn embedded_worklet_has_one_origin_independent_module_address() {
+        assert_eq!(
+            embedded_worklet_data_url("registerProcessor(\"music\", processor);\n"),
+            "data:text/javascript;charset=utf-8,registerProcessor(%22music%22%2C%20processor)%3B%0A"
+        );
+        assert_eq!(
+            embedded_worklet_data_url("// 音\n"),
+            "data:text/javascript;charset=utf-8,%2F%2F%20%E9%9F%B3%0A"
+        );
     }
 }

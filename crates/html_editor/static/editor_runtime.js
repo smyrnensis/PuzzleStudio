@@ -4,14 +4,9 @@
   let wasmCompilerPromise = null;
   let gameRuntimeAssetsPromise = null;
   let playerRuntimeAssetsPromise = null;
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
   let editorAudioPromise = null;
-=======
-  let wasmPlayerModulePromise = null;
   let workspaceSession = null;
   let workspaceSessionKey = "";
-  let activeSourceAnalysis = null;
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   let analysisWorker = null;
   let analysisWorkerFailure = null;
   let nextAnalysisWorkerRequestId = 1;
@@ -187,32 +182,6 @@
     return wasmCompilerPromise;
   }
 
-  async function loadWasmPlayerModule() {
-    if (!wasmPlayerModulePromise) {
-      wasmPlayerModulePromise = import(wasmModuleUrl("./wasm_player/puzzle_wasm_player.js"))
-        .then(async (module) => {
-          if (typeof module.default !== "function") {
-            throw runtimeUnavailable("Player WASM loader is missing its default initializer.");
-          }
-          await module.default({
-            module_or_path: wasmModuleUrl("./wasm_player/puzzle_wasm_player_bg.wasm"),
-          });
-          return module;
-        })
-        .catch((error) => {
-          wasmPlayerModulePromise = null;
-          throw error;
-        });
-    }
-    return wasmPlayerModulePromise;
-  }
-
-  function runtimeExportValue(value) {
-    const runtimeExport = JSON.parse(JSON.stringify(value || {}));
-    delete runtimeExport.__kind;
-    return runtimeExport;
-  }
-
   async function requireWasmFunction(name) {
     const module = await loadWasmCompiler();
     const fn = module?.[name];
@@ -251,44 +220,19 @@
   }
 
   window.PuzzleStudioRuntime = {
-    async projectRendererState(payload = {}) {
-      const module = await loadWasmPlayerModule();
-      if (typeof module.project_renderer_state !== "function") {
-        throw runtimeUnavailable("Player WASM renderer-state projection is missing.");
-      }
-      return JSON.parse(module.project_renderer_state(
-        JSON.stringify(runtimeExportValue(payload.runtimeExport)),
-        JSON.stringify(payload.state),
-        Number(payload.levelIndex),
-      ));
-    },
-
-    async prepareRenderScene(renderScene) {
-      const module = await loadWasmPlayerModule();
-      if (!window.PuzzleRenderAssetDecoder?.hydrateRenderSceneImages) {
-        throw runtimeUnavailable("Render asset decoder is unavailable.");
-      }
-      return window.PuzzleRenderAssetDecoder.hydrateRenderSceneImages(module, renderScene);
-    },
-
-    async resolveRenderMoment(renderScene, moment) {
-      const module = await loadWasmPlayerModule();
-      if (typeof module.resolve_render_moment !== "function") {
-        throw runtimeUnavailable("Player WASM render-moment resolver is missing.");
-      }
-      return JSON.parse(module.resolve_render_moment(
-        JSON.stringify(renderScene),
-        JSON.stringify(moment),
-      ));
-    },
-
     async compilePreview(payload = {}) {
       const session = await workspaceSessionFor(payload.workspaceDocuments);
-      return session.compile_preview(
+      const build = JSON.parse(session.compile_preview(
         asString(payload.puzzlePath),
         asString(payload.gameCss),
         asString(payload.gameVisualsJs),
-      );
+      ) || "{}");
+      if (!build || typeof build !== "object" || typeof build.html !== "string"
+        || !build.documentMetadata || typeof build.documentMetadata !== "object"
+        || !build.models || typeof build.models !== "object") {
+        throw runtimeUnavailable("Editor preview compiler returned an invalid typed build.");
+      }
+      return build;
     },
 
     async workspacePresentationManifest(payload = {}) {
@@ -424,22 +368,8 @@
       };
     },
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-    resetSourceAnalysis(source, sourceProfile) {
-      return resetAnalysisWorkerSource(source, sourceProfile);
-=======
-    sourceAnalysisPayload(source) {
-      const analysis = sourceAnalysisForLoadedSource(source);
-      if (!analysis.payload) {
-        const raw = querySourceAnalysis(wasmCompiler, analysis.revision, "active_source_analysis_json");
-        analysis.payload = parseSourceAnalysisJson(raw);
-      }
-      return analysis.payload;
-    },
-
     resetSourceAnalysis(source) {
       return resetAnalysisWorkerSource(source);
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     },
 
     applySourceAnalysisEdits(changes, source) {

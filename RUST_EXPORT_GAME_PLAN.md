@@ -57,10 +57,14 @@ audio-device submission, browser input, storage, and asset IO.
 
 Removing redundant interfaces is the intended performance mechanism, but the
 migration must measure its result. Before replacing the existing export, record
-representative 2D and 3D baselines for CPU frame time, input-to-frame latency,
-runtime allocations, payload bytes, and Rust/JavaScript boundary calls. The
-Rust export must remove redundant transport costs and must not regress the
-measured interactive frame budget.
+representative 2D and 3D baselines for CPU presentation time,
+input-to-browser-frame latency, retained JavaScript heap and Wasm
+linear-memory capacity, exported payload bytes, and application-owned
+Rust/browser adapter calls. Generated Wasm bindings may cross into browser GPU
+and audio APIs at their declared platform boundary; those calls are not
+misreported as application transport. The Rust export must remove redundant
+application transport costs and must not regress the measured interactive frame
+budget.
 
 ## Ownership Boundary
 
@@ -178,16 +182,20 @@ Implemented foundations:
 - Official player generation uses a dedicated size-oriented Cargo profile with
   LTO, one codegen unit, aborting panics, and stripped symbols. The generator
   enforces byte budgets for the player WASM, generated glue, and audio worklet;
-  the current artifacts are 40,414,543 bytes, 123,325 bytes, and 780,648 bytes,
+  the current artifacts are 40,555,988 bytes, 123,849 bytes, and 745,170 bytes,
   respectively.
 - A separate final-export size gate runs the official CLI for fixed 2D and 3D
   fixtures and checks raw and gzip HTML budgets. Current results are
-  60,085,474/14,124,160 bytes for 2D and 54,105,535/14,007,800 bytes for 3D.
+  60,275,181/14,171,542 bytes for 2D and 54,362,796/14,057,121 bytes for 3D.
 - Browser progress restore and exact request-ID save acknowledgement are owned
   by the Rust/WASM host. A committed save acknowledgement cannot be exposed as
   retryable after the runtime consumes it; later projection failure enters the
   visible player-fatal channel. Recoverable storage failures remain on a
   separate visible diagnostic surface with the typed request still pending.
+- The progress-storage identity is derived from the compiled game's title,
+  model identities, and level content rather than a checkout-local filesystem
+  path, so moving an authored game between workspaces preserves its save
+  namespace while materially different level sets remain distinct.
 - After the renderer queues apply, the Bevy player publishes a read-only typed
   observation containing sequence, snapshot revision, surface focus, and
   viewport count. The WASM adapter projects it to a dedicated hidden browser
@@ -201,6 +209,38 @@ Implemented foundations:
   context wakeups, command submission, feedback routing, and device teardown
   are Rust-owned. Worklet delay or failure is contained to music
   materialization and cannot retain the unlock completion or disable SFX.
+- The committed browser contract suite exports representative 2D and 3D games
+  and dedicated visibility, persistence, and external-image fixtures. It drives
+  title-to-gameplay input through CDP, reloads and clears Rust-owned progress,
+  resizes and hides/restores the page, confirms a running Rust-owned browser
+  audio backend, rejects browser/fatal diagnostics, and verifies decoded
+  screenshot pixels against fixture-owned image shape.
+- The browser suite records startup, input latency, Rust presentation CPU,
+  steady-state submission intervals, JavaScript heap and Wasm linear-memory
+  growth, total heap/memory, exported HTML payload bytes, storage adapter calls,
+  and typed host-observation attribute writes. Startup and input latency cross
+  two browser animation frames after the typed Rust submission; final decoded
+  screenshot validation is measured separately so GPU readback time is not
+  mislabeled as game latency. The host-adapter counters are
+  deliberately named for the exact browser calls they observe; they are not
+  presented as comprehensive instrumentation of every Web API call made by
+  generated Wasm bindings. The Rust submission counter proves that observation
+  writes remain bounded per submitted frame rather than scaling with visible
+  pixels, voxels, components, or sounds. One committed budget file owns common
+  interaction limits plus
+  fixture-specific memory and payload thresholds. Two serial Chrome
+  measurements under the committed 3-second visibility window recorded maxima
+  of 1,667.36 ms startup, 1,492.72 ms input-to-browser-frame latency, 8,701
+  microseconds presentation CPU p95, 250,000 microseconds submission interval,
+  331,808 bytes
+  steady JavaScript heap growth, and zero Wasm linear-memory growth. Immediate
+  regenerated-release validation additionally observed 5,301- and
+  8,701-microsecond presentation CPU p95 values in the representative 2D and
+  3D fixtures. The committed limits retain explicit measured headroom rather
+  than the former provisional ceilings.
+- Release WASM generation remaps repository, user, Cargo, and toolchain paths
+  through one shared build environment and rejects generated artifacts that
+  still contain a local build path.
 - Native tests and `wasm32-unknown-unknown` compilation cover the current Bevy
   renderer and player crates.
 
@@ -211,23 +251,15 @@ Known incomplete boundaries:
   `WasmStandaloneSession`. They are not loaded by, embedded in, or available as
   a fallback to the official player artifact. Replacing those development
   surfaces is a separate migration with different debugging contracts.
-- The representative 2D and 3D exports still require browser interaction and
-  screenshot verification from title scene through gameplay, including tween,
-  external images, audio unlock, persistence reload, resize, visibility, and
-  failure diagnostics. The CDP harness still needs to be executed for those
-  interaction sequences and extended with fixture-specific pixel assertions.
 - Camera-backed viewport leaves are ordered against other viewport leaves, but
   arbitrary interleaving with overlapping Bevy UI descendants is not yet an
   owned composition contract. If authored overlap requires that behavior,
   viewport output must become a UI-composited render target rather than adding
   more camera-order cases.
-- Startup and steady-state performance measurements remain to be recorded.
-  Boundary-call counts, input latency, frame time, allocation behavior, and
-  runtime platform payload bytes have not yet satisfied the performance gate;
-  static artifact transfer sizes are now measured and budgeted separately.
 - A reproducible pre-cutover browser-performance baseline was not recorded.
   EditorPreview is a different contract and cannot substitute for it; the
-  first complete Rust-player measurement must become the regression baseline.
+  first complete Rust-player measurements are therefore the committed
+  regression baseline rather than a historical before/after comparison.
 
 ## Work Packages
 
@@ -412,15 +444,17 @@ specific diagnostic when its required WASM or asset contract is absent.
   diagnostics rather than alternate execution paths.
 - Steady-state gameplay performs no JSON serialization or parsing between the
   session, presentation, UI, renderer, and audio stages.
-- Instrumented exports report bounded platform-boundary calls per frame rather
-  than calls proportional to visible pixels, voxels, components, or sounds.
+- Instrumented exports report bounded application-owned host-adapter calls per
+  submitted frame rather than calls proportional to visible pixels, voxels,
+  components, or sounds.
 
 ### Performance Tests
 
 - Record the existing export baseline on fixed 2D and 3D scenes with controlled
   window size, animation clock, and input sequence.
-- Compare CPU frame time, input-to-frame latency, allocations, transferred
-  payload bytes, and Rust/JavaScript boundary-call counts.
+- Compare Rust presentation CPU, input-to-browser-frame latency, retained
+  JavaScript heap and Wasm linear-memory capacity, exported payload bytes, and
+  application-owned host-adapter call counts.
 - Separate startup compilation and asset decode costs from steady-state
   gameplay costs.
 - Retain benchmark fixtures with the owning crates so later adapter changes

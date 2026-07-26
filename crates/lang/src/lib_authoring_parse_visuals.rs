@@ -1505,31 +1505,15 @@ fn parse_visual_image_path(
         .strip_prefix('"')
         .and_then(|value| value.strip_suffix('"'))
         .ok_or_else(|| parse_error(line, "visual image path must be quoted"))?;
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-    puzzle_assets::VisualImageAssetManifestEntry::from_path(path)
-        .map_err(|error| parse_error(line, &error.to_string()))
-=======
-    if path.is_empty() {
-        return Err(parse_error(line, "visual image path must not be empty"));
-    }
-    if path.starts_with('/')
-        || path.contains('\\')
-        || path.split('/').any(|part| part == "..")
-        || path.contains("://")
-    {
-        return Err(parse_error(
-            line,
-            "visual image path must be a workspace-relative path",
-        ));
-    }
-    if !is_visual_image_source(path) {
-        return Err(parse_error(
-            line,
-            "visual image must use .png, .jpg, .jpeg, or .svg",
-        ));
-    }
-    Ok(path.to_string())
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
+    puzzle_assets::VisualImageAssetManifestEntry::from_path(path).map_err(|error| {
+        let message = match error {
+            puzzle_assets::ImageAssetError::UnsupportedFormat { .. } => {
+                "visual image must use .png, .jpg, or .jpeg".to_string()
+            }
+            other => other.to_string(),
+        };
+        parse_error(line, &message)
+    })
 }
 
 fn visual_rotation_axis_for_targets(

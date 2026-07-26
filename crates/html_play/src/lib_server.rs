@@ -170,16 +170,6 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
             http_ok("text/javascript; charset=utf-8", VISUAL_TWEEN_CORE_JS)
         }
         ("GET", "/renderer.js") => http_ok("text/javascript; charset=utf-8", RENDERER_JS),
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
-        ("GET", "/render_asset_decoder.js") => {
-            http_ok("text/javascript; charset=utf-8", RENDER_ASSET_DECODER_JS)
-        }
-        ("GET", "/api/scene") => {
-            let state = state.lock().expect("server state poisoned");
-            http_ok("application/json; charset=utf-8", &state.scene_json())
-        }
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         #[cfg(feature = "solver")]
         ("POST", "/api/solve") => {
             let mut state = state.lock().expect("server state poisoned");
@@ -197,7 +187,13 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
             };
             handle_session_action(state, action)
         }
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
+        ("POST", "/api/render-moment") => {
+            let state = state.lock().expect("server state poisoned");
+            match state.resolve_render_moment_json(&request.body) {
+                Ok(body) => http_ok("application/json; charset=utf-8", &body),
+                Err(error) => http_error(400, &error),
+            }
+        }
         ("GET", "/api/state") => {
             let state = state.lock().expect("server state poisoned");
             match state.snapshot_json() {
@@ -208,8 +204,6 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
                 Err(error) => http_error(500, &error),
             }
         }
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
         _ => http_error(404, "not found"),
     }
 }
@@ -220,7 +214,6 @@ fn handle_session_action(
     action: puzzle_runtime_contract::SessionAction,
 ) -> String {
     let mut state = state.lock().expect("server state poisoned");
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     match state.runtime.dispatch_development_typed(action) {
         Ok(snapshot) => match live_server_snapshot_json(snapshot) {
             Ok((body, rejected_audio)) => {
@@ -389,239 +382,6 @@ fn visual_name(object_name: &str) -> String {
     }
 }
 
-=======
-    match state.runtime.dispatch(action) {
-        Ok(body) => http_ok("application/json; charset=utf-8", &body),
-        Err(error) => http_error(400, &error),
-    }
-}
-
-fn push_inputs(out: &mut String, loaded: &LoadedGame) {
-    let mut inputs = loaded
-        .input_labels
-        .iter()
-        .map(|(id, name)| (*id, name.as_str()))
-        .collect::<Vec<_>>();
-    inputs.sort_by_key(|(id, _)| *id);
-
-    out.push_str("\"inputs\":[");
-    for (index, (id, name)) in inputs.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_number(out, "id", id.0 as u64);
-        out.push(',');
-        push_json_pair(out, "name", name);
-        out.push(',');
-        if let Some(key) = key_for_input(loaded, *id) {
-            push_json_pair(out, "key", &key);
-        } else {
-            out.push_str("\"key\":null");
-        }
-        out.push(',');
-        if let Some(arrow) = arrow_for_input(loaded, *id) {
-            push_json_pair(out, "arrow", &arrow);
-        } else {
-            out.push_str("\"arrow\":null");
-        }
-        out.push(',');
-        out.push_str("\"keys\":[");
-        for (key_index, key) in key_triggers_for_input(loaded, *id).iter().enumerate() {
-            if key_index > 0 {
-                out.push(',');
-            }
-            push_json_string(out, key);
-        }
-        out.push(']');
-        out.push('}');
-    }
-    out.push(']');
-}
-
-fn push_scenes(out: &mut String, key: &str, loaded: &LoadedGame) {
-    push_json_string(out, key);
-    out.push_str(":[");
-    for (screen_index, scene) in loaded.scenes.iter().enumerate() {
-        if screen_index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(out, "name", &scene.name);
-        out.push(',');
-        push_scene_layout(out, &scene.layout);
-        out.push(',');
-        push_scene_resources(out, scene);
-        out.push(',');
-        push_scene_state_def(out, scene);
-        out.push(',');
-        out.push_str("\"puzzleRule\":");
-        if let Some(rule) = &scene.puzzle_rule {
-            out.push('{');
-            push_json_pair(out, "target", &rule.target);
-            out.push(',');
-            push_json_pair(out, "rule", &rule.rule);
-            out.push('}');
-        } else {
-            out.push_str("null");
-        }
-        out.push(',');
-        out.push_str("\"components\":[");
-        for (component_index, component) in scene.components.iter().enumerate() {
-            if component_index > 0 {
-                out.push(',');
-            }
-            push_scene_component(out, component);
-        }
-        out.push(']');
-        out.push(',');
-        out.push_str("\"keys\":[");
-        for (binding_index, binding) in scene.key_bindings.iter().enumerate() {
-            if binding_index > 0 {
-                out.push(',');
-            }
-            out.push('{');
-            push_json_effect(out, &binding.effect);
-            out.push(',');
-            out.push_str("\"keys\":[");
-            for (key_index, key) in binding.keys.iter().enumerate() {
-                if key_index > 0 {
-                    out.push(',');
-                }
-                push_json_string(out, &key_trigger_name(key));
-            }
-            out.push(']');
-            out.push('}');
-        }
-        out.push(']');
-        out.push(',');
-        out.push_str("\"routines\":[");
-        for (routine_index, routine) in scene.routines.iter().enumerate() {
-            if routine_index > 0 {
-                out.push(',');
-            }
-            out.push('{');
-            push_json_pair(out, "name", &routine.name);
-            out.push(',');
-            push_json_effect(out, &routine.effect);
-            out.push('}');
-        }
-        out.push(']');
-        out.push(',');
-        out.push_str("\"transitions\":[");
-        for (transition_index, transition) in scene.transitions.iter().enumerate() {
-            if transition_index > 0 {
-                out.push(',');
-            }
-            out.push('{');
-            match &transition.trigger {
-                SceneTransitionTrigger::Condition(condition) => {
-                    push_json_expr_named(out, "condition", condition);
-                }
-                SceneTransitionTrigger::Signal(condition) => {
-                    push_json_expr_named(out, "signal", condition);
-                }
-                SceneTransitionTrigger::SceneStart => {
-                    push_json_pair(out, "lifecycle", "scene_start");
-                }
-                SceneTransitionTrigger::LevelStart => {
-                    push_json_pair(out, "lifecycle", "level_start");
-                }
-            }
-            out.push(',');
-            push_json_effect(out, &transition.effect);
-            out.push('}');
-        }
-        out.push(']');
-        out.push('}');
-    }
-    out.push(']');
-}
-
-fn push_scene_resources(out: &mut String, scene: &puzzle_lang::SceneDef) {
-    out.push_str("\"resources\":{");
-    push_scene_resources_object(out, &scene.resources);
-    out.push('}');
-}
-
-fn push_scene_resources_object(out: &mut String, resources: &puzzle_lang::SceneResources) {
-    push_json_pair(
-        out,
-        "levelsMode",
-        resource_selection_mode(&resources.levels),
-    );
-    out.push(',');
-    push_resource_names(out, "levels", &resources.levels);
-    out.push(',');
-    push_json_pair(
-        out,
-        "visualsMode",
-        resource_selection_mode(&resources.visuals),
-    );
-    out.push(',');
-    push_resource_names(out, "visuals", &resources.visuals);
-}
-
-fn resource_selection_mode(selection: &ResourceSelection) -> &'static str {
-    match selection {
-        ResourceSelection::All => "all",
-        ResourceSelection::Named(_) => "named",
-    }
-}
-
-fn push_resource_names(out: &mut String, name: &str, selection: &ResourceSelection) {
-    out.push('"');
-    out.push_str(name);
-    out.push_str("\":[");
-    if let ResourceSelection::Named(names) = selection {
-        for (index, value) in names.iter().enumerate() {
-            if index > 0 {
-                out.push(',');
-            }
-            push_json_string(out, value);
-        }
-    }
-    out.push(']');
-}
-
-fn push_scene_state_def(out: &mut String, scene: &puzzle_lang::SceneDef) {
-    out.push_str("\"state\":{");
-    out.push_str("\"variables\":[");
-    for (index, variable) in scene.state.variables.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        push_scene_var_def(out, variable);
-    }
-    out.push(']');
-    out.push(',');
-    out.push_str("\"puzzles\":[");
-    for (index, puzzle) in scene.state.puzzles.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(out, "name", &puzzle.name);
-        out.push(',');
-        push_json_pair(out, "model", &puzzle.model);
-        out.push(',');
-        match &puzzle.initializer {
-            ScenePuzzleInitializer::CurrentLevel => {
-                push_json_pair(out, "initializer", "current_level")
-            }
-            ScenePuzzleInitializer::Level(level_name) => {
-                push_json_pair(out, "initializer", "level");
-                out.push(',');
-                push_json_pair(out, "level", level_name);
-            }
-        }
-        out.push('}');
-    }
-    out.push(']');
-    out.push('}');
-}
-
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 fn push_scene_var_def(out: &mut String, variable: &puzzle_lang::SceneVarDef) {
     out.push('{');
     push_json_pair(out, "name", &variable.name);

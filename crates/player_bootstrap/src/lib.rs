@@ -3,6 +3,7 @@ use std::{collections::BTreeSet, error::Error, fmt, sync::Arc};
 use puzzle_assets::{DecodedVisualImageCatalog, ImageAssetError, decode_visual_image_bundle};
 use puzzle_game_runtime::RuntimeSession;
 use puzzle_runtime_contract::{StandaloneProgressStorage, StandaloneRuntimeExport};
+use serde_json::{Map, Value};
 
 pub struct DecodedStandalonePlayerExport {
     runtime: RuntimeSession,
@@ -109,6 +110,31 @@ pub fn decode_standalone_player_export(
     })
 }
 
+pub fn encode_standalone_player_export(
+    export: &StandaloneRuntimeExport<puzzle_lang::LoadedDocument>,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&canonicalize_json_value(serde_json::to_value(export)?))
+}
+
+fn canonicalize_json_value(value: Value) -> Value {
+    match value {
+        Value::Array(values) => {
+            Value::Array(values.into_iter().map(canonicalize_json_value).collect())
+        }
+        Value::Object(values) => {
+            let mut entries = values.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, canonicalize_json_value(value)))
+                    .collect::<Map<_, _>>(),
+            )
+        }
+        value => value,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use puzzle_assets::{
@@ -130,7 +156,7 @@ mod tests {
 
     fn export_with_images(visual_images: EncodedVisualImageBundle) -> String {
         let document = puzzle_lang::parse_game_for_path(TENETEN, "games/TENETEN.puzzle").unwrap();
-        serde_json::to_string(&StandaloneRuntimeExport::new(
+        encode_standalone_player_export(&StandaloneRuntimeExport::new(
             document,
             visual_images,
             StandaloneProgressStorage {
@@ -139,6 +165,36 @@ mod tests {
             },
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn canonical_export_encoder_sorts_nested_map_keys_without_reordering_arrays() {
+        let canonical = canonicalize_json_value(serde_json::json!({
+            "z": {"beta": 2, "alpha": 1},
+            "a": [{"right": 2, "left": 1}, 3]
+        }));
+
+        assert_eq!(
+            serde_json::to_string(&canonical).unwrap(),
+            r#"{"a":[{"left":1,"right":2},3],"z":{"alpha":1,"beta":2}}"#
+        );
+    }
+
+    #[test]
+    fn canonical_export_encoder_round_trips_through_player_bootstrap() {
+        let encoded = export_with_images(EncodedVisualImageBundle::default());
+
+        decode_standalone_player_export(&encoded).unwrap();
+        assert_eq!(
+            encode_standalone_player_export(
+                &serde_json::from_str::<StandaloneRuntimeExport<puzzle_lang::LoadedDocument>>(
+                    &encoded
+                )
+                .unwrap()
+            )
+            .unwrap(),
+            encoded
+        );
     }
 
     #[test]
@@ -157,7 +213,7 @@ mod tests {
     #[test]
     fn referenced_image_reaches_the_decoded_catalog_with_its_content_revision() {
         let source = r#"
-title = image_bootstrap
+const title = "image_bootstrap"
 puzzle default {
 layers {
 actor = Tile

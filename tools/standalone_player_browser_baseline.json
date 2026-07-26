@@ -1,0 +1,151 @@
+{
+  "version": 2,
+  "recordedAt": "2026-07-26",
+  "environment": {
+    "browser": "Chrome headless with ANGLE SwiftShader",
+    "viewport": "1280x720, deviceScaleFactor 1",
+    "ownerObservation": "SubmitResolvedFrames through CommitObservation, followed by two browser animation frames; final pixels are validated by a separate CDP capture"
+  },
+  "methodology": {
+    "baselineRecordingRunsPerFixture": 2,
+    "acceptanceRunsPerInvocation": 1,
+    "acceptanceStatistic": "each startup and input sample crosses two browser animation frames after the typed submission and must remain within its fixture-owned budget; final screenshot readback is excluded from latency",
+    "contentionPolicy": "run serially with no other Chrome acceptance workload",
+    "visibilitySteadyStateDurationMs": 3000,
+    "budgetPolicy": "startup, input, and CPU ceilings use at least 25% headroom over observed maxima, including immediate regenerated-release validation; visibility cadence retains the 250 ms lifecycle contract; memory and payload ceilings use at least 20% headroom rounded up to 4 MiB; noisy steady-state growth uses a 1 MiB regression ceiling"
+  },
+  "commonBudgets": {
+    "startupMs": 2250,
+    "inputLatencyMs": 2000,
+    "presentationCpuMicros": 12000
+  },
+  "fixtureBudgets": {
+    "teneten2d": {
+      "jsHeapBytes": 92274688,
+      "wasmLinearMemoryBytes": 171966464,
+      "payloadBytes": 75497472
+    },
+    "spec3d": {
+      "jsHeapBytes": 75497472,
+      "wasmLinearMemoryBytes": 75497472,
+      "payloadBytes": 67108864
+    },
+    "visibility": {
+      "submissionIntervalMicros": 250000,
+      "steadyStateJsHeapGrowthBytes": 1048576,
+      "steadyStateWasmGrowthBytes": 1048576,
+      "jsHeapBytes": 75497472,
+      "wasmLinearMemoryBytes": 54525952,
+      "payloadBytes": 67108864
+    },
+    "persistence": {
+      "jsHeapBytes": 96468992,
+      "wasmLinearMemoryBytes": 54525952,
+      "payloadBytes": 67108864
+    },
+    "externalImage": {
+      "jsHeapBytes": 75497472,
+      "wasmLinearMemoryBytes": 54525952,
+      "payloadBytes": 67108864
+    }
+  },
+  "firstRustPlayerMeasurements": {
+    "regeneratedReleaseValidation": {
+      "teneten2dPresentationCpuMicrosP95": 5301,
+      "spec3dPresentationCpuMicrosP95": 8701,
+      "visibilitySubmissionIntervalMicrosMax": 250000
+    },
+    "runs": [
+      {
+        "teneten2d": {
+          "startupMs": 1667.36,
+          "inputLatencyMsMax": 1324.94,
+          "presentationCpuMicrosP95": 5301,
+          "jsHeapBytes": 73549644,
+          "wasmLinearMemoryBytes": 140443648,
+          "payloadBytes": 60275181
+        },
+        "spec3d": {
+          "startupMs": 1405.95,
+          "inputLatencyMsMax": 937.18,
+          "presentationCpuMicrosP95": 8500,
+          "jsHeapBytes": 62829632,
+          "wasmLinearMemoryBytes": 60555264,
+          "payloadBytes": 54256186
+        },
+        "visibility": {
+          "startupMs": 1599.2,
+          "inputLatencyMsMax": 1213.59,
+          "presentationCpuMicrosP95": 2300,
+          "submissionIntervalMicrosMax": 250000,
+          "steadyStateJsHeapGrowthBytes": 308388,
+          "steadyStateWasmGrowthBytes": 0,
+          "jsHeapBytes": 62903644,
+          "wasmLinearMemoryBytes": 44957696,
+          "payloadBytes": 54221003
+        },
+        "persistence": {
+          "startupMs": 1434.12,
+          "inputLatencyMsMax": 1254.4,
+          "presentationCpuMicrosP95": 2199,
+          "jsHeapBytes": 77517100,
+          "wasmLinearMemoryBytes": 44236800,
+          "payloadBytes": 54224664
+        },
+        "externalImage": {
+          "startupMs": 1434.74,
+          "inputLatencyMsMax": 866.12,
+          "presentationCpuMicrosP95": 2300,
+          "jsHeapBytes": 62494248,
+          "wasmLinearMemoryBytes": 44957696,
+          "payloadBytes": 54222542
+        }
+      },
+      {
+        "teneten2d": {
+          "startupMs": 1647.75,
+          "inputLatencyMsMax": 1333.01,
+          "presentationCpuMicrosP95": 5300,
+          "jsHeapBytes": 73591176,
+          "wasmLinearMemoryBytes": 140443648,
+          "payloadBytes": 60275181
+        },
+        "spec3d": {
+          "startupMs": 1522.35,
+          "inputLatencyMsMax": 895.11,
+          "presentationCpuMicrosP95": 8701,
+          "jsHeapBytes": 62868196,
+          "wasmLinearMemoryBytes": 60817408,
+          "payloadBytes": 54256186
+        },
+        "visibility": {
+          "startupMs": 1572.16,
+          "inputLatencyMsMax": 1215.96,
+          "presentationCpuMicrosP95": 2300,
+          "submissionIntervalMicrosMax": 250000,
+          "steadyStateJsHeapGrowthBytes": 331808,
+          "steadyStateWasmGrowthBytes": 0,
+          "jsHeapBytes": 62929440,
+          "wasmLinearMemoryBytes": 44957696,
+          "payloadBytes": 54221003
+        },
+        "persistence": {
+          "startupMs": 1566.84,
+          "inputLatencyMsMax": 1492.72,
+          "presentationCpuMicrosP95": 2300,
+          "jsHeapBytes": 77524308,
+          "wasmLinearMemoryBytes": 44236800,
+          "payloadBytes": 54224664
+        },
+        "externalImage": {
+          "startupMs": 1575.42,
+          "inputLatencyMsMax": 835.33,
+          "presentationCpuMicrosP95": 2400,
+          "jsHeapBytes": 62545124,
+          "wasmLinearMemoryBytes": 44957696,
+          "payloadBytes": 54222542
+        }
+      }
+    ]
+  }
+}

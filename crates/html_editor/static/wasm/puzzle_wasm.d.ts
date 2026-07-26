@@ -72,9 +72,6 @@ export class WasmSolverService {
     start(artifact_id: string, request: any, now_ms: number): number;
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-export function activate_source_analysis_with_profile(source: string, source_profile: string): number;
-=======
 export class WasmWorkspaceSession {
     free(): void;
     [Symbol.dispose](): void;
@@ -89,7 +86,6 @@ export class WasmWorkspaceSession {
 }
 
 export function activate_source_analysis(source: string): number;
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 
 export function active_source_analysis_entries_json(revision: number): string;
 
@@ -132,17 +128,12 @@ export function apply_source_analysis_edit(revision: number, start_utf16: number
 
 export function compile_preview(source: string, puzzle_path: string, game_css: string, game_visuals_js: string): string;
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-export function compile_workspace_preview(entry_path: string, documents: ReadonlyArray<WorkspaceSourceDocument>, game_css: string, game_visuals_js: string): string;
-
 export function editor_audio_random_music_preset(seed: string): any;
 
 export function editor_audio_random_sfx_preset(seed: string, type_target: string): any;
 
 export function editor_audio_sfx_types(): Array<any>;
 
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 export function export_html(source: string, puzzle_path: string, game_css: string, game_visuals_js: string, player_runtime_module_js: string, player_runtime_wasm_base64: string): string;
 
 export function generate_visuals_js(source: string, base_visuals_js: string): string;
@@ -155,12 +146,8 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_wasmeditoraudio_free: (a: number, b: number) => void;
     readonly __wbg_wasmsolverservice_free: (a: number, b: number) => void;
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-    readonly activate_source_analysis_with_profile: (a: number, b: number, c: number, d: number) => [number, number, number];
-=======
     readonly __wbg_wasmworkspacesession_free: (a: number, b: number) => void;
     readonly activate_source_analysis: (a: number, b: number) => number;
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     readonly active_source_analysis_entries_json: (a: number) => [number, number, number, number];
     readonly active_source_analysis_highlight_range_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly active_source_analysis_import_at_json: (a: number, b: number, c: number, d: number) => [number, number, number, number];
@@ -176,12 +163,8 @@ export interface InitOutput {
     readonly active_source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];
     readonly apply_source_analysis_edit: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
     readonly compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-    readonly compile_workspace_preview: (a: number, b: number, c: any, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly editor_audio_random_music_preset: (a: number, b: number) => [number, number, number];
     readonly editor_audio_random_sfx_preset: (a: number, b: number, c: number, d: number) => [number, number, number];
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     readonly export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
     readonly generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
@@ -208,15 +191,6 @@ export interface InitOutput {
     readonly wasmsolverservice_prepare_source: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly wasmsolverservice_prepare_workspace: (a: number, b: number, c: number, d: any, e: number) => [number, number, number];
     readonly wasmsolverservice_start: (a: number, b: number, c: number, d: any, e: number) => [number, number, number];
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-    readonly workspace_presentation_manifest: (a: number, b: number, c: any) => [number, number, number];
-    readonly editor_audio_sfx_types: () => any;
-    readonly wasm_bindgen__convert__closures_____invoke__h5b8ed1e5fec17ec2: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen__convert__closures_____invoke__h709bd5d4c0b96c84: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h44b7ab73cd046207: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h44b7ab73cd046207_2: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h4681ec085113b112: (a: number, b: number) => void;
-=======
     readonly wasmworkspacesession_compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly wasmworkspacesession_export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
     readonly wasmworkspacesession_index_json: (a: number) => [number, number, number, number];
@@ -225,7 +199,12 @@ export interface InitOutput {
     readonly wasmworkspacesession_replace_documents: (a: number, b: any) => [number, number];
     readonly wasmworkspacesession_revision: (a: number) => number;
     readonly wasmworkspacesession_source_analysis_json: (a: number, b: number, c: number) => [number, number, number, number];
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
+    readonly editor_audio_sfx_types: () => any;
+    readonly wasm_bindgen__convert__closures_____invoke__h01a4c02d46983c91: (a: number, b: number, c: any) => [number, number];
+    readonly wasm_bindgen__convert__closures_____invoke__hc88b208178540d95: (a: number, b: number, c: any, d: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540_2: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen__convert__closures_____invoke__h0e52773364796bcc: (a: number, b: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
     readonly __wbindgen_exn_store: (a: number) => void;

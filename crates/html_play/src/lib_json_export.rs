@@ -1,207 +1,120 @@
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
-fn join_visuals_js(base: &str, generated: &str) -> String {
-    match (base.trim().is_empty(), generated.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => generated.to_string(),
-        (false, true) => base.to_string(),
-        (false, false) => format!("{base}\n{generated}"),
-    }
+fn document_metadata_value(document: &puzzle_lang::LoadedDocument, name: &str) -> Option<String> {
+    document
+        .variables
+        .iter()
+        .find(|variable| !variable.mutable && variable.name == name)
+        .map(|variable| scene_value_to_string(&variable.default))
 }
 
-fn push_puzzle_screen(out: &mut String, loaded: &LoadedGame) {
-    out.push_str("\"screen\":{");
-    out.push_str("\"viewportSize\":");
-    match &loaded.screen.viewport_size {
-        puzzle_lang::ViewportSizeDef::Full => {
-            out.push('{');
-            push_json_pair(out, "kind", "full");
-            out.push('}');
-        }
-        puzzle_lang::ViewportSizeDef::Size { width, height } => {
-            out.push('{');
-            push_json_pair(out, "kind", "size");
-            out.push(',');
-            push_json_number(out, "width", *width as u64);
-            out.push(',');
-            push_json_number(out, "height", *height as u64);
-            out.push('}');
-        }
+fn document_title(document: &puzzle_lang::LoadedDocument) -> String {
+    document_metadata_value(document, "title")
+        .expect("compiled document must contain the canonical `title` constant")
+}
+
+fn preview_state_document(state: &EditorPreviewState) -> &puzzle_lang::LoadedDocument {
+    &state.standalone_export.runtime_loaded_document
+}
+
+fn push_editor_preview_data(out: &mut String, state: &EditorPreviewState) {
+    let document = preview_state_document(state);
+    out.push('{');
+    push_json_pair(out, "title", &document_title(document));
+    out.push(',');
+    out.push_str("\"subtitle\":");
+    if let Some(subtitle) = document_metadata_value(document, "subtitle") {
+        push_json_string(out, &subtitle);
+    } else {
+        out.push_str("null");
     }
     out.push(',');
-    push_json_pair(out, "viewportFocus", &loaded.screen.viewport_focus);
-    out.push_str(",\"viewportFocusObjects\":[");
-    let focus = &loaded.screen.viewport_focus;
-    let mut objects = loaded
-        .object_groups
-        .get(focus)
-        .cloned()
-        .or_else(|| {
-            loaded.object_groups.iter().find_map(|(name, objects)| {
-                name.eq_ignore_ascii_case(focus).then(|| objects.clone())
-            })
-        })
-        .unwrap_or_else(|| {
-            loaded
-                .object_labels
-                .iter()
-                .filter_map(|(object, name)| name.eq_ignore_ascii_case(focus).then_some(*object))
-                .collect()
-        });
-    objects.sort_by_key(|object| object.0);
-    objects.dedup();
-    for (index, object) in objects.iter().enumerate() {
-        if index > 0 { out.push(','); }
-        out.push_str(&object.0.to_string());
-    }
-    out.push_str("],");
-    let mode = match loaded.screen.viewport_mode {
-        puzzle_lang::ViewportModeDef::Paged => "paged",
-        puzzle_lang::ViewportModeDef::Centered => "centered",
-    };
-    push_json_pair(out, "viewportMode", mode);
-    out.push('}');
-}
-
-fn push_scene_regions(out: &mut String, level: Option<&Level>) {
-    out.push_str("\"regions\":[");
-    if let Some(level) = level {
-        for (index, region) in level.regions.iter().enumerate() {
-            if index > 0 {
-                out.push(',');
-            }
-            out.push('{');
-            push_json_number(out, "index", region.index as u64);
-            out.push(',');
-            push_json_number(out, "x", region.x as u64);
-            out.push(',');
-            push_json_number(out, "y", region.y as u64);
-            out.push(',');
-            push_json_number(out, "width", region.width as u64);
-            out.push(',');
-            push_json_number(out, "height", region.height as u64);
-            out.push('}');
-        }
-    }
-    out.push(']');
-}
-
-fn visual_name(object_name: &str) -> String {
-    let mut visual = String::new();
-    for ch in object_name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            visual.push(ch);
-        } else if !visual.ends_with('-') {
-            visual.push('-');
-        }
-    }
-    let visual = visual.trim_matches('-').to_string();
-    if visual.is_empty() {
-        "unknown".to_string()
+    out.push_str("\"author\":");
+    if let Some(author) = document_metadata_value(document, "author") {
+        push_json_string(out, &author);
     } else {
-        visual
+        out.push_str("null");
     }
-}
-
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
-fn push_editor_preview_data(out: &mut String, state: &ServerState) {
-    out.push('{');
+    out.push(',');
+    out.push_str("\"homepage\":");
+    if let Some(homepage) = document_metadata_value(document, "homepage") {
+        push_json_string(out, &homepage);
+    } else {
+        out.push_str("null");
+    }
+    out.push(',');
     push_json_pair(out, "source", &state.source);
     out.push(',');
     push_json_pair(out, "puzzlePath", &state.puzzle_path);
     out.push(',');
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
-    push_json_pair(
-        out,
-        "progressStorageKey",
-        &progress_storage_key(&progress_save_key(&state.loaded, &state.puzzle_path)),
-    );
-    out.push(',');
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     push_json_bool(
         out,
         "acceptsModelInput",
         state.runtime.accepts_model_input(),
     );
     out.push(',');
-    push_export_engine(out, &state.loaded);
-    out.push(',');
-    push_puzzle_screen(out, &state.loaded);
-    out.push(',');
-    push_export_levels(out, &state.loaded);
+    push_editor_preview_models(out, document);
     out.push(',');
     push_runtime_inputs(out, state);
     out.push(',');
     push_runtime_theme(out, state);
     out.push(',');
-    push_export_variables(out, &state.loaded.variables);
+    push_export_variables(out, &document.variables);
     out.push(',');
-    push_export_assets(out, &state.loaded);
+    push_export_assets_from_entries(out, &document.assets);
     out.push(',');
-    push_json_number(out, "defaultWaitMs", state.loaded.default_wait_ms);
+    push_json_number(out, "defaultWaitMs", document.default_wait_ms);
     out.push(',');
-    push_export_input_buffer(out, &state.loaded);
+    push_export_input_buffer_values(
+        out,
+        document.input_buffer.queue_during_wait,
+        document.input_buffer.fast_forward_wait,
+        document.input_buffer.min_wait_ms,
+    );
     out.push(',');
-    push_export_animation(out, &state.loaded);
-    out.push(',');
-    push_export_goal(out, "goal", state.loaded.goal.as_ref());
-    out.push(',');
-    push_export_goal(out, "lose", state.loaded.lose.as_ref());
-    out.push(',');
-    push_export_conditions(out, &state.loaded);
+    push_export_animation_values(
+        out,
+        document.animation.tween.enabled,
+        document.animation.tween.interval_ms,
+    );
     out.push('}');
 }
 
-fn push_export_boot_data(
-    out: &mut String,
-    state: &ServerState,
-    include_source: bool,
-    editor_preview: bool,
-) {
+fn editor_preview_build_json(html: &str, state: &EditorPreviewState) -> String {
+    let mut metadata_json = String::new();
+    push_editor_preview_data(&mut metadata_json, state);
+    let mut metadata: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str::<serde_json::Value>(&metadata_json)
+            .expect("typed editor preview metadata must serialize")
+            .as_object()
+            .expect("typed editor preview metadata must be an object")
+            .clone();
+    let models = metadata
+        .remove("models")
+        .expect("typed editor preview metadata must contain model artifacts");
+    serde_json::to_string(&serde_json::json!({
+        "html": html,
+        "documentMetadata": metadata,
+        "models": models,
+    }))
+    .expect("typed editor preview build must serialize")
+}
+
+fn push_export_boot_data(out: &mut String, editor_preview: bool) {
     out.push('{');
-    if include_source {
-        push_json_pair(out, "source", &state.source);
-        out.push(',');
-        push_json_pair(out, "puzzlePath", &state.puzzle_path);
-        out.push(',');
-    }
+    push_json_pair(out, "engineVersion", env!("CARGO_PKG_VERSION"));
+    out.push(',');
     push_json_bool(out, "editorPreview", editor_preview);
-    out.push(',');
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
-    push_json_pair(
-        out,
-        "progressStorageKey",
-        &progress_storage_key(&progress_save_key(&state.loaded, &state.puzzle_path)),
-    );
-    out.push(',');
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
-    push_json_bool(
-        out,
-        "acceptsModelInput",
-        state.runtime.accepts_model_input(),
-    );
-    out.push(',');
-    push_runtime_inputs(out, state);
-    out.push(',');
-    push_json_number(out, "defaultWaitMs", state.loaded.default_wait_ms);
-    out.push(',');
-    push_export_input_buffer(out, &state.loaded);
-    out.push(',');
-    push_export_animation(out, &state.loaded);
     out.push('}');
 }
 
-fn push_runtime_inputs(out: &mut String, state: &ServerState) {
+fn push_runtime_inputs(out: &mut String, state: &EditorPreviewState) {
     push_runtime_snapshot_field(out, state, "inputs");
 }
 
-fn push_runtime_theme(out: &mut String, state: &ServerState) {
+fn push_runtime_theme(out: &mut String, state: &EditorPreviewState) {
     push_runtime_snapshot_field(out, state, "theme");
 }
 
-fn push_runtime_snapshot_field(out: &mut String, state: &ServerState, field: &str) {
+fn push_runtime_snapshot_field(out: &mut String, state: &EditorPreviewState, field: &str) {
     let snapshot: serde_json::Value = serde_json::from_str(&state.runtime.snapshot_json())
         .expect("runtime snapshot JSON should parse");
     let value = snapshot
@@ -215,14 +128,64 @@ fn push_runtime_snapshot_field(out: &mut String, state: &ServerState, field: &st
     );
 }
 
+fn push_editor_preview_models(out: &mut String, document: &puzzle_lang::LoadedDocument) {
+    out.push_str("\"models\":{");
+    for (index, model) in document.models.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        let (name, kind) = match model {
+            LoadedDocumentModel::Puzzle2d { name, .. } => (name, "puzzle2d"),
+            LoadedDocumentModel::Puzzle3d { name, .. } => (name, "puzzle3d"),
+        };
+        push_json_string(out, name);
+        out.push_str(":{");
+        push_json_pair(out, "kind", kind);
+        match model {
+            LoadedDocumentModel::Puzzle2d { game, .. } => {
+                out.push(',');
+                push_export_engine(out, game);
+                out.push(',');
+                push_puzzle_screen(out, game);
+                out.push(',');
+                push_export_levels(out, game);
+                out.push(',');
+                push_export_variables(out, &game.variables);
+                out.push(',');
+                push_export_assets(out, game);
+                out.push(',');
+                push_json_number(out, "defaultWaitMs", game.default_wait_ms);
+                out.push(',');
+                push_export_input_buffer(out, game);
+                out.push(',');
+                push_export_animation(out, game);
+                out.push(',');
+                push_export_goal(out, "goal", game.goal.as_ref());
+                out.push(',');
+                push_export_goal(out, "lose", game.lose.as_ref());
+                out.push(',');
+                push_export_conditions(out, game);
+            }
+            LoadedDocumentModel::Puzzle3d {
+                game, presentation, ..
+            } => {
+                out.push_str(",\"fixture\":");
+                let fixture = puzzle_lang::export_visual_fixture_json(game, presentation)
+                    .expect("validated 3D editor model must export its visual fixture");
+                out.push_str(&fixture);
+            }
+        }
+        out.push('}');
+    }
+    out.push('}');
+}
+
 fn standalone_progress_storage(
     document: &puzzle_lang::LoadedDocument,
-    puzzle_path: &str,
 ) -> StandaloneProgressStorage {
     let mut hash = 0xcbf29ce484222325_u64;
-    progress_hash_str(&mut hash, puzzle_path);
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-    progress_hash_str(&mut hash, &document.title);
+    let title = document_title(document);
+    progress_hash_str(&mut hash, &title);
     hash = progress_hash_mix(hash, document.models.len() as u64);
     for model in &document.models {
         match model {
@@ -240,7 +203,7 @@ fn standalone_progress_storage(
     StandaloneProgressStorage {
         key: format!(
             "PuzzleStudio.progress.v{save_version}:{}:{hash:016x}",
-            document.title
+            title
         ),
         save_version,
     }
@@ -259,22 +222,6 @@ fn progress_hash_levels<const D: usize, Size: GridSize<D>>(
         }
         *hash = progress_hash_mix(*hash, level.initial_state.hash());
     }
-=======
-    for level in &loaded.levels {
-        progress_hash_str(&mut hash, &level.name);
-        hash = progress_hash_mix(hash, u64::from(level.initial_state.width));
-        hash = progress_hash_mix(hash, u64::from(level.initial_state.height));
-        hash = progress_hash_mix(hash, level.initial_state.hash());
-    }
-    format!("{puzzle_path}:{hash:016x}")
-}
-
-fn progress_storage_key(save_key: &str) -> String {
-    format!(
-        "PuzzleStudio.progress.v{}:{save_key}",
-        puzzle_play::PROGRESS_SAVE_VERSION
-    )
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 }
 
 fn progress_hash_str(hash: &mut u64, value: &str) {
@@ -289,8 +236,12 @@ fn progress_hash_mix(hash: u64, value: u64) -> u64 {
 }
 
 fn push_export_assets(out: &mut String, loaded: &LoadedGame) {
+    push_export_assets_from_entries(out, &loaded.assets);
+}
+
+fn push_export_assets_from_entries(out: &mut String, assets: &puzzle_lang::AssetsDef) {
     out.push_str("\"assets\":[");
-    for (index, asset) in loaded.assets.entries.iter().enumerate() {
+    for (index, asset) in assets.entries.iter().enumerate() {
         if index > 0 {
             out.push(',');
         }
@@ -312,30 +263,44 @@ fn push_export_assets(out: &mut String, loaded: &LoadedGame) {
 }
 
 fn push_export_animation(out: &mut String, loaded: &LoadedGame) {
+    push_export_animation_values(
+        out,
+        loaded.animation.tween.enabled,
+        loaded.animation.tween.interval_ms,
+    );
+}
+
+fn push_export_animation_values(out: &mut String, enabled: bool, interval_ms: u64) {
     out.push_str("\"animation\":{");
     out.push_str("\"tween\":{");
-    push_json_bool(out, "enabled", loaded.animation.tween.enabled);
+    push_json_bool(out, "enabled", enabled);
     out.push(',');
-    push_json_number(out, "intervalMs", loaded.animation.tween.interval_ms);
+    push_json_number(out, "intervalMs", interval_ms);
     out.push('}');
     out.push('}');
 }
 
 fn push_export_input_buffer(out: &mut String, loaded: &LoadedGame) {
-    out.push_str("\"inputBuffer\":{");
-    push_json_bool(
+    push_export_input_buffer_values(
         out,
-        "queueDuringWait",
         loaded.input_buffer.queue_during_wait,
-    );
-    out.push(',');
-    push_json_bool(
-        out,
-        "fastForwardWait",
         loaded.input_buffer.fast_forward_wait,
+        loaded.input_buffer.min_wait_ms,
     );
+}
+
+fn push_export_input_buffer_values(
+    out: &mut String,
+    queue_during_wait: bool,
+    fast_forward_wait: bool,
+    min_wait_ms: u64,
+) {
+    out.push_str("\"inputBuffer\":{");
+    push_json_bool(out, "queueDuringWait", queue_during_wait);
     out.push(',');
-    push_json_number(out, "minWaitMs", loaded.input_buffer.min_wait_ms);
+    push_json_bool(out, "fastForwardWait", fast_forward_wait);
+    out.push(',');
+    push_json_number(out, "minWaitMs", min_wait_ms);
     out.push('}');
 }
 
@@ -439,7 +404,7 @@ fn push_rule_animation(out: &mut String, animation: &RuleAnimation) {
 fn runtime_export_json(
     export: &StandaloneRuntimeExport<puzzle_lang::LoadedDocument>,
 ) -> Result<String, serde_json::Error> {
-    serde_json::to_string(export)
+    puzzle_player_bootstrap::encode_standalone_player_export(export)
 }
 
 fn push_export_model_variables(out: &mut String, loaded: &LoadedGame) {

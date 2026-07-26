@@ -826,15 +826,33 @@ mod tests {
         .expect("parse sample game");
         let text = inspect_document_text(&document);
 
-        assert!(text.contains("scenes:\n"));
-        assert!(text.contains("  0: title\n"));
-        assert!(text.contains("  1: playing\n"));
-        assert!(text.contains("levels:\n"));
-        assert!(text.contains("  0: microban.1\n"));
-        assert!(text.contains("  1: microban.2\n"));
-        assert!(text.contains("inputs:\n"));
-        assert!(text.contains("  up\n"));
-        assert!(text.contains("  right\n"));
+        assert_eq!(
+            text,
+            "\
+scenes:
+  0: sokoban
+  1: title
+  2: playing
+  3: level_select
+levels:
+  0: microban_01
+  1: microban_02
+  2: microban_03
+  3: microban_04
+  4: microban_05
+  5: microban_06
+  6: microban_07
+  7: microban_08
+  8: microban_09
+  9: microban_10
+inputs:
+  restart
+  up
+  down
+  left
+  right
+"
+        );
     }
 
     #[test]

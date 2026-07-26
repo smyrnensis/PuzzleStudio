@@ -46,7 +46,22 @@ pub struct SourceTarget {
     pub level_index: Option<usize>,
     pub sound_kind: Option<SoundSourceTargetKind>,
     pub params: Vec<(String, String)>,
+    pub source_level: Option<SourceLevelDocument>,
     pub source_visual: Option<SourceVisualDocument>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceLevelDocument {
+    pub rows: Vec<String>,
+    pub legend: Vec<SourceLevelLegendEntry>,
+    pub local_legends: Vec<SourceLevelLegendEntry>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceLevelLegendEntry {
+    pub symbol: String,
+    pub selectors: Vec<String>,
+    pub objects: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -260,11 +275,46 @@ fn push_target_json(out: &mut String, target: &SourceTarget) {
         }
         out.push('}');
     }
+    if let Some(level) = &target.source_level {
+        out.push_str(",\"sourceLevel\":");
+        push_source_level_json(out, level);
+    }
     if let Some(visual) = &target.source_visual {
         out.push_str(",\"sourceVisual\":");
         push_source_visual_json(out, visual);
     }
     out.push('}');
+}
+
+fn push_source_level_json(out: &mut String, level: &SourceLevelDocument) {
+    out.push('{');
+    push_json_string_array(out, "rows", &level.rows);
+    out.push_str(",\"legend\":");
+    push_source_level_legends_json(out, &level.legend);
+    out.push_str(",\"localLegends\":");
+    push_source_level_legends_json(out, &level.local_legends);
+    out.push('}');
+}
+
+fn push_source_level_legends_json(out: &mut String, legends: &[SourceLevelLegendEntry]) {
+    out.push('[');
+    for (index, legend) in legends.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('{');
+        push_json_string(out, "symbol", &legend.symbol);
+        out.push(',');
+        push_json_string_array(out, "selectors", &legend.selectors);
+        out.push(',');
+        if let Some(objects) = &legend.objects {
+            push_json_string_array(out, "objects", objects);
+        } else {
+            out.push_str("\"objects\":null");
+        }
+        out.push('}');
+    }
+    out.push(']');
 }
 
 fn push_source_visual_json(out: &mut String, visual: &SourceVisualTarget) {
@@ -506,6 +556,7 @@ fn resolve_sound_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
                 crate::surface::SurfaceSoundKind::Music => SoundSourceTargetKind::Music,
             }),
             params: sound.params.clone(),
+            source_level: None,
             source_visual: None,
         })
         .collect()
@@ -523,6 +574,32 @@ fn resolve_level_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
             if let Some(puzzle) = &product.puzzle {
                 params.push(("model".to_string(), puzzle.clone()));
             }
+            let local_legends = product
+                .local_legends
+                .iter()
+                .map(|legend| SourceLevelLegendEntry {
+                    symbol: legend.symbol.to_string(),
+                    selectors: legend.selectors.clone(),
+                    objects: legend.objects.clone(),
+                })
+                .collect::<Vec<_>>();
+            let mut legend = product
+                .shared_legends
+                .iter()
+                .map(|legend| SourceLevelLegendEntry {
+                    symbol: legend.symbol.to_string(),
+                    selectors: legend.selectors.clone(),
+                    objects: legend.objects.clone(),
+                })
+                .collect::<Vec<_>>();
+            for local in &local_legends {
+                if let Some(existing) = legend.iter_mut().find(|entry| entry.symbol == local.symbol)
+                {
+                    *existing = local.clone();
+                } else {
+                    legend.push(local.clone());
+                }
+            }
             SourceTarget {
                 kind: SourceTargetKind::Level,
                 dimension: Some(product.dimension),
@@ -534,6 +611,11 @@ fn resolve_level_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
                 level_index: Some(product.level_index),
                 sound_kind: None,
                 params,
+                source_level: Some(SourceLevelDocument {
+                    rows: product.rows.clone(),
+                    legend,
+                    local_legends,
+                }),
                 source_visual: None,
             }
         })
@@ -556,6 +638,7 @@ fn resolve_visual_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
             level_index: None,
             sound_kind: None,
             params: Vec::new(),
+            source_level: None,
             source_visual: None,
         })
         .collect()
@@ -1192,7 +1275,7 @@ mod tests {
     use super::{
         SoundSourceTargetKind, SourceTargetKind, SourceVisualPaletteEntry, SourceVisualShapeAsset,
         SourceVisualStatus, resolve_source_entries_from_document,
-        resolve_source_target_for_owner_dimension,
+        resolve_source_target_for_owner_dimension, source_entries_json,
     };
 
     fn resolve_source_target(source: &str, cursor: usize) -> Option<super::SourceTarget> {
@@ -1265,6 +1348,9 @@ level "two" {
 
 puzzle board3 {
 dimension = 3
+layers {
+Cube
+}
 visuals {
 Cube {
 colors = #fff
@@ -1273,9 +1359,18 @@ shape = {
 }
 }
 }
+groups {
+Solid = Cube
+}
 levels pack of board3 {
+legend {
+0 = Cube
+}
 level "three" {
-0
+legend {
+A = Solid
+}
+A
 }
 }
 }
@@ -1288,16 +1383,49 @@ level "three" {
                 .iter()
                 .any(|entry| { entry.kind == SourceTargetKind::Visual && entry.name == "Player" })
         );
-        assert!(entries.iter().any(|entry| {
-            entry.kind == SourceTargetKind::Level
-                && entry.dimension == Some(crate::ModelDimension::Three)
-                && entry.name == "three"
-                && entry.params
-                    == vec![
-                        ("bundle".to_string(), "pack".to_string()),
-                        ("model".to_string(), "board3".to_string()),
-                    ]
-        }));
+        let level3d = entries
+            .iter()
+            .find(|entry| {
+                entry.kind == SourceTargetKind::Level
+                    && entry.dimension == Some(crate::ModelDimension::Three)
+                    && entry.name == "three"
+            })
+            .expect("typed 3D level source target");
+        assert_eq!(
+            level3d.params,
+            vec![
+                ("bundle".to_string(), "pack".to_string()),
+                ("model".to_string(), "board3".to_string()),
+            ]
+        );
+        let source_level = level3d
+            .source_level
+            .as_ref()
+            .expect("source level document");
+        assert_eq!(source_level.rows, ["A"]);
+        assert_eq!(source_level.legend[0].symbol, "0");
+        assert_eq!(source_level.legend[1].symbol, "A");
+        assert_eq!(source_level.legend[1].selectors, ["Solid"]);
+        assert_eq!(
+            source_level.legend[1].objects.as_ref(),
+            Some(&vec!["Cube".to_string()])
+        );
+        assert_eq!(source_level.local_legends, [source_level.legend[1].clone()]);
+        let json: serde_json::Value =
+            serde_json::from_str(&source_entries_json(source)).expect("source entries JSON");
+        let json_level3d = json
+            .get("entries")
+            .and_then(serde_json::Value::as_array)
+            .expect("source entry array")
+            .iter()
+            .find(|entry| entry["kind"] == "level" && entry["name"] == "three")
+            .expect("serialized 3D level source target");
+        assert_eq!(json_level3d["sourceLevel"]["rows"][0], "A");
+        assert_eq!(json_level3d["sourceLevel"]["legend"][1]["symbol"], "A");
+        assert_eq!(
+            json_level3d["sourceLevel"]["localLegends"][0]["selectors"][0],
+            "Solid"
+        );
         assert!(entries.iter().any(|entry| {
             entry.kind == SourceTargetKind::Visual
                 && entry.dimension == Some(crate::ModelDimension::Three)

@@ -145,10 +145,7 @@ pub use puzzle3_model::{
 pub use puzzle3_visual::{VoxelColor, VoxelFrame, VoxelVisual, VoxelVisualSet};
 pub use puzzle3_visual_fixture::{
     VisualFixtureExportError, export_visual_fixture_json, export_visual_fixture_json_with_scenes,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
     export_visual_fixture_json_with_title, export_visual_fixture_json_with_title_and_scenes,
-=======
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
     runtime_puzzle3_cells, runtime_puzzle3_resources, runtime_puzzle3_size,
 };
 pub use puzzlescript::translate_puzzlescript_to_canonical;
@@ -159,14 +156,10 @@ use source::{
 };
 pub use visual_spatial::{SpatialVisualAffine, evaluate_spatial_visual_transforms};
 pub use workspace::{
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-    WorkspacePresentationManifest, WorkspaceSourceDocument, loaded_document_presentation_manifest,
-    workspace_presentation_manifest,
-=======
     WorkspaceAnalysis, WorkspaceGraphDiagnostic, WorkspaceImportEdge, WorkspaceImportStatus,
     WorkspaceIndex, WorkspaceIndexDocument, WorkspacePath, WorkspacePresentationManifest,
-    WorkspaceSourceDocument, workspace_presentation_manifest_from_document,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
+    WorkspaceSourceDocument, loaded_document_presentation_manifest,
+    workspace_presentation_manifest, workspace_presentation_manifest_from_document,
 };
 
 pub fn parse_level_ascii_state(
@@ -200,22 +193,18 @@ pub use source_analysis::{
     SourceAnalysis, SourceAnalysisEdit, SourceAnalysisEditResult, analyze_source,
     analyze_source_for_owner_dimension, analyze_source_json,
 };
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-pub use source_import::{SourceImportRange, SourceImportReference};
-pub use source_level_edit::{LevelLegendDraft, LevelSourceRequest, LevelSourceResponse};
-=======
 pub use source_import::{SourceImportDeclaration, SourceImportRange, SourceImportReference};
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
+pub use source_level_edit::{LevelLegendDraft, LevelSourceRequest, LevelSourceResponse};
 pub use source_outline::{SourceOutlineItem, source_outline, source_outline_json};
 pub use source_sound_edit::{
     SoundDefinitionDraft, SoundDefinitionInspection, SoundDefinitionKind,
     SoundSourceMutationResult, SoundSourceRequest, SoundSourceResponse,
 };
 pub use source_target::{
-    SoundSourceTargetKind, SourceTarget, SourceTargetKind, SourceVisualColorAsset,
-    SourceVisualDocument, SourceVisualPaletteEntry, SourceVisualShapeAsset, SourceVisualStatus,
-    SourceVisualTarget, resolve_source_target, resolve_source_target_for_owner_dimension,
-    source_entries_json, source_target_json,
+    SoundSourceTargetKind, SourceLevelDocument, SourceLevelLegendEntry, SourceTarget,
+    SourceTargetKind, SourceVisualColorAsset, SourceVisualDocument, SourceVisualPaletteEntry,
+    SourceVisualShapeAsset, SourceVisualStatus, SourceVisualTarget, resolve_source_target,
+    resolve_source_target_for_owner_dimension, source_entries_json, source_target_json,
 };
 pub use source_visual_edit::{VisualEditMutationResult, mutate_visual_source};
 use surface::{

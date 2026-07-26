@@ -2576,30 +2576,13 @@ impl<'a> ProgramLowerer<'a> {
                         .into(),
                     );
                 }
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-                EffectAst::PresentComponent { text, literal } => {
-                    lowered.ordered.push(
-                        RuntimeEffect::PresentComponent {
-                            definition: "standard.message".to_string(),
-                            properties: vec![puzzle_runtime_contract::RuntimeComponentProperty {
-                                name: "text".to_string(),
-                                value: text.clone(),
-                                literal: *literal,
-                            }],
-                            placement: puzzle_runtime_contract::ComponentPlacement::Overlay,
-                            await_event: Some("dismiss".to_string()),
-                        }
-                        .into(),
-                    );
-=======
                 EffectAst::Message { text, literal } => {
                     lowered
                         .ordered
                         .push(puzzle_runtime_contract::standard_message_effect(
                             text.clone(),
                             *literal,
-                        ));
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
+                        ).into());
                 }
                 EffectAst::Scene(effect) => {
                     lowered.ordered.push(RuleEffect::Lifecycle(effect.clone()));

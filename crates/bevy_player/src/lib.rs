@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     error::Error,
@@ -37,10 +39,11 @@ use puzzle_player_bootstrap::{PlayerBootstrapError, decode_standalone_player_exp
 #[cfg(test)]
 use puzzle_runtime_contract::RuntimeProgressPersistenceOperation;
 use puzzle_runtime_contract::{
-    RuntimeAnimationEvent, RuntimeKeyTrigger, RuntimeLinearRgba, RuntimePresentationEvent,
-    RuntimeProgressSaveRequest, RuntimePuzzle3CameraProjection, RuntimeResolvedRenderFrame,
-    RuntimeResolvedRenderMoment, RuntimeSceneActionToken, RuntimeTheme, RuntimeUiTextStyle,
-    RuntimeViewportSourceId, SessionAction, StandaloneProgressStorage,
+    RuntimeAnimationEvent, RuntimeKeyTrigger, RuntimeLinearRgba,
+    RuntimePresentationContinuationToken, RuntimePresentationEvent, RuntimeProgressSaveRequest,
+    RuntimePuzzle3CameraProjection, RuntimeResolvedRenderFrame, RuntimeResolvedRenderMoment,
+    RuntimeSceneActionToken, RuntimeTheme, RuntimeUiTextStyle, RuntimeViewportSourceId,
+    SessionAction, StandaloneProgressStorage,
 };
 use puzzle_scene::SceneTextRole;
 use puzzle_session_contract::{
@@ -52,6 +55,40 @@ fn audio_frame(now_seconds: f64) -> u64 {
     (now_seconds.max(0.0) * f64::from(CANONICAL_AUDIO_SAMPLE_RATE))
         .floor()
         .min(u64::MAX as f64) as u64
+}
+
+fn presentation_clock_micros() -> Option<u64> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let milliseconds = web_sys::window()?.performance()?.now();
+        milliseconds
+            .is_finite()
+            .then(|| (milliseconds.max(0.0) * 1_000.0).min(u64::MAX as f64) as u64)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::sync::OnceLock;
+        static EPOCH: OnceLock<Instant> = OnceLock::new();
+        Some(
+            u64::try_from(EPOCH.get_or_init(Instant::now).elapsed().as_micros())
+                .unwrap_or(u64::MAX),
+        )
+    }
+}
+
+fn wasm_linear_memory_bytes() -> Option<u64> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Some(
+            u64::try_from(core::arch::wasm32::memory_size(0))
+                .unwrap_or(u64::MAX)
+                .saturating_mul(65_536),
+        )
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
+    }
 }
 
 fn initial_audio_capability() -> AudioCapabilityState {
@@ -249,9 +286,9 @@ pub struct PuzzleBevyPlayerHost {
     snapshot: RuntimeSessionSnapshot,
     viewports: BTreeMap<RuntimeViewportSourceId, HostViewport>,
     pending_presentation: VecDeque<QueuedPresentationEvent>,
+    pending_presentation_continuation: Option<RuntimePresentationContinuationToken>,
     audio_runtime: AudioRuntime,
     pending_audio: Vec<AudioDeviceCommand>,
-    resume_after_events: bool,
     wait_until_seconds: Option<f64>,
     clip_epoch_seconds: f64,
     fatal_error: Option<String>,
@@ -313,9 +350,9 @@ impl PuzzleBevyPlayerHost {
             snapshot,
             viewports,
             pending_presentation: VecDeque::new(),
+            pending_presentation_continuation: None,
             audio_runtime: AudioRuntime::new(audio_catalog, initial_audio_capability()),
             pending_audio: Vec::new(),
-            resume_after_events: false,
             wait_until_seconds: None,
             clip_epoch_seconds: 0.0,
             fatal_error: None,
@@ -349,6 +386,10 @@ impl PuzzleBevyPlayerHost {
 
     pub fn take_audio_diagnostics(&mut self) -> Vec<AudioDiagnostic> {
         self.audio_runtime.take_diagnostics()
+    }
+
+    pub fn audio_capability(&self) -> AudioCapabilityState {
+        self.audio_runtime.capability()
     }
 
     fn audio_catalog(&self) -> Arc<puzzle_audio::AudioAssetCatalog> {
@@ -397,13 +438,19 @@ impl PuzzleBevyPlayerHost {
         if let Some(error) = &self.fatal_error {
             return Err(BevyPlayerError::Runtime(error.clone()));
         }
-        let wait_was_active = self.wait_until_seconds.is_some();
+        let presentation_queue_was_active =
+            self.wait_until_seconds.is_some() || !self.pending_presentation.is_empty();
+        let previous_continuation = self.pending_presentation_continuation.clone();
         let snapshot = self
             .runtime
             .dispatch_typed(action)
             .map_err(BevyPlayerError::Runtime)?;
-        let preserve_event_queue = preserve_wait_event_queue(wait_was_active, &snapshot);
-        self.apply_snapshot(snapshot, now_seconds, preserve_event_queue)
+        self.apply_snapshot_preserving_matching_presentation(
+            snapshot,
+            now_seconds,
+            presentation_queue_was_active,
+            previous_continuation.as_ref(),
+        )
     }
 
     pub fn restore_progress_save(
@@ -429,7 +476,7 @@ impl PuzzleBevyPlayerHost {
         self.confirm_progress_persistence_applied_with(
             request_id,
             now_seconds,
-            Self::refresh_runtime_snapshot,
+            Self::refresh_runtime_snapshot_preserving_presentation,
         )
     }
 
@@ -483,11 +530,10 @@ impl PuzzleBevyPlayerHost {
                 }
             }
         }
-        if self.resume_after_events && self.snapshot.busy {
-            self.resume_after_events = false;
+        if let Some(token) = self.pending_presentation_continuation.take() {
             let snapshot = self
                 .runtime
-                .dispatch_typed(SessionAction::Resume)
+                .dispatch_typed(SessionAction::PresentationComplete { token })
                 .map_err(BevyPlayerError::Runtime)?;
             self.apply_snapshot(snapshot, now_seconds, false)?;
         }
@@ -541,6 +587,37 @@ impl PuzzleBevyPlayerHost {
         self.apply_snapshot(snapshot, now_seconds, false)
     }
 
+    fn refresh_runtime_snapshot_preserving_presentation(
+        &mut self,
+        now_seconds: f64,
+    ) -> Result<(), BevyPlayerError> {
+        let presentation_queue_was_active =
+            self.wait_until_seconds.is_some() || !self.pending_presentation.is_empty();
+        let previous_continuation = self.pending_presentation_continuation.clone();
+        let snapshot = self.runtime.snapshot();
+        self.apply_snapshot_preserving_matching_presentation(
+            snapshot,
+            now_seconds,
+            presentation_queue_was_active,
+            previous_continuation.as_ref(),
+        )
+    }
+
+    fn apply_snapshot_preserving_matching_presentation(
+        &mut self,
+        snapshot: RuntimeSessionSnapshot,
+        now_seconds: f64,
+        presentation_queue_was_active: bool,
+        previous_continuation: Option<&RuntimePresentationContinuationToken>,
+    ) -> Result<(), BevyPlayerError> {
+        let preserve_event_queue = preserve_presentation_event_queue(
+            presentation_queue_was_active,
+            previous_continuation,
+            snapshot.presentation_continuation.as_ref(),
+        );
+        self.apply_snapshot(snapshot, now_seconds, preserve_event_queue)
+    }
+
     fn apply_snapshot(
         &mut self,
         snapshot: RuntimeSessionSnapshot,
@@ -555,6 +632,16 @@ impl PuzzleBevyPlayerHost {
             }
         }
         self.viewports = next;
+        if preserve_event_queue {
+            self.pending_presentation.extend(
+                snapshot
+                    .presentation_events
+                    .iter()
+                    .cloned()
+                    .map(|event| QueuedPresentationEvent { event }),
+            );
+            self.pending_presentation_continuation = snapshot.presentation_continuation.clone();
+        }
         self.snapshot = snapshot;
         if !preserve_event_queue {
             for viewport in self.viewports.values_mut() {
@@ -575,7 +662,7 @@ impl PuzzleBevyPlayerHost {
                 event: event.clone(),
             })
             .collect();
-        self.resume_after_events = self.snapshot.busy;
+        self.pending_presentation_continuation = self.snapshot.presentation_continuation.clone();
         self.wait_until_seconds = None;
     }
 
@@ -871,9 +958,26 @@ struct TouchScrollTargets(HashMap<u64, Entity>);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PuzzleBevyPlayerObservation {
     pub sequence: u64,
+    pub submission_sequence: u64,
     pub revision: u64,
     pub surface_focus: String,
     pub viewport_count: usize,
+    pub submission_interval_micros: u64,
+    pub presentation_cpu_micros: Option<u64>,
+    pub wasm_linear_memory_bytes: Option<u64>,
+    pub progress_fingerprint: u64,
+    pub audio_capability: AudioCapabilityState,
+}
+
+impl PuzzleBevyPlayerObservation {
+    pub fn audio_capability_label(&self) -> &'static str {
+        match self.audio_capability {
+            AudioCapabilityState::Locked => "locked",
+            AudioCapabilityState::Ready => "ready",
+            AudioCapabilityState::Suspended => "suspended",
+            AudioCapabilityState::Unavailable => "unavailable",
+        }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -881,12 +985,31 @@ pub struct PuzzleBevyPlayerObservationState {
     latest: Option<PuzzleBevyPlayerObservation>,
 }
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct PendingPuzzleBevyPlayerObservation {
     revision: u64,
     surface_focus: String,
     viewport_count: usize,
+    submission_interval_micros: u64,
+    presentation_started_micros: Option<u64>,
+    progress_fingerprint: u64,
+    audio_capability: AudioCapabilityState,
     present: bool,
+}
+
+impl Default for PendingPuzzleBevyPlayerObservation {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            surface_focus: String::new(),
+            viewport_count: 0,
+            submission_interval_micros: 0,
+            presentation_started_micros: None,
+            progress_fingerprint: 0,
+            audio_capability: initial_audio_capability(),
+            present: false,
+        }
+    }
 }
 
 impl PuzzleBevyPlayerObservationState {
@@ -894,24 +1017,45 @@ impl PuzzleBevyPlayerObservationState {
         self.latest.as_ref()
     }
 
-    fn record_submission(&mut self, revision: u64, surface_focus: &str, viewport_count: usize) {
+    fn record_submission(
+        &mut self,
+        revision: u64,
+        surface_focus: &str,
+        viewport_count: usize,
+        submission_interval_micros: u64,
+        presentation_cpu_micros: Option<u64>,
+        wasm_linear_memory_bytes: Option<u64>,
+        progress_fingerprint: u64,
+        audio_capability: AudioCapabilityState,
+    ) {
         let changed = self.latest.as_ref().is_none_or(|latest| {
             latest.revision != revision
                 || latest.surface_focus != surface_focus
                 || latest.viewport_count != viewport_count
+                || latest.progress_fingerprint != progress_fingerprint
         });
-        if !changed {
-            return;
-        }
-        let sequence = self
+        let sequence = if changed {
+            self.latest
+                .as_ref()
+                .map_or(1, |latest| latest.sequence.saturating_add(1))
+        } else {
+            self.latest.as_ref().map_or(1, |latest| latest.sequence)
+        };
+        let submission_sequence = self
             .latest
             .as_ref()
-            .map_or(1, |latest| latest.sequence.saturating_add(1));
+            .map_or(1, |latest| latest.submission_sequence.saturating_add(1));
         self.latest = Some(PuzzleBevyPlayerObservation {
             sequence,
+            submission_sequence,
             revision,
             surface_focus: surface_focus.to_string(),
             viewport_count,
+            submission_interval_micros,
+            presentation_cpu_micros,
+            wasm_linear_memory_bytes,
+            progress_fingerprint,
+            audio_capability,
         });
     }
 }
@@ -1393,7 +1537,7 @@ fn sync_ui_component(
         }
         RuntimeResolvedSceneComponent::Viewport { source, layout, .. } => {
             entity_commands.insert((
-                node_from_layout(layout, None),
+                viewport_node_from_layout(layout),
                 PuzzleBevyUiViewport(source.clone()),
             ));
         }
@@ -1473,6 +1617,14 @@ fn node_from_layout(layout: &puzzle_scene::SceneLayout, direction: Option<FlexDi
     if let SceneSpace::Fill { weight } = layout.space {
         node.flex_grow = f32::from(weight);
         node.flex_basis = px(0);
+    }
+    node
+}
+
+fn viewport_node_from_layout(layout: &puzzle_scene::SceneLayout) -> Node {
+    let mut node = node_from_layout(layout, None);
+    if layout.align_self.is_none() {
+        node.align_self = AlignSelf::Stretch;
     }
     node
 }
@@ -1809,6 +1961,7 @@ fn submit_resolved_frames(
     mut pending_observation: ResMut<PendingPuzzleBevyPlayerObservation>,
     mut host: NonSendMut<PuzzleBevyPlayerHost>,
 ) {
+    pending_observation.presentation_started_micros = presentation_clock_micros();
     let Ok(window) = primary_window.single() else {
         if !host.viewports.is_empty() {
             host.fail(BevyPlayerError::MissingPrimaryWindow);
@@ -1856,6 +2009,20 @@ fn submit_resolved_frames(
             return;
         }
     };
+    let order_by_id = host
+        .viewports
+        .values()
+        .map(|viewport| {
+            (
+                view_id(&viewport.source, &viewport.renderer),
+                viewport.order,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if let Err(error) = reconcile_view_camera_orders(&mut queue_2d, &mut queue_3d, &order_by_id) {
+        host.fail(error);
+        return;
+    }
     let submitted = submitted_ids.0.clone();
     for removed in submitted.difference(&active) {
         let result = match removed.dimension {
@@ -1867,16 +2034,6 @@ fn submit_resolved_frames(
             return;
         }
     }
-    let order_by_id = host
-        .viewports
-        .values()
-        .map(|viewport| {
-            (
-                view_id(&viewport.source, &viewport.renderer),
-                viewport.order,
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
     let clear_color = bevy_color(host.snapshot.theme.background);
     for resolved in frames {
         let Some(framebuffer) = framebuffer_by_source.get(&resolved.source).copied() else {
@@ -1930,20 +2087,54 @@ fn submit_resolved_frames(
     pending_observation.revision = host.snapshot.revision;
     pending_observation.surface_focus = host.snapshot.surface.focus.clone();
     pending_observation.viewport_count = host.viewports.len();
+    pending_observation.submission_interval_micros =
+        u64::try_from(time.delta().as_micros()).unwrap_or(u64::MAX);
+    pending_observation.progress_fingerprint = host.runtime.progress_state_fingerprint();
+    pending_observation.audio_capability = host.audio_capability();
     pending_observation.present = true;
 }
 
+fn reconcile_view_camera_orders(
+    queue_2d: &mut BevyResolvedFrameQueue2d,
+    queue_3d: &mut BevyResolvedFrameQueue,
+    order_by_id: &BTreeMap<PuzzleBevyViewId, isize>,
+) -> Result<(), BevyPlayerError> {
+    let desired_2d = order_by_id
+        .iter()
+        .filter(|(id, _)| id.dimension == puzzle_bevy_renderer::PuzzleBevyViewDimension::TwoD)
+        .map(|(id, order)| (id.clone(), *order))
+        .collect::<BTreeMap<_, _>>();
+    let desired_3d = order_by_id
+        .iter()
+        .filter(|(id, _)| id.dimension == puzzle_bevy_renderer::PuzzleBevyViewDimension::ThreeD)
+        .map(|(id, order)| (id.clone(), *order))
+        .collect::<BTreeMap<_, _>>();
+    queue_2d.reconcile_camera_orders(&desired_2d)?;
+    queue_3d.reconcile_camera_orders(&desired_3d)?;
+    Ok(())
+}
+
 fn commit_player_observation(
-    pending: Res<PendingPuzzleBevyPlayerObservation>,
+    mut pending: ResMut<PendingPuzzleBevyPlayerObservation>,
     mut observations: ResMut<PuzzleBevyPlayerObservationState>,
 ) {
     if !pending.present {
         return;
     }
+    let presentation_cpu_micros = pending
+        .presentation_started_micros
+        .take()
+        .zip(presentation_clock_micros())
+        .map(|(started_at, finished_at)| finished_at.saturating_sub(started_at));
     observations.record_submission(
         pending.revision,
         &pending.surface_focus,
         pending.viewport_count,
+        pending.submission_interval_micros,
+        presentation_cpu_micros,
+        wasm_linear_memory_bytes(),
+        pending.progress_fingerprint,
+        pending.audio_capability,
     );
 }
 
@@ -2057,8 +2248,16 @@ fn bevy_render_settings(
     }
 }
 
-fn preserve_wait_event_queue(wait_was_active: bool, snapshot: &RuntimeSessionSnapshot) -> bool {
-    wait_was_active && snapshot.busy
+fn preserve_presentation_event_queue(
+    queue_was_active: bool,
+    previous: Option<&RuntimePresentationContinuationToken>,
+    next: Option<&RuntimePresentationContinuationToken>,
+) -> bool {
+    queue_was_active
+        && matches!(
+            (previous, next),
+            (Some(previous), Some(next)) if previous.waits == next.waits
+        )
 }
 
 fn runtime_key_trigger(key: &Key) -> Option<RuntimeKeyTrigger> {
@@ -2093,8 +2292,38 @@ mod tests {
     use puzzle_runtime_contract::StandaloneRuntimeExport;
 
     const TENETEN: &str = include_str!("../../../games/TENETEN.puzzle");
-    const TENETEN3D: &str = include_str!("../../../games/TENETEN3D.puzzle3");
+    const TENETEN3D: &str = include_str!("../../../games/TENETEN3D.puzzle");
     const ANIMATION_TEST_2D: &str = include_str!("../../../games/animation_test.puzzle");
+    const TIMED_WAIT: &str = r#"
+const title = bevy_timed_wait
+puzzle default {
+input first
+input second
+layers { actor = A B C }
+empty .
+rules {
+if input == first {
+[ A ] -> [ C ]
+fall
+}
+if input == second {
+[ B ] -> [ A ]
+}
+}
+routine fall {
+[ C ] -> wait 100ms
+[ C ] -> [ B ]
+}
+levels {
+legend {
+A = A
+B = B
+C = C
+}
+level "start" { A }
+}
+}
+"#;
 
     #[test]
     fn player_separates_theme_clear_and_ui_composition_from_renderer_views() {
@@ -2137,27 +2366,83 @@ mod tests {
     #[test]
     fn player_observation_advances_only_after_semantic_submission_changes() {
         let mut state = PuzzleBevyPlayerObservationState::default();
-        state.record_submission(4, "title", 0);
+        state.record_submission(
+            4,
+            "title",
+            0,
+            16_000,
+            Some(240),
+            None,
+            11,
+            AudioCapabilityState::Locked,
+        );
         assert_eq!(
             state.latest(),
             Some(&PuzzleBevyPlayerObservation {
                 sequence: 1,
+                submission_sequence: 1,
                 revision: 4,
                 surface_focus: "title".to_string(),
                 viewport_count: 0,
+                submission_interval_micros: 16_000,
+                presentation_cpu_micros: Some(240),
+                wasm_linear_memory_bytes: None,
+                progress_fingerprint: 11,
+                audio_capability: AudioCapabilityState::Locked,
             })
         );
 
-        state.record_submission(4, "title", 0);
+        state.record_submission(
+            4,
+            "title",
+            0,
+            17_000,
+            Some(260),
+            None,
+            11,
+            AudioCapabilityState::Ready,
+        );
         assert_eq!(state.latest().unwrap().sequence, 1);
-        state.record_submission(5, "playing", 1);
+        assert_eq!(state.latest().unwrap().submission_sequence, 2);
+        assert_eq!(
+            state.latest().unwrap().audio_capability,
+            AudioCapabilityState::Ready
+        );
+        state.record_submission(
+            4,
+            "title",
+            0,
+            17_500,
+            Some(270),
+            None,
+            12,
+            AudioCapabilityState::Ready,
+        );
+        assert_eq!(state.latest().unwrap().sequence, 2);
+        assert_eq!(state.latest().unwrap().submission_sequence, 3);
+        state.record_submission(
+            5,
+            "playing",
+            1,
+            18_000,
+            Some(280),
+            None,
+            12,
+            AudioCapabilityState::Ready,
+        );
         assert_eq!(
             state.latest(),
             Some(&PuzzleBevyPlayerObservation {
-                sequence: 2,
+                sequence: 3,
+                submission_sequence: 4,
                 revision: 5,
                 surface_focus: "playing".to_string(),
                 viewport_count: 1,
+                submission_interval_micros: 18_000,
+                presentation_cpu_micros: Some(280),
+                wasm_linear_memory_bytes: None,
+                progress_fingerprint: 12,
+                audio_capability: AudioCapabilityState::Ready,
             })
         );
     }
@@ -2285,6 +2570,50 @@ mod tests {
     }
 
     #[test]
+    fn progress_ack_during_an_active_timed_wait_preserves_its_deadline() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(TIMED_WAIT, "bevy_timed_wait.puzzle")
+                .unwrap();
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "first".to_string(),
+            },
+            0.0,
+        )
+        .unwrap();
+        let request = host
+            .pending_progress_save()
+            .expect("the mutation that starts the wait must request persistence");
+        let waiting_revision = host.snapshot().revision;
+
+        host.process_presentation(0.0).unwrap();
+        assert_eq!(host.wait_until_seconds, Some(0.1));
+        assert!(host.pending_presentation.is_empty());
+
+        host.confirm_progress_persistence_applied(request.request_id, 0.05)
+            .unwrap();
+
+        assert!(host.pending_progress_save().is_none());
+        assert_eq!(
+            host.wait_until_seconds,
+            Some(0.1),
+            "persistence acknowledgement must not restart or bypass the authored wait"
+        );
+        assert!(host.pending_presentation.is_empty());
+        assert!(host.pending_presentation_continuation.is_some());
+
+        host.process_presentation(0.099).unwrap();
+        assert_eq!(host.snapshot().revision, waiting_revision);
+        assert!(host.snapshot().presentation_continuation.is_some());
+
+        host.process_presentation(0.1).unwrap();
+        assert!(!host.snapshot().busy);
+        assert!(host.snapshot().presentation_continuation.is_none());
+        assert!(host.pending_presentation_continuation.is_none());
+        assert!(host.fatal_error().is_none());
+    }
+
+    #[test]
     fn committed_progress_ack_is_not_reported_as_retryable_when_projection_fails() {
         let mut host =
             PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
@@ -2327,7 +2656,7 @@ mod tests {
     #[test]
     fn bevy_ui_consumes_resolved_linear_theme_values() {
         let host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle")
                 .unwrap();
         let theme = host.snapshot().theme;
         assert_eq!(
@@ -2433,7 +2762,7 @@ mod tests {
     #[test]
     fn invalid_camera_zoom_fails_at_the_native_adapter_boundary() {
         let host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle")
                 .unwrap();
         let (source, scene) = host
             .snapshot()
@@ -2458,7 +2787,7 @@ mod tests {
     #[test]
     fn interactive_camera_offset_changes_only_the_host_camera_projection() {
         let host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle")
                 .unwrap();
         let (source, scene) = host
             .snapshot()
@@ -2491,7 +2820,7 @@ mod tests {
     #[test]
     fn three_dimensional_render_settings_cross_the_player_boundary_without_defaults() {
         let host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle")
                 .unwrap();
         let mut scene = host
             .snapshot()
@@ -2523,7 +2852,7 @@ mod tests {
         );
         let error = match PuzzleBevyPlayerHost::from_image_free_source(
             &source,
-            "games/invalid_theme.puzzle3",
+            "games/invalid_theme.puzzle",
         ) {
             Ok(_) => panic!("unresolved authored theme color must fail"),
             Err(error) => error,
@@ -2537,6 +2866,9 @@ mod tests {
         let mut host =
             PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
         assert_eq!(host.viewport_count(), 0);
+        host.process_presentation(0.0).unwrap();
+        assert_eq!(host.snapshot().surface.focus, "title");
+        assert!(host.fatal_error().is_none());
         host.dispatch_action(
             SessionAction::Key {
                 trigger: RuntimeKeyTrigger::Enter,
@@ -2544,13 +2876,31 @@ mod tests {
             0.0,
         )
         .unwrap();
+        let modal_component = host
+            .snapshot()
+            .surface
+            .components
+            .iter()
+            .find(|component| component.modal)
+            .map(|component| component.id.clone())
+            .expect("the first TENETEN level message must remain modal");
+        assert!(host.snapshot().presentation_continuation.is_none());
+        host.process_presentation(0.0).unwrap();
         assert!(host.snapshot().revision > 0);
+        assert!(
+            host.snapshot()
+                .surface
+                .components
+                .iter()
+                .any(|component| component.modal && component.id == modal_component)
+        );
+        assert!(host.fatal_error().is_none());
     }
 
     #[test]
     fn teneten3d_uses_the_component_scoped_viewport_source() {
         let mut host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle")
                 .unwrap();
         host.process_presentation(0.0).unwrap();
         let frames = host.resolve_frames(0.0).unwrap();
@@ -2636,17 +2986,181 @@ mod tests {
     }
 
     #[test]
-    fn wait_queue_retention_depends_on_the_post_dispatch_busy_state() {
-        let host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+    fn active_presentation_queue_is_preserved_only_for_the_same_timeline_waits() {
+        use puzzle_runtime_contract::RuntimeModelPresentationContinuationToken;
+
+        let previous = RuntimePresentationContinuationToken {
+            revision: 4,
+            waits: vec![RuntimeModelPresentationContinuationToken {
+                model: "board".to_string(),
+                sequence: 2,
+            }],
+        };
+        let next_revision = RuntimePresentationContinuationToken {
+            revision: 5,
+            waits: previous.waits.clone(),
+        };
+        let different_wait = RuntimePresentationContinuationToken {
+            revision: 5,
+            waits: vec![RuntimeModelPresentationContinuationToken {
+                model: "board".to_string(),
+                sequence: 3,
+            }],
+        };
+
+        assert!(preserve_presentation_event_queue(
+            true,
+            Some(&previous),
+            Some(&next_revision)
+        ));
+        assert!(!preserve_presentation_event_queue(
+            true,
+            Some(&previous),
+            Some(&different_wait)
+        ));
+        assert!(!preserve_presentation_event_queue(
+            true,
+            Some(&previous),
+            None
+        ));
+        assert!(!preserve_presentation_event_queue(
+            false,
+            Some(&previous),
+            Some(&next_revision)
+        ));
+    }
+
+    #[test]
+    fn pure_timed_wait_completes_once_after_its_deadline() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(TIMED_WAIT, "bevy_timed_wait.puzzle")
                 .unwrap();
-        let mut snapshot = host.snapshot().clone();
-        snapshot.busy = true;
-        assert!(preserve_wait_event_queue(true, &snapshot));
-        snapshot.busy = false;
-        assert!(!preserve_wait_event_queue(true, &snapshot));
-        snapshot.busy = true;
-        assert!(!preserve_wait_event_queue(false, &snapshot));
+
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "first".to_string(),
+            },
+            0.0,
+        )
+        .unwrap();
+        let waiting_revision = host.snapshot().revision;
+        assert!(host.snapshot().presentation_continuation.is_some());
+
+        host.process_presentation(0.0).unwrap();
+        host.dispatch_action(SessionAction::Snapshot, 0.05).unwrap();
+        host.process_presentation(0.099).unwrap();
+        assert_eq!(host.snapshot().revision, waiting_revision);
+        assert!(host.snapshot().presentation_continuation.is_some());
+
+        host.process_presentation(0.1).unwrap();
+        let completed_revision = host.snapshot().revision;
+        assert!(!host.snapshot().busy);
+        assert!(host.snapshot().presentation_continuation.is_none());
+        assert!(host.pending_presentation_continuation.is_none());
+
+        host.process_presentation(1.0).unwrap();
+        assert_eq!(host.snapshot().revision, completed_revision);
+        assert!(host.fatal_error().is_none());
+    }
+
+    #[test]
+    fn preserved_wait_queue_replaces_its_stale_completion_token() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(TIMED_WAIT, "bevy_timed_wait.puzzle")
+                .unwrap();
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "first".to_string(),
+            },
+            0.0,
+        )
+        .unwrap();
+        let first_token = host
+            .snapshot()
+            .presentation_continuation
+            .clone()
+            .expect("the first input must wait");
+        host.process_presentation(0.0).unwrap();
+
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "second".to_string(),
+            },
+            0.05,
+        )
+        .unwrap();
+        let refreshed_token = host
+            .snapshot()
+            .presentation_continuation
+            .clone()
+            .expect("queuing input must retain the timeline wait");
+        assert_eq!(refreshed_token.waits, first_token.waits);
+        assert!(refreshed_token.revision > first_token.revision);
+        assert_eq!(
+            host.pending_presentation_continuation,
+            Some(refreshed_token)
+        );
+
+        host.process_presentation(0.099).unwrap();
+        assert!(host.snapshot().busy);
+        host.process_presentation(0.1).unwrap();
+        assert!(!host.snapshot().busy);
+        assert!(host.pending_presentation_continuation.is_none());
+        assert!(host.fatal_error().is_none());
+    }
+
+    #[test]
+    fn modal_busy_state_without_a_timeline_token_is_never_completed_by_the_host() {
+        let source = r#"
+const title = bevy_modal_wait
+puzzle board {
+input open
+layers { actor = A }
+rules {
+if input == open {
+[ A ] -> message "ready"
+}
+}
+levels {
+legend { A = A }
+level "start" { A }
+}
+}
+"#;
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(source, "bevy_modal_wait.puzzle").unwrap();
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "open".to_string(),
+            },
+            0.0,
+        )
+        .unwrap();
+        let modal_component = host
+            .snapshot()
+            .surface
+            .components
+            .iter()
+            .find(|component| component.modal)
+            .map(|component| component.id.clone())
+            .expect("message must project a modal component");
+        let revision = host.snapshot().revision;
+        assert!(host.snapshot().busy);
+        assert!(host.snapshot().presentation_continuation.is_none());
+
+        host.process_presentation(1.0).unwrap();
+
+        assert_eq!(host.snapshot().revision, revision);
+        assert!(host.snapshot().busy);
+        assert!(host.snapshot().presentation_continuation.is_none());
+        assert!(
+            host.snapshot()
+                .surface
+                .components
+                .iter()
+                .any(|component| component.modal && component.id == modal_component)
+        );
+        assert!(host.fatal_error().is_none());
     }
 
     #[test]
@@ -2657,7 +3171,7 @@ mod tests {
             1,
         );
         let host =
-            PuzzleBevyPlayerHost::from_image_free_source(&source, "games/typed_lighting.puzzle3")
+            PuzzleBevyPlayerHost::from_image_free_source(&source, "games/typed_lighting.puzzle")
                 .expect("authored lighting should initialize the typed Bevy host");
         let lighting = host
             .viewports
@@ -2700,6 +3214,122 @@ mod tests {
         assert_eq!(node.row_gap, px(7));
         assert_eq!(node.column_gap, px(7));
         assert_eq!(node.overflow, Overflow::scroll());
+    }
+
+    #[test]
+    fn viewport_sizing_stretches_only_the_unaligned_model_window_cross_axis() {
+        let default_viewport = viewport_node_from_layout(&SceneLayout {
+            space: SceneSpace::Fill { weight: 1 },
+            ..SceneLayout::default()
+        });
+        assert_eq!(default_viewport.flex_grow, 1.0);
+        assert_eq!(default_viewport.align_self, AlignSelf::Stretch);
+
+        let centered_viewport = viewport_node_from_layout(&SceneLayout {
+            space: SceneSpace::Fill { weight: 1 },
+            align_self: Some(SceneAlign::Center),
+            ..SceneLayout::default()
+        });
+        assert_eq!(centered_viewport.align_self, AlignSelf::Center);
+
+        let generic_child = node_from_layout(
+            &SceneLayout {
+                space: SceneSpace::Fill { weight: 1 },
+                ..SceneLayout::default()
+            },
+            None,
+        );
+        assert_eq!(generic_child.align_self, AlignSelf::Auto);
+    }
+
+    #[test]
+    fn unaligned_model_window_gets_a_non_empty_bevy_ui_layout_inside_a_centered_scene() {
+        use bevy::{
+            app::TaskPoolPlugin,
+            camera::{ComputedCameraValues, RenderTargetInfo, Viewport},
+            ecs::schedule::{ScheduleCleanupPolicy, Schedules},
+            text::{FontCx, ScaleCx, TextPipeline},
+            ui::{UiPlugin, UiSystems},
+        };
+
+        let mut app = App::new();
+        app.add_plugins((TaskPoolPlugin::default(), UiPlugin));
+        app.init_resource::<TextPipeline>();
+        app.init_resource::<FontCx>();
+        app.init_resource::<ScaleCx>();
+        let mut post_update = {
+            let mut schedules = app.world_mut().resource_mut::<Schedules>();
+            schedules.remove(First);
+            schedules.remove(PreUpdate);
+            schedules.remove(Update);
+            schedules
+                .remove(PostUpdate)
+                .expect("UiPlugin must install its PostUpdate schedule")
+        };
+        for set in [UiSystems::Content, UiSystems::PostLayout, UiSystems::Stack] {
+            post_update
+                .remove_systems_in_set(
+                    set,
+                    app.world_mut(),
+                    ScheduleCleanupPolicy::RemoveSetAndSystemsAllowBreakages,
+                )
+                .expect("UiPlugin must install the removable UI set");
+        }
+        app.world_mut()
+            .resource_mut::<Schedules>()
+            .insert(post_update);
+
+        const WIDTH: u32 = 1000;
+        const HEIGHT: u32 = 600;
+        app.world_mut().spawn((
+            Camera2d,
+            Camera {
+                computed: ComputedCameraValues {
+                    target_info: Some(RenderTargetInfo {
+                        physical_size: UVec2::new(WIDTH, HEIGHT),
+                        scale_factor: 1.0,
+                    }),
+                    ..default()
+                },
+                viewport: Some(Viewport {
+                    physical_size: UVec2::new(WIDTH, HEIGHT),
+                    ..default()
+                }),
+                ..default()
+            },
+        ));
+        let scene = app
+            .world_mut()
+            .spawn(Node {
+                width: percent(100),
+                height: percent(100),
+                align_items: AlignItems::Center,
+                flex_direction: FlexDirection::Column,
+                ..default()
+            })
+            .id();
+        let viewport = app
+            .world_mut()
+            .spawn(viewport_node_from_layout(&SceneLayout {
+                space: SceneSpace::Fill { weight: 1 },
+                ..SceneLayout::default()
+            }))
+            .id();
+        app.world_mut().entity_mut(scene).add_child(viewport);
+
+        app.update();
+        app.update();
+
+        let computed = app
+            .world()
+            .get::<ComputedNode>(viewport)
+            .expect("the model window must participate in Bevy UI layout");
+        assert!(
+            computed.size.x > 0.0 && computed.size.y > 0.0,
+            "the model window must receive a non-empty rectangle, got {:?}",
+            computed.size
+        );
+        assert_eq!(computed.size, Vec2::new(WIDTH as f32, HEIGHT as f32));
     }
 
     #[test]
@@ -2751,10 +3381,11 @@ mod tests {
     #[test]
     fn animation_batch_routes_to_exact_component_and_source() {
         let mut host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle")
                 .unwrap();
         let original_source = host.viewports.keys().next().unwrap().clone();
         let sibling_source = RuntimeViewportSourceId {
+            model: original_source.model.clone(),
             component: original_source.component.clone(),
             source: format!("{}_sibling", original_source.source),
         };
@@ -2819,7 +3450,7 @@ mod tests {
         }
 
         let host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle")
                 .unwrap();
         let mut snapshot = host.snapshot().clone();
         let flipped =
@@ -2892,7 +3523,7 @@ mod tests {
         }
 
         let host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle")
                 .unwrap();
         let mut snapshot = host.snapshot().clone();
         let duplicated = snapshot.surface.components.iter_mut().any(|component| {
@@ -2910,6 +3541,51 @@ mod tests {
             projected_viewports(&snapshot, 0.0),
             Err(BevyPlayerError::DuplicateViewportLeaf(_))
         ));
+    }
+
+    #[test]
+    fn player_reconciles_camera_order_swaps_before_sequential_frame_submission() {
+        let mut queue_2d = BevyResolvedFrameQueue2d::default();
+        let mut queue_3d = BevyResolvedFrameQueue::default();
+        let left = PuzzleBevyViewId::three_d("left", "main");
+        let right = PuzzleBevyViewId::three_d("right", "main");
+        let frame = RuntimeResolvedRenderFrame {
+            batches: Vec::new(),
+            decorations: Vec::new(),
+            continue_animation: false,
+        };
+        let view = |order, x| PuzzleBevy3dView {
+            active: true,
+            order,
+            framebuffer: PuzzleBevyFramebufferRect {
+                physical_position: UVec2::new(x, 0),
+                physical_size: UVec2::new(320, 240),
+            },
+            clear_color: Color::BLACK,
+            camera: PuzzleBevyCamera::default(),
+            lighting: PuzzleBevyLighting {
+                intensity: 1.0,
+                ambient: 1.0,
+                yaw_degrees: 0.0,
+                pitch_degrees: 45.0,
+                color: Color::WHITE,
+            },
+            shadows_enabled: false,
+            render_settings: PuzzleBevy3dRenderSettings::default(),
+        };
+        queue_3d.submit(left.clone(), view(0, 0), &frame).unwrap();
+        queue_3d
+            .submit(right.clone(), view(1, 320), &frame)
+            .unwrap();
+
+        reconcile_view_camera_orders(
+            &mut queue_2d,
+            &mut queue_3d,
+            &BTreeMap::from([(left.clone(), 1), (right.clone(), 0)]),
+        )
+        .unwrap();
+        queue_3d.submit(left, view(1, 0), &frame).unwrap();
+        queue_3d.submit(right, view(0, 320), &frame).unwrap();
     }
 
     #[test]
@@ -2938,7 +3614,7 @@ mod tests {
         }
 
         let host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle3")
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle")
                 .unwrap();
         let mut snapshot = host.snapshot().clone();
         let original_source = snapshot.viewport_sources.keys().next().unwrap().clone();
@@ -2956,18 +3632,22 @@ mod tests {
             .unwrap()
             .clone();
         let root_source = RuntimeViewportSourceId {
+            model: original_source.model.clone(),
             component: "root_component".to_string(),
             source: "zzz_root".to_string(),
         };
         let overlay_source = RuntimeViewportSourceId {
+            model: original_source.model.clone(),
             component: "overlay_component".to_string(),
             source: "zzz_overlay_first".to_string(),
         };
         let overlay_second_source = RuntimeViewportSourceId {
+            model: original_source.model.clone(),
             component: "overlay_second_component".to_string(),
             source: "aaa_overlay_second".to_string(),
         };
         let modal_source = RuntimeViewportSourceId {
+            model: original_source.model.clone(),
             component: "modal_component".to_string(),
             source: "000_modal".to_string(),
         };

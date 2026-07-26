@@ -4447,12 +4447,7 @@ button.icon-button.preview-debug-toggle-button[aria-pressed="true"] {
   min-width: 96px;
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-.visual-editor-geometry-group,
-.visual-editor-animation-group {
-=======
 .visual-editor-geometry-group {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   flex: 0 0 auto;
 }
 
@@ -4595,13 +4590,10 @@ button.icon-button.preview-debug-toggle-button[aria-pressed="true"] {
   gap: 4px;
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
 .visual-pane-mode-controls {
   flex: 0 0 auto;
 }
 
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 .visual-pane-source-actions {
   display: inline-flex;
   align-items: center;
@@ -5893,8 +5885,6 @@ button.icon-button.visual-shape-tag-button.is-active {
   overflow: hidden;
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-=======
 .visual-animation-duration-control {
   min-width: 0;
   height: var(--compact-control-strip-height);
@@ -5953,7 +5943,6 @@ button.icon-button.visual-shape-tag-button.is-active {
   text-transform: none;
 }
 
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
 .visual-animation-panel {
   min-width: 0;
   max-width: 100%;

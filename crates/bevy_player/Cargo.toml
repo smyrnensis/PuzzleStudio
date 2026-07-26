@@ -19,6 +19,7 @@ puzzle-session-contract = { path = "../session_contract" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 bevy = { version = "0.19", default-features = false, features = ["bevy_audio"] }
+puzzle-workspace = { path = "../workspace" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 puzzle-web-audio = { path = "../web_audio" }
@@ -28,6 +29,7 @@ web-sys = { version = "0.3", features = [
     "Document",
     "Event",
     "EventTarget",
+    "Performance",
     "VisibilityState",
     "Window",
 ] }

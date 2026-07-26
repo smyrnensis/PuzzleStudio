@@ -1,0 +1,41 @@
+const title = "Standalone External Image Negative Control"
+
+scene title {
+layout {
+  choice "Start" -> goto playing
+}
+}
+
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+input horizontal [ Player | no Player ] -> [ | Player ]
+}
+}
+
+visuals simple of board {
+visual Player {
+colors = #c43
+}
+}
+
+scene playing {
+layout {
+  board
+}
+rules {
+  step board
+}
+}
+
+levels main of board {
+legend {
+. = empty
+P = Player
+}
+level "one" {
+P.
+}
+}

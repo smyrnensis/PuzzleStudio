@@ -1,0 +1,42 @@
+const title = "Standalone External Image"
+
+scene title {
+layout {
+  choice "Start" -> goto playing
+}
+}
+
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+input horizontal [ Player | no Player ] -> [ | Player ]
+}
+}
+
+visuals simple of board {
+visual Player {
+image = "standalone_browser_external_image.png"
+sampling = smooth
+}
+}
+
+scene playing {
+layout {
+  board
+}
+rules {
+  step board
+}
+}
+
+levels main of board {
+legend {
+. = empty
+P = Player
+}
+level "one" {
+P.
+}
+}

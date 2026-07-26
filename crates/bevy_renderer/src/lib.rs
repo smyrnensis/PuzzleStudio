@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     error::Error,
     fmt,
 };
@@ -50,6 +50,131 @@ fn camera_order(
             })
         })
         .ok_or(BevyRenderError::InvalidCameraOrder)
+}
+
+#[derive(Default)]
+struct BevyViewRegistry {
+    next_layer_slot: usize,
+    free_layers: Vec<usize>,
+    view_layers: HashMap<PuzzleBevyViewId, usize>,
+    view_orders: HashMap<PuzzleBevyViewId, isize>,
+    order_owners: HashMap<isize, PuzzleBevyViewId>,
+    registered_views: HashSet<PuzzleBevyViewId>,
+}
+
+impl BevyViewRegistry {
+    fn reconcile_camera_orders(
+        &mut self,
+        desired: &BTreeMap<PuzzleBevyViewId, isize>,
+    ) -> Result<(), BevyRenderError> {
+        let mut view_orders = HashMap::with_capacity(desired.len());
+        let mut order_owners = HashMap::with_capacity(desired.len());
+        for (view_id, logical_order) in desired {
+            let order = camera_order(*logical_order, view_id.dimension)?;
+            if order_owners.insert(order, view_id.clone()).is_some() {
+                return Err(BevyRenderError::DuplicateCameraOrder { order });
+            }
+            view_orders.insert(view_id.clone(), order);
+        }
+        self.view_orders = view_orders;
+        self.order_owners = order_owners;
+        Ok(())
+    }
+
+    fn reserve(
+        &mut self,
+        view_id: &PuzzleBevyViewId,
+        logical_order: isize,
+        first_render_layer: usize,
+    ) -> Result<(usize, isize), BevyRenderError> {
+        let allocated_layer = !self.view_layers.contains_key(view_id);
+        let render_layer = self.render_layer(view_id, first_render_layer)?;
+        let camera_order = match self.reserve_camera_order(view_id, logical_order) {
+            Ok(order) => order,
+            Err(error) => {
+                if allocated_layer && let Some(layer) = self.view_layers.remove(view_id) {
+                    self.free_layers.push(layer);
+                }
+                return Err(error);
+            }
+        };
+        self.registered_views.insert(view_id.clone());
+        Ok((render_layer, camera_order))
+    }
+
+    fn validate_removal(&self, view_id: &PuzzleBevyViewId) -> Result<(), BevyRenderError> {
+        if !self.registered_views.contains(view_id) {
+            return Err(BevyRenderError::UnknownView {
+                view_id: view_id.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn release_registered(&mut self, view_id: &PuzzleBevyViewId) {
+        let removed = self.registered_views.remove(view_id);
+        debug_assert!(removed);
+        self.release_camera_order(view_id);
+    }
+
+    fn render_layer(
+        &mut self,
+        view_id: &PuzzleBevyViewId,
+        first_render_layer: usize,
+    ) -> Result<usize, BevyRenderError> {
+        if let Some(layer) = self.view_layers.get(view_id) {
+            return Ok(*layer);
+        }
+        let layer = if let Some(layer) = self.free_layers.pop() {
+            layer
+        } else {
+            let layer = self
+                .next_layer_slot
+                .checked_mul(RENDER_LAYER_STRIDE)
+                .and_then(|offset| first_render_layer.checked_add(offset))
+                .ok_or(BevyRenderError::ViewLayerExhausted)?;
+            self.next_layer_slot = self
+                .next_layer_slot
+                .checked_add(1)
+                .ok_or(BevyRenderError::ViewLayerExhausted)?;
+            layer
+        };
+        self.view_layers.insert(view_id.clone(), layer);
+        Ok(layer)
+    }
+
+    fn reserve_camera_order(
+        &mut self,
+        view_id: &PuzzleBevyViewId,
+        logical_order: isize,
+    ) -> Result<isize, BevyRenderError> {
+        let order = camera_order(logical_order, view_id.dimension)?;
+        if let Some(owner) = self.order_owners.get(&order)
+            && owner != view_id
+        {
+            return Err(BevyRenderError::DuplicateCameraOrder { order });
+        }
+        if let Some(previous) = self.view_orders.insert(view_id.clone(), order)
+            && previous != order
+        {
+            self.order_owners.remove(&previous);
+        }
+        self.order_owners.insert(order, view_id.clone());
+        Ok(order)
+    }
+
+    fn finish_removal(&mut self, view_id: &PuzzleBevyViewId) {
+        debug_assert!(!self.registered_views.contains(view_id));
+        if let Some(layer) = self.view_layers.remove(view_id) {
+            self.free_layers.push(layer);
+        }
+    }
+
+    fn release_camera_order(&mut self, view_id: &PuzzleBevyViewId) {
+        if let Some(order) = self.view_orders.remove(view_id) {
+            self.order_owners.remove(&order);
+        }
+    }
 }
 
 #[derive(Component, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -849,16 +974,22 @@ struct PuzzleRendererLight;
 #[derive(Resource, Default)]
 pub struct BevyResolvedFrameQueue {
     next_generation: u64,
-    next_layer_slot: usize,
-    free_layers: Vec<usize>,
-    view_layers: HashMap<PuzzleBevyViewId, usize>,
-    view_orders: HashMap<PuzzleBevyViewId, isize>,
-    order_owners: HashMap<isize, PuzzleBevyViewId>,
-    registered_views: HashSet<PuzzleBevyViewId>,
+    registry: BevyViewRegistry,
     pending: HashMap<PuzzleBevyViewId, PendingViewChange>,
 }
 
 impl BevyResolvedFrameQueue {
+    pub fn reconcile_camera_orders(
+        &mut self,
+        desired: &BTreeMap<PuzzleBevyViewId, isize>,
+    ) -> Result<(), BevyRenderError> {
+        for view_id in desired.keys() {
+            view_id.validate()?;
+            view_id.validate_dimension(PuzzleBevyViewDimension::ThreeD)?;
+        }
+        self.registry.reconcile_camera_orders(desired)
+    }
+
     pub fn submit(
         &mut self,
         view_id: PuzzleBevyViewId,
@@ -887,18 +1018,9 @@ impl BevyResolvedFrameQueue {
             return Err(BevyRenderError::InvalidPixelate { field: "scale" });
         }
         let generation = self.next_generation()?;
-        let allocated_layer = !self.view_layers.contains_key(&view_id);
-        let render_layer = self.render_layer(&view_id)?;
-        let camera_order = match self.reserve_camera_order(&view_id, view.order) {
-            Ok(order) => order,
-            Err(error) => {
-                if allocated_layer && let Some(layer) = self.view_layers.remove(&view_id) {
-                    self.free_layers.push(layer);
-                }
-                return Err(error);
-            }
-        };
-        self.registered_views.insert(view_id.clone());
+        let (render_layer, camera_order) =
+            self.registry
+                .reserve(&view_id, view.order, FIRST_3D_RENDER_LAYER)?;
         self.pending.insert(
             view_id.clone(),
             PendingViewChange::Submit(SubmittedFrame {
@@ -915,67 +1037,12 @@ impl BevyResolvedFrameQueue {
 
     pub fn remove(&mut self, view_id: &PuzzleBevyViewId) -> Result<u64, BevyRenderError> {
         view_id.validate_dimension(PuzzleBevyViewDimension::ThreeD)?;
-        if !self.registered_views.contains(view_id) {
-            return Err(BevyRenderError::UnknownView {
-                view_id: view_id.clone(),
-            });
-        }
+        self.registry.validate_removal(view_id)?;
         let generation = self.next_generation()?;
-        self.registered_views.remove(view_id);
+        self.registry.release_registered(view_id);
         self.pending
             .insert(view_id.clone(), PendingViewChange::Remove);
         Ok(generation)
-    }
-
-    fn render_layer(&mut self, view_id: &PuzzleBevyViewId) -> Result<usize, BevyRenderError> {
-        if let Some(layer) = self.view_layers.get(view_id) {
-            return Ok(*layer);
-        }
-        let layer = if let Some(layer) = self.free_layers.pop() {
-            layer
-        } else {
-            let layer = self
-                .next_layer_slot
-                .checked_mul(RENDER_LAYER_STRIDE)
-                .and_then(|offset| FIRST_3D_RENDER_LAYER.checked_add(offset))
-                .ok_or(BevyRenderError::ViewLayerExhausted)?;
-            self.next_layer_slot = self
-                .next_layer_slot
-                .checked_add(1)
-                .ok_or(BevyRenderError::ViewLayerExhausted)?;
-            layer
-        };
-        self.view_layers.insert(view_id.clone(), layer);
-        Ok(layer)
-    }
-
-    fn reserve_camera_order(
-        &mut self,
-        view_id: &PuzzleBevyViewId,
-        logical_order: isize,
-    ) -> Result<isize, BevyRenderError> {
-        let order = camera_order(logical_order, PuzzleBevyViewDimension::ThreeD)?;
-        if let Some(owner) = self.order_owners.get(&order)
-            && owner != view_id
-        {
-            return Err(BevyRenderError::DuplicateCameraOrder { order });
-        }
-        if let Some(previous) = self.view_orders.insert(view_id.clone(), order)
-            && previous != order
-        {
-            self.order_owners.remove(&previous);
-        }
-        self.order_owners.insert(order, view_id.clone());
-        Ok(order)
-    }
-
-    fn release_view(&mut self, view_id: &PuzzleBevyViewId) {
-        if let Some(layer) = self.view_layers.remove(view_id) {
-            self.free_layers.push(layer);
-        }
-        if let Some(order) = self.view_orders.remove(view_id) {
-            self.order_owners.remove(&order);
-        }
     }
 
     fn next_generation(&mut self) -> Result<u64, BevyRenderError> {
@@ -1102,7 +1169,7 @@ fn apply_pending_frame(
                     commands.entity(view.camera).despawn();
                     commands.entity(view.light).despawn();
                 }
-                queue.release_view(&view_id);
+                queue.registry.finish_removal(&view_id);
             }
             PendingViewChange::Submit(submitted) => {
                 let render_layers = RenderLayers::none().with(submitted.render_layer);
@@ -2185,8 +2252,8 @@ mod tests {
         app.update();
         {
             let queue = app.world().resource::<BevyResolvedFrameQueue>();
-            assert!(!queue.view_layers.contains_key(&left));
-            assert_eq!(queue.free_layers.len(), 1);
+            assert!(!queue.registry.view_layers.contains_key(&left));
+            assert_eq!(queue.registry.free_layers.len(), 1);
         }
 
         let remaining = app
@@ -2318,7 +2385,97 @@ mod tests {
             ),
             Err(BevyRenderError::DuplicateCameraOrder { order: 0 })
         );
-        assert_eq!(queue.view_layers.len(), 1);
+        assert_eq!(queue.registry.view_layers.len(), 1);
+    }
+
+    #[test]
+    fn removal_releases_3d_view_reservations_before_deferred_ecs_cleanup() {
+        let mut queue = BevyResolvedFrameQueue::default();
+        let frame = RuntimeResolvedRenderFrame {
+            batches: Vec::new(),
+            decorations: Vec::new(),
+            continue_animation: false,
+        };
+        let outgoing = PuzzleBevyViewId::three_d("outgoing", "main");
+        let incoming = PuzzleBevyViewId::three_d("incoming", "main");
+
+        queue
+            .submit(outgoing.clone(), view_3d(UVec2::ZERO), &frame)
+            .unwrap();
+        queue.remove(&outgoing).unwrap();
+        queue
+            .submit(incoming.clone(), view_3d(UVec2::ZERO), &frame)
+            .unwrap();
+
+        assert!(!queue.registry.registered_views.contains(&outgoing));
+        assert!(queue.registry.registered_views.contains(&incoming));
+        assert_eq!(
+            queue.registry.order_owners.get(&0),
+            Some(&incoming),
+            "the accepted removal must end logical camera ownership immediately"
+        );
+    }
+
+    #[test]
+    fn retained_3d_views_can_swap_camera_orders_in_one_submission() {
+        let mut queue = BevyResolvedFrameQueue::default();
+        let frame = RuntimeResolvedRenderFrame {
+            batches: Vec::new(),
+            decorations: Vec::new(),
+            continue_animation: false,
+        };
+        let left = PuzzleBevyViewId::three_d("left", "main");
+        let right = PuzzleBevyViewId::three_d("right", "main");
+        queue
+            .submit(left.clone(), view_3d(UVec2::ZERO), &frame)
+            .unwrap();
+        queue
+            .submit(
+                right.clone(),
+                PuzzleBevy3dView {
+                    order: 1,
+                    ..view_3d(UVec2::new(320, 0))
+                },
+                &frame,
+            )
+            .unwrap();
+
+        queue
+            .reconcile_camera_orders(&BTreeMap::from([(left.clone(), 1), (right.clone(), 0)]))
+            .unwrap();
+        queue
+            .submit(
+                left.clone(),
+                PuzzleBevy3dView {
+                    order: 1,
+                    ..view_3d(UVec2::ZERO)
+                },
+                &frame,
+            )
+            .unwrap();
+        queue
+            .submit(right.clone(), view_3d(UVec2::new(320, 0)), &frame)
+            .unwrap();
+        assert_eq!(queue.registry.order_owners.get(&0), Some(&right));
+        assert_eq!(queue.registry.order_owners.get(&2), Some(&left));
+    }
+
+    #[test]
+    fn desired_camera_order_reconciliation_rejects_duplicates_without_partial_commit() {
+        let mut queue = BevyResolvedFrameQueue::default();
+        let left = PuzzleBevyViewId::three_d("left", "main");
+        let right = PuzzleBevyViewId::three_d("right", "main");
+        queue
+            .reconcile_camera_orders(&BTreeMap::from([(left.clone(), 0), (right.clone(), 1)]))
+            .unwrap();
+
+        assert_eq!(
+            queue
+                .reconcile_camera_orders(&BTreeMap::from([(left.clone(), 0), (right.clone(), 0),])),
+            Err(BevyRenderError::DuplicateCameraOrder { order: 0 })
+        );
+        assert_eq!(queue.registry.order_owners.get(&0), Some(&left));
+        assert_eq!(queue.registry.order_owners.get(&2), Some(&right));
     }
 
     #[test]

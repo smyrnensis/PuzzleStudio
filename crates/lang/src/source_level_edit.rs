@@ -32,7 +32,7 @@ pub enum LevelSourceRequest {
     },
     InsertLegend {
         symbol: String,
-        objects: Vec<String>,
+        selectors: Vec<String>,
     },
 }
 
@@ -40,7 +40,7 @@ pub enum LevelSourceRequest {
 #[serde(rename_all = "camelCase")]
 pub struct LevelLegendDraft {
     pub symbol: String,
-    pub objects: Vec<String>,
+    pub selectors: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -94,8 +94,8 @@ pub(crate) fn level_source_request(
             rows,
             local_legends,
         } => update_level(source, document, target_start, &name, &rows, &local_legends),
-        LevelSourceRequest::InsertLegend { symbol, objects } => {
-            insert_common_legend(source, document, &symbol, &objects)
+        LevelSourceRequest::InsertLegend { symbol, selectors } => {
+            insert_common_legend(source, document, &symbol, &selectors)
         }
     }
 }
@@ -224,17 +224,15 @@ fn insert_common_legend(
     source: &str,
     document: &SurfaceDocument,
     symbol: &str,
-    objects: &[String],
+    selectors: &[String],
 ) -> Result<LevelSourceResponse, String> {
     if symbol.chars().count() != 1
-        || objects.is_empty()
-        || objects.iter().any(|name| name.trim().is_empty())
+        || selectors.is_empty()
+        || selectors.iter().any(|selector| selector.trim().is_empty())
     {
-        return Err(
-            "legend insertion requires one symbol and at least one object name".to_string(),
-        );
+        return Err("legend insertion requires one symbol and at least one selector".to_string());
     }
-    let row = format!("{symbol} = {}", objects.join(" "));
+    let row = format!("{symbol} = {}", selectors.join(" "));
     if let Some(block) = document.structural_blocks.iter().find(|block| {
         crate::split_header_tokens(&block.header).as_slice() == ["legend"]
             && block.parent.is_none_or(|parent| {
@@ -395,7 +393,7 @@ fn format_level_body(rows: &[String], local_legends: &[LevelLegendDraft], indent
         lines.extend(
             local_legends
                 .iter()
-                .map(|entry| format!("{indent}{} = {}", entry.symbol, entry.objects.join(" "))),
+                .map(|entry| format!("{indent}{} = {}", entry.symbol, entry.selectors.join(" "))),
         );
         lines.push(format!("{indent}}}"));
     }
@@ -455,7 +453,7 @@ fn line_indent_at(source: &str, offset: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{LevelLegendDraft, LevelSourceRequest};
-    use crate::{PuzzleSourceProfile, SourceAnalysis};
+    use crate::{ModelDimension, SourceAnalysis};
 
     const SOURCE: &str = r#"puzzle game {
 layers {
@@ -467,6 +465,9 @@ P = Player
 }
 rules {
 [ Player ] -> [ Player ]
+}
+groups {
+Actors = Player
 }
 }
 
@@ -484,7 +485,7 @@ message "clear"
 "#;
 
     fn analysis() -> SourceAnalysis {
-        SourceAnalysis::new_for_profile(SOURCE, Some(PuzzleSourceProfile::Puzzle2d))
+        SourceAnalysis::new_with_owner_dimension(SOURCE, Some(ModelDimension::Two))
     }
 
     #[test]
@@ -528,7 +529,7 @@ message "clear"
                 rows: vec!["P".to_string()],
                 local_legends: vec![LevelLegendDraft {
                     symbol: "Q".to_string(),
-                    objects: vec!["Player".to_string()],
+                    selectors: vec!["Player".to_string()],
                 }],
                 cursor: None,
                 create_container: false,
@@ -547,14 +548,14 @@ message "clear"
         let result = analysis()
             .level_source_request(LevelSourceRequest::InsertLegend {
                 symbol: "Q".to_string(),
-                objects: vec!["Player".to_string()],
+                selectors: vec!["Actors".to_string()],
             })
             .unwrap();
 
         assert!(
             result
                 .source
-                .contains("legend {\n. = empty\nP = Player\nQ = Player\n}"),
+                .contains("legend {\n. = empty\nP = Player\nQ = Actors\n}"),
             "{}",
             result.source
         );

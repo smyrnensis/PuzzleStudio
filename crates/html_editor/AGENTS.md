@@ -5,8 +5,8 @@ highlighting integration, workspace behavior, and editor-owned layout.
 
 ## Generated Output
 
-`static/renderer.css` and `static/puzzle3_visual_core.js` are generated Tauri
-`frontendDist` copies. Their
+`static/renderer.css`, `static/renderer.js`, `static/visual_tween_core.js`, and
+`static/puzzle3_visual_core.js` are generated Tauri `frontendDist` copies. Their
 only source owners are the same-named files under `../html_play/static/`. Never
 edit the editor copies directly. Run `tools/sync_static_assets.sh` to regenerate
 them, or `tools/sync_static_assets.sh --check` to verify freshness. Adding a new

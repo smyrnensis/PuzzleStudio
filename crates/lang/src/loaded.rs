@@ -605,6 +605,15 @@ impl LevelId {
     pub fn record_key(&self) -> String {
         scene_level_record_key(&self.puzzle, &self.name)
     }
+
+    pub fn progress_cleared_path(&self) -> Vec<String> {
+        vec![
+            "levels".to_string(),
+            self.record_key(),
+            "progress".to_string(),
+            "cleared".to_string(),
+        ]
+    }
 }
 
 pub fn scene_level_record_key(puzzle: &str, name: &str) -> String {

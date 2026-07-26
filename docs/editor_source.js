@@ -47,6 +47,10 @@ let sourceHighlightRequestId = 0;
 let sourceCompletionRequestId = 0;
 let sourceLineAddRequestId = 0;
 let sourceEntriesRefreshRequestId = 0;
+let sourceAnalysisRevision = {
+  source: "",
+  promise: Promise.resolve(),
+};
 let sourceOutlineRequestId = 0;
 let sourceOutlineSignature = "";
 let sourceOutlineDirty = true;
@@ -90,46 +94,6 @@ let sourceOutlineExpandedItemIds = new Set();
 function sourcePuzzleLevelName(value, defaultName = "") {
   const text = String(value ?? "").trim();
   return text || String(defaultName ?? "").trim();
-}
-
-function sourcePuzzleQuotedText(value, context = "source text") {
-  const text = String(value ?? "");
-  if (/[\r\n]/.test(text)) {
-    throw new Error(`${context} cannot contain line breaks`);
-  }
-  return `"${text.replace(/"/g, "\\\"")}"`;
-}
-
-function parseSourcePuzzleQuotedText(value) {
-  const text = String(value ?? "").trim();
-  if (!text.startsWith("\"") || !text.endsWith("\"")) {
-    return null;
-  }
-  return text.slice(1, -1).replace(/\\"/g, "\"");
-}
-
-function sourcePuzzleLevelHeaderName(code) {
-  const text = String(code || "").trim();
-  if (!/^level(?:\s|$)/.test(text)) {
-    return null;
-  }
-  let rest = text.slice("level".length).trim();
-  if (rest.endsWith("{")) {
-    rest = rest.slice(0, -1).trim();
-  }
-  if (!rest) {
-    return "";
-  }
-  return parseSourcePuzzleQuotedText(rest);
-}
-
-function sourcePuzzleLevelHeaderSource(name, indent = "", options = {}) {
-  const levelName = sourcePuzzleLevelName(name, options.defaultName || "");
-  const opensBlock = options.openBlock === true;
-  if (!levelName) {
-    return opensBlock ? `${indent}{` : `${indent}level`;
-  }
-  return `${indent}level ${sourcePuzzleQuotedText(levelName, "level name")}${opensBlock ? " {" : ""}`;
 }
 
 function sourceEditorDocumentValue() {
@@ -652,6 +616,9 @@ function handleSourceUndoShortcut(event) {
   }
   const redo = (key === "z" && event.shiftKey) || (!event.metaKey && key === "y");
   if (!redo && (event.shiftKey || key !== "z")) {
+    return false;
+  }
+  if (sourceEditor.sourceEditorPort?.kind === "codemirror") {
     return false;
   }
   ensureSourceUndoHistory();
@@ -1747,6 +1714,8 @@ const SOURCE_OUTLINE_KIND_ICON_NAMES = Object.freeze({
   "shapes": "shapes",
   "shape": "shapes",
   "sounds": "volume-2",
+  "sfx": "volume-2",
+  "music": "volume-2",
   "keys": "keyboard",
   "layers": "layers",
   "collision_layers": "layers",
@@ -3249,29 +3218,41 @@ function syncSourceAnalysisEditorChanges(changes, source) {
   const editedSource = String(source || "");
   const entriesRefreshRequestId = ++sourceEntriesRefreshRequestId;
   const analysisEdit = window.PuzzleStudioRuntime.applySourceAnalysisEdits(changes, editedSource);
-  void analysisEdit.then(() => {
+  const completion = analysisEdit.then(() => {
     if (
       entriesRefreshRequestId !== sourceEntriesRefreshRequestId
       || editedSource !== sourceEditorDocumentValue()
       || typeof refreshSurfaceEntriesForActiveSource !== "function"
     ) {
-      return;
+      return null;
     }
-    return refreshSurfaceEntriesForActiveSource(editedSource).catch((error) => {
-      if (
-        entriesRefreshRequestId === sourceEntriesRefreshRequestId
-        && editedSource === sourceEditorDocumentValue()
-      ) {
-        console.error("Source entries refresh failed", error);
-      }
-    });
-  }, (error) => {
+    return refreshSurfaceEntriesForActiveSource(editedSource);
+  });
+  sourceAnalysisRevision = {
+    source: editedSource,
+    promise: completion,
+  };
+  void completion.catch((error) => {
     if (
       entriesRefreshRequestId === sourceEntriesRefreshRequestId
       && editedSource === sourceEditorDocumentValue()
     ) {
-      console.error("Source analysis edit failed", error);
+      console.error("Source analysis revision failed", error);
     }
+  });
+  return completion;
+}
+
+function sourceEditorAnalysisRevisionReady(source = sourceEditorDocumentValue()) {
+  const expectedSource = String(source || "");
+  const pending = sourceAnalysisRevision.source === expectedSource
+    ? sourceAnalysisRevision.promise
+    : Promise.resolve();
+  return pending.then(() => {
+    if (sourceEditorDocumentValue() !== expectedSource) {
+      throw new Error("Source changed before its analysis revision became ready.");
+    }
+    return loadSurfaceEntriesForSource(expectedSource, { reportUnavailable: true });
   });
 }
 
@@ -3280,14 +3261,12 @@ sourceEditor.addEventListener("beforeinput", handleSourceBeforeInputTextInsert);
 sourceEditor.addEventListener("sourceanalysisreset", () => {
   const source = sourceEditorDocumentValue();
   sourceEntriesRefreshRequestId += 1;
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-  window.PuzzleStudioRuntime.resetSourceAnalysis(
+  const reset = window.PuzzleStudioRuntime.resetSourceAnalysis(source);
+  sourceAnalysisRevision = {
     source,
-    puzzleSourceProfile(activeDocument()),
-  ).then(() => {
-=======
-  window.PuzzleStudioRuntime.resetSourceAnalysis(source).then(() => {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
+    promise: reset,
+  };
+  void reset.then(() => {
     if (source === sourceEditorDocumentValue()) {
       void refreshSourceLineAdd();
     }
@@ -4537,7 +4516,7 @@ function handleSourceEditorVsCodeShortcut(event) {
 
 function selectedSourceLineRange() {
   const source = sourceEditor.value;
-  const lines = sourceLinesWithOffsets(source);
+  const lines = editorSourceLinesWithOffsets(source);
   if (!lines.length) {
     return { lines, first: 0, last: 0 };
   }
@@ -4675,7 +4654,7 @@ function mapSourceOffsetThroughEdits(offset, edits) {
 
 function toggleSourceLineComments() {
   const originalSource = sourceEditor.value;
-  const originalLines = sourceLinesWithOffsets(originalSource);
+  const originalLines = editorSourceLinesWithOffsets(originalSource);
   const selectionStart = sourceEditor.selectionStart;
   const selectionEnd = sourceEditor.selectionEnd;
   const selectionDirection = sourceEditor.selectionDirection;
@@ -4742,11 +4721,7 @@ function insertSourceLineAroundSelection(direction) {
   replaceSourceValue(rawLines.join("\n"), offset, offset);
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 async function updateSourceImportLinkFromPointer(event) {
-=======
-function updateSourceImportLinkFromPointer(event) {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   if (!sourceImportLinkFrame || !sourceDocumentSupportsEditableTargets()) {
     hideSourceImportLinkFrame();
     return;
@@ -5004,11 +4979,7 @@ function sourceEditableEntryFromTarget(source, target, options = {}) {
   return body && typeof body === "object" ? { ...entry, ...body } : entry;
 }
 
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 async function openSourceImportLinkFromPointer(event, position = null) {
-=======
-function openSourceImportLinkFromPointer(event, position = null) {
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   if (!sourceDocumentSupportsEditableTargets()) {
     return false;
   }
@@ -5023,7 +4994,7 @@ function openSourceImportLinkFromPointer(event, position = null) {
 }
 
 function sourceEditorPositionFromPoint(clientX, clientY, options = {}) {
-  const lines = sourceLinesWithOffsets(sourceEditor.value);
+  const lines = editorSourceLinesWithOffsets(sourceEditor.value);
   if (!lines.length) {
     return null;
   }

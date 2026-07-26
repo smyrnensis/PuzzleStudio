@@ -1798,6 +1798,45 @@ P
 }
 
 #[test]
+fn wildcard_relative_rhs_lowers_same_occurrence_to_replace() {
+    let loaded = parse_game(
+        r#"
+const title = wildcard_relative_replace
+
+puzzle main {
+layers {
+actor = Player:directions
+}
+rules {
+input [ Player:* ] -> [ > Player:> ]
+}
+levels {
+legend {
+P = Player:up
+}
+level "first" {
+P
+}
+}
+}
+"#,
+    )
+    .unwrap();
+    let from = object_named(&loaded, "Player:up");
+    let to = object_named(&loaded, "Player:right");
+
+    assert!(loaded.game.rules().iter().any(|rule| {
+        rule.writes.iter().any(|write| {
+            matches!(
+                write,
+                WriteOp::Replace { remove, add, .. }
+                    if *remove == from && *add == to
+            )
+        })
+    }));
+}
+
+#[test]
 fn scene_on_level_start_is_rejected() {
     let source = r#"
 const title = scene_level_lifecycle
@@ -3516,6 +3555,73 @@ text "Ready"
         error.to_string().contains("unknown layout directive panel"),
         "expected panel to be rejected, got {error}"
     );
+}
+
+#[test]
+fn model_window_components_own_the_fill_default_and_preserve_explicit_fit() {
+    let source = r#"
+const title = model_window_layout_defaults
+
+puzzle board {
+layers {
+actor = Player
+}
+rules {
+[ Player ] -> [ Player ]
+}
+}
+
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start" {
+P
+}
+}
+
+scene inferred {
+layout {
+board
+}
+}
+
+scene typed_default {
+layout {
+puzzle slot = board
+}
+}
+
+scene typed_fit {
+layout {
+puzzle slot = board space fit
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let viewport_space = |scene_name: &str| {
+        let scene = loaded
+            .scenes
+            .iter()
+            .find(|scene| scene.name == scene_name)
+            .unwrap();
+        let [SceneComponent::Viewport(viewport)] = scene.components.as_slice() else {
+            panic!("{scene_name} should contain one model window")
+        };
+        viewport.layout.space
+    };
+
+    assert_eq!(viewport_space("board"), SceneSpaceDef::Fill { weight: 1 });
+    assert_eq!(
+        viewport_space("inferred"),
+        SceneSpaceDef::Fill { weight: 1 }
+    );
+    assert_eq!(
+        viewport_space("typed_default"),
+        SceneSpaceDef::Fill { weight: 1 }
+    );
+    assert_eq!(viewport_space("typed_fit"), SceneSpaceDef::Fit);
 }
 
 #[test]
@@ -9350,7 +9456,7 @@ B
 #[test]
 fn puzzle_visuals_reject_svg_image_visual_refs() {
     let source = r##"
-title = svg_image_visual_ref
+const title = svg_image_visual_ref
 
 puzzle default {
 layers {
@@ -11484,6 +11590,60 @@ level "start" {
     offsets.sort();
 
     assert_eq!(offsets, vec![[-1, 0], [0, -1], [0, 1], [1, 0]]);
+}
+
+#[test]
+fn spatial_rewrite_preserves_authored_selector_order_in_move_writes() {
+    let source = r#"
+const title = ordered_move_writes
+
+puzzle default {
+layers {
+first = A
+second = B
+}
+empty .
+
+legend X = A B
+
+rules {
+once right [ A B | ] -> [ | A B ]
+}
+
+level "start" {
+X.
+}
+}
+"#;
+    let loaded = parse_game(source).unwrap();
+    let object_a = object_named(&loaded, "A");
+    let object_b = object_named(&loaded, "B");
+    let rule = loaded
+        .game
+        .rules()
+        .iter()
+        .find(|rule| {
+            rule.writes.iter().any(|write| {
+                matches!(
+                    write,
+                    WriteOp::Move {
+                        to_offset: Offset::Fixed { delta },
+                        ..
+                    } if delta.axes() == [1, 0]
+                )
+            })
+        })
+        .expect("right-facing rewrite");
+    let moved_objects = rule
+        .writes
+        .iter()
+        .filter_map(|write| match write {
+            WriteOp::Move { object, .. } => Some(*object),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(moved_objects, vec![object_a, object_b]);
 }
 
 #[test]
@@ -19696,11 +19856,11 @@ fn puzzle3_camera_projection_is_typed_and_exported() {
 
 #[test]
 fn puzzle3_lighting_is_typed_and_exported_as_normalized_settings() {
-    let source = include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle3").replace(
+    let source = include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle").replace(
         "  camera {",
         "  lighting {\n    intensity = 0.75\n    ambient = 1.25\n    yaw = -20\n    pitch = 60\n    color = #ffd7aa\n  }\n  camera {",
     );
-    let document = super::parse_game_for_path(&source, "typed_lighting.puzzle3").unwrap();
+    let document = super::parse_game_for_path(&source, "typed_lighting.puzzle").unwrap();
     let LoadedDocumentModel::Puzzle3d { game, .. } = &document.models[0] else {
         panic!("expected a 3D puzzle model")
     };
@@ -19723,8 +19883,8 @@ fn puzzle3_lighting_is_typed_and_exported_as_normalized_settings() {
 #[test]
 fn puzzle3_lighting_defaults_to_the_tuned_profile() {
     let document = super::parse_game_for_path(
-        include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle3"),
-        "default_lighting.puzzle3",
+        include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle"),
+        "default_lighting.puzzle",
     )
     .unwrap();
     let LoadedDocumentModel::Puzzle3d { game, .. } = &document.models[0] else {
@@ -19740,12 +19900,12 @@ fn puzzle3_lighting_defaults_to_the_tuned_profile() {
 
 #[test]
 fn puzzle3_lighting_rejects_negative_ratios_and_transparent_colors() {
-    let fixture = include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle3");
+    let fixture = include_str!("../tests/fixtures/spec_3d_preview_contract.puzzle");
     let negative = fixture.replace(
         "  camera {",
         "  lighting {\n    ambient = -1\n  }\n  camera {",
     );
-    let error = super::parse_game_for_path(&negative, "negative_lighting.puzzle3")
+    let error = super::parse_game_for_path(&negative, "negative_lighting.puzzle")
         .expect_err("negative lighting ratios must be rejected");
     assert!(
         error
@@ -19757,7 +19917,7 @@ fn puzzle3_lighting_rejects_negative_ratios_and_transparent_colors() {
         "  camera {",
         "  lighting {\n    color = #ffffff80\n  }\n  camera {",
     );
-    let error = super::parse_game_for_path(&transparent, "transparent_lighting.puzzle3")
+    let error = super::parse_game_for_path(&transparent, "transparent_lighting.puzzle")
         .expect_err("lighting colors with alpha must be rejected");
     assert!(
         error

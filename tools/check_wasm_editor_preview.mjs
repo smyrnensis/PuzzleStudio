@@ -2,12 +2,8 @@ import { readFile } from "node:fs/promises";
 
 import init, {
   WasmSolverService,
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
-  activate_source_analysis_with_profile,
-=======
   WasmWorkspaceSession,
   activate_source_analysis,
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
   active_source_analysis_highlight_range_json,
   active_source_analysis_level_editor_level_slots,
   active_source_analysis_level_editor_manifest_json,
@@ -80,7 +76,16 @@ levels main of board {
 }
 `;
 
-const html = compile_preview(source, "game.puzzle", "", "");
+const build = JSON.parse(compile_preview(source, "game.puzzle", "", ""));
+if (
+  typeof build.html !== "string"
+  || build.documentMetadata?.title !== "Editor Preview Contract"
+  || build.models?.board?.kind !== "puzzle2d"
+  || !build.models.board.engine
+) {
+  throw new Error(`top-level preview compiler returned an invalid typed build: ${JSON.stringify(build)}`);
+}
+const html = build.html;
 const runtimeExportLiteral = html.match(
   /window\.PuzzleRuntimeExportJson\s*=\s*("(?:\\.|[^"\\])*")/,
 )?.[1];
@@ -88,27 +93,36 @@ if (!runtimeExportLiteral) {
   throw new Error("generated editor preview is missing its standalone runtime export");
 }
 const runtimeExport = JSON.parse(JSON.parse(runtimeExportLiteral));
+const runtimeExportKeys = Object.keys(runtimeExport).sort();
+const expectedRuntimeExportKeys = [
+  "progressStorage",
+  "runtimeLoadedDocument",
+  "version",
+  "visualImages",
+];
 if (
-  !runtimeExport.runtimeLoadedDocument
-  || Object.keys(runtimeExport).some((key) => key !== "runtimeLoadedDocument")
+  JSON.stringify(runtimeExportKeys) !== JSON.stringify(expectedRuntimeExportKeys)
+  || runtimeExport.version !== 4
+  || !runtimeExport.runtimeLoadedDocument
+  || !runtimeExport.visualImages
+  || !runtimeExport.progressStorage
 ) {
-  throw new Error(`editor preview leaked editor metadata into its standalone runtime export: ${Object.keys(runtimeExport)}`);
+  throw new Error(
+    `editor preview does not expose the complete standalone runtime contract: ${JSON.stringify(runtimeExport)}`,
+  );
 }
-const editorPreviewExportLiteral = html.match(
-  /window\.PuzzleEditorPreviewExportJson\s*=\s*("(?:\\.|[^"\\])*")/,
-)?.[1];
-if (!editorPreviewExportLiteral) {
-  throw new Error("generated editor preview is missing its editor metadata export");
-}
-const editorPreviewExport = JSON.parse(JSON.parse(editorPreviewExportLiteral));
-if (!editorPreviewExport.engine || editorPreviewExport.runtimeLoadedDocument) {
-  throw new Error("editor preview metadata does not have an editor-only contract");
+if (html.includes("PuzzleEditorPreviewExportJson")) {
+  throw new Error("generated editor preview republished editor metadata through HTML");
 }
 const workspaceDocuments = [{ path: "game.puzzle", source }];
 const workspace = new WasmWorkspaceSession(workspaceDocuments);
-const workspaceHtml = workspace.compile_preview("game.puzzle", "", "");
-if (!workspaceHtml.includes('editorPreview\\":true')) {
-  throw new Error("typed workspace preview did not compile editor HTML");
+const workspaceBuild = JSON.parse(workspace.compile_preview("game.puzzle", "", ""));
+if (
+  !workspaceBuild.html.includes('editorPreview\\":true')
+  || workspaceBuild.documentMetadata?.title !== build.documentMetadata.title
+  || workspaceBuild.models?.board?.kind !== "puzzle2d"
+) {
+  throw new Error(`typed workspace preview returned an invalid build: ${JSON.stringify(workspaceBuild)}`);
 }
 const workspaceManifest = workspace.presentation_manifest("game.puzzle");
 if (
@@ -149,7 +163,9 @@ P
 ` },
 ]);
 const resourceManifest = resourceWorkspace.presentation_manifest("games/game.puzzle");
-if (resourceManifest.visualImagePaths[0] !== "models/images/player.png") {
+if (
+  resourceManifest.visualImageAssets[0]?.path !== "models/images/player.png"
+) {
   throw new Error(`imported resource path was not canonicalized: ${JSON.stringify(resourceManifest)}`);
 }
 let invalidWorkspaceDocumentsError = "";
@@ -239,7 +255,6 @@ if (
 }
 const required = [
   'editorPreview\\":true',
-  "window.PuzzleEditorPreviewExportJson",
   "window.PuzzleRuntimeWasmLoader",
   "PuzzleStudioRuntimeAssetRequest",
   "PuzzleStudioRuntimeAssetResponse",
@@ -277,14 +292,21 @@ levels default of preview {
 }
 
 `;
-const puzzle3Html = compile_preview(
+const puzzle3Build = JSON.parse(compile_preview(
   puzzle3Source,
   "spec_3d_preview_contract.puzzle",
   "",
   "",
-);
+));
+const puzzle3Html = puzzle3Build.html;
+if (
+  puzzle3Build.models?.preview?.kind !== "puzzle3d"
+  || !puzzle3Build.models.preview.fixture?.objects
+) {
+  throw new Error(`spatial preview typed build is invalid: ${JSON.stringify(puzzle3Build)}`);
+}
 for (const token of [
-  "window.Puzzle3DFrameFixture = JSON.parse(",
+  "window.Puzzle3DFrameFixtures = JSON.parse(",
   "WasmStandaloneSession",
   "window.Puzzle3Component",
   "window.PuzzleRuntimeWasmLoader",
@@ -321,7 +343,7 @@ level "start"
 P
 }
 `;
-const revision = activate_source_analysis_with_profile(editorSource, "puzzle2d");
+const revision = activate_source_analysis(editorSource);
 const manifest = active_source_analysis_level_editor_manifest_json(revision);
 if (manifest.includes("slots") || manifest.includes("\"visuals\"")) {
   throw new Error("level editor manifest must not transfer level cells or full visual definitions");

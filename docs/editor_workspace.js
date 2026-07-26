@@ -2455,9 +2455,7 @@ function loadEmbeddedDocument(index) {
     ? previewBuild
     : null;
   applyGameCss(displayedPreviewBuild?.gameCss || "");
-  applyGameVisuals(displayedPreviewBuild
-    ? compiledPreviewGameVisualsJs(displayedPreviewBuild.html)
-    : "");
+  applyGameVisuals(displayedPreviewBuild?.gameVisualsJs || "");
   runButton.disabled = !previewDocument;
   const activeSourceChanged = Boolean(previousActiveFileId && document.id !== previousActiveFileId);
   const previewTargetUnchanged = previewDocument
@@ -2474,7 +2472,10 @@ function loadEmbeddedDocument(index) {
   } else {
     invalidateCompiledPreview(previewDocument);
   }
-  if (previewTargetChanged) {
+  const previewTargetRequiresCompile = previewDocument
+    && !displayedPreviewBuild
+    && (!previousPreviewKey || previewTargetChanged);
+  if (previewTargetRequiresCompile) {
     const expectedPreviewKey = documentIdentityKey(previewDocument);
     Promise.resolve().then(() => {
       const currentTarget = activePreviewDocument();
@@ -2502,7 +2503,7 @@ function loadEmbeddedDocument(index) {
   }
   updateDocumentTabUnsavedStates();
   if (typeof syncPaneModesFromFocusedPuzzleSource === "function") {
-    void syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true })
+    void syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true, loadFirst: false })
       .catch((error) => setEditorStatus(userFacingRuntimeError(error), "is-error"));
   }
   syncPreviewViewportAspect();

@@ -1,6 +1,9 @@
 // 3D level editor source roundtrip and runtime bridge. Rendering stays in puzzle3_component.js.
 let level3dRuntimeFrameKey = "";
-let level3dRuntimeFrameLoaded = false;
+let level3dRuntimeFrameDocumentLoaded = false;
+let level3dRuntimeFrameRuntimeReady = false;
+let level3dRuntimeFrameFailure = null;
+let level3dRuntimeFrameProgress = [];
 let level3dLayerFrameKey = "";
 let level3dLayerFrameLoaded = false;
 let solverPreviewFrame = null;
@@ -51,10 +54,13 @@ let level3d = {
   previewFrames: false,
   palette: [],
   slices: [],
+  sourceLocalLegends: [],
+  sourceTargetStart: null,
   sourceKey: "",
   sourceDocumentId: "",
 };
 let level3dAutoSelectionKey = "";
+let level3dSourcePreviewGeneration = 0;
 
 function level3dEditorThemeColor(name, alpha) {
   const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -308,6 +314,8 @@ function clearLoadedLevel3dState(source, document = level3dSourceDocument()) {
     previewFrames: level3d.previewFrames,
     palette,
     slices: [],
+    sourceLocalLegends: [],
+    sourceTargetStart: null,
     sourceKey: "",
     sourceDocumentId: document?.id || "",
   };
@@ -315,7 +323,9 @@ function clearLoadedLevel3dState(source, document = level3dSourceDocument()) {
 }
 
 function sourceLevel3dPaletteEntries(source) {
-  const entries = normalizedLevel3dLegendEntries(sourceLevel3dLegendEntries(source));
+  const entries = normalizedLevel3dLegendEntries(
+    level3dSourceEntries(source).flatMap((entry) => entry.legend),
+  );
   return entries.some((entry) => entry.objects.length > 0) ? entries : [];
 }
 
@@ -350,7 +360,11 @@ function sameLevel3dPalette(left = [], right = []) {
 }
 
 function loadLevel3dFromEntry(entry, source, exportData = previewBuild?.exportData, sourceKey = "", document = level3dSourceDocument()) {
-  const legendEntries = normalizedLevel3dLegendEntries(sourceLevel3dLegendEntries(source));
+  const definitions = level3dSourceEntries(source);
+  const definition = definitions.find((candidate) => candidate.name === entry?.name)
+    || definitions.find((candidate) => candidate.levelIndex === currentEditableLevelIndex(exportData))
+    || null;
+  const legendEntries = normalizedLevel3dLegendEntries(definition?.legend || []);
   const levelData = level3dRowsForEntry(entry, legendEntries);
   const slices = level3dSlicesFromRows(levelData.rows, level3dEmptyChar(legendEntries));
   level3d.palette = legendEntries;
@@ -363,12 +377,14 @@ function loadLevel3dFromEntry(entry, source, exportData = previewBuild?.exportDa
     level3d.selectedChar = level3dSelectedCharForPalette(level3d.palette, level3d.selectedChar);
   }
   level3d.sourceDocumentId = document?.id || level3d.sourceDocumentId || "";
+  level3d.sourceLocalLegends = definition?.localLegends || [];
+  level3d.sourceTargetStart = Number.isInteger(definition?.start) ? definition.start : null;
   level3d.sourceKey = sourceKey || currentLevel3dEditorSourceKey(entry, document, source);
   resetLevel3dPreviewState(exportData);
 }
 
 function loadLevel3dFromSourceDefinition(definition, source, sourceKey = "", document = level3dSourceDocument()) {
-  const legendEntries = normalizedLevel3dLegendEntries(sourceLevel3dLegendEntries(source));
+  const legendEntries = normalizedLevel3dLegendEntries(definition?.legend || []);
   const slices = level3dSlicesFromRows(definition.rows, level3dEmptyChar(legendEntries));
   level3d.palette = legendEntries;
   level3d.slices = slices;
@@ -380,6 +396,8 @@ function loadLevel3dFromSourceDefinition(definition, source, sourceKey = "", doc
     level3d.selectedChar = level3dSelectedCharForPalette(level3d.palette, level3d.selectedChar);
   }
   level3d.sourceDocumentId = document?.id || level3d.sourceDocumentId || "";
+  level3d.sourceLocalLegends = definition?.localLegends || [];
+  level3d.sourceTargetStart = Number.isInteger(definition?.start) ? definition.start : null;
   level3d.sourceKey = sourceKey || currentLevel3dEditorSourceKey(definition, document, source);
   resetLevel3dPreviewState(previewBuild?.exportData);
 }
@@ -644,7 +662,7 @@ function applyDefaultLevel3dSelectionForActiveDocument(exportData = previewBuild
     documentId,
     document?.puzzlePath || "",
     String(source || "").length,
-    findLevels3Ranges(source).length,
+    focusedPuzzleLevel3dEntries(source).length,
     Array.isArray(exportData?.levels) ? exportData.levels.length : 0,
   ].join(":");
   if (level3dAutoSelectionKey === selectionKey) {
@@ -654,6 +672,7 @@ function applyDefaultLevel3dSelectionForActiveDocument(exportData = previewBuild
   const target = firstLevel3dTargetInDocument(document);
   if (!target) {
     level3d.sourceDocumentId = "";
+    level3d.sourceTargetStart = null;
     level3d.sourceKey = "";
     return false;
   }
@@ -667,35 +686,6 @@ function applyDefaultLevel3dSelectionForActiveDocument(exportData = previewBuild
   return true;
 }
 
-function firstLevel3dTargetNearDocument(document) {
-  const direct = firstLevel3dTargetInDocument(document);
-  if (direct) {
-    return direct;
-  }
-  let dir = directoryName(document?.puzzlePath || "");
-  const visited = new Set();
-  while (!visited.has(dir)) {
-    visited.add(dir);
-    const found = puzzleTextDocuments()
-      .filter((candidate) => normalizePath(directoryName(candidate.puzzlePath)) === normalizePath(dir))
-      .sort((left, right) => normalizePath(left.puzzlePath).localeCompare(normalizePath(right.puzzlePath)))
-      .map((candidate) => firstLevel3dTargetInDocument(candidate))
-      .find(Boolean);
-    if (found) {
-      return found;
-    }
-    if (!dir) {
-      break;
-    }
-    const parent = directoryName(dir);
-    if (parent === dir) {
-      break;
-    }
-    dir = parent;
-  }
-  return null;
-}
-
 function firstLevel3dTargetInDocument(document) {
   if (!isPuzzleDocument(document) || !isTextDocument(document)) {
     return null;
@@ -706,53 +696,21 @@ function firstLevel3dTargetInDocument(document) {
 }
 
 function firstLevel3dSourceDefinition(source) {
-  let levelIndex = 0;
-  for (const range of findLevels3Ranges(source)) {
-    const definition = findLevel3dDefinitions(source, range)[0];
-    if (!definition) {
-      continue;
-    }
-    return {
-      ...definition,
-      bundle: range.bundle,
-      model: range.model,
-      levelIndex,
-      rows: rowsForLevel3dDefinition(source, definition),
-    };
-  }
-  return null;
+  return level3dSourceEntries(source)[0] || null;
 }
 
 function currentLevel3dBundleName(exportData = previewBuild?.exportData) {
-  const sourceRange = findLevels3InsertionRange(level3dEditorSource(), "");
-  if (sourceRange?.bundle) {
-    return sourceRange.bundle;
-  }
-  if (!findLevels3Ranges(level3dEditorSource()).length) {
-    return "levels";
-  }
+  const sourceEntry = level3dSourceEntries(level3dEditorSource())[0];
+  if (sourceEntry?.bundle) return sourceEntry.bundle;
   const bundles = Object.keys(exportData?.levelBundles || {}).filter((name) => !["default", "levels"].includes(name));
   return bundles[0] || "levels";
 }
 
 function level3dNameControlConfig(source = level3dEditorSource()) {
-  if (typeof focusedLevelNameControlConfig === "function") {
-    return focusedLevelNameControlConfig(source, {
-      nameInput: level3dNameInput,
-      datalist: level3dNameOptions,
-    });
-  }
-  return {
-    source,
-    scopeValue: String(level3dBundleInput?.value || "").trim(),
+  return focusedLevelNameControlConfig(source, {
     nameInput: level3dNameInput,
     datalist: level3dNameOptions,
-    findRanges: findLevels3Ranges,
-    findDefinitions: findLevel3dDefinitions,
-    rangeScope: (range) => String(range?.bundle || "").trim(),
-    entryName: (entry) => entry?.name || "",
-    optionValue: (entry) => entry?.name || "",
-  };
+  });
 }
 
 function syncLevel3dNameOptions() {
@@ -780,7 +738,7 @@ function loadLevel3dNameEntry({ entry, range, source = level3dEditorSource(), so
     ...entry,
     bundle: range?.bundle || "",
     model: range?.model || "",
-    rows: rowsForLevel3dDefinition(source, entry),
+    rows: entry?.rows || [],
   }, source, {
     document: sourceDocument,
     recordHistory: true,
@@ -811,22 +769,38 @@ function loadSelectedLevel3dNameFromInput() {
 }
 
 function isPuzzle3dExport(exportData) {
-  return Boolean(
-    exportData?.__kind === "puzzle3d"
-      || exportData?.directions?.front
-      || exportData?.directions?.forward
-      || exportData?.levelBundles,
-  );
+  return exportData?.kind === "puzzle3d";
 }
 
 function renderLevel3dSourcePreview() {
   if (!level3dSourcePreview) {
     return;
   }
-  syncLevel3dNameOptions();
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dSourceDefinition(level3dEditorSource())?.name || "level 1");
-  const sourceData = level3dSourceData();
-  level3dSourcePreview.textContent = level3dSnippetSource(levelName, sourceData, "", { bodyIndent: "" });
+  let levelName;
+  let sourceData;
+  try {
+    syncLevel3dNameOptions();
+    levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dSourceDefinition(level3dEditorSource())?.name || "level 1");
+    sourceData = level3dSourceData();
+  } catch (error) {
+    level3dSourcePreview.textContent = `Could not inspect 3D level: ${userFacingRuntimeError(error)}`;
+    return;
+  }
+  const generation = ++level3dSourcePreviewGeneration;
+  levelSourceRequest(level3dEditorSource(), {
+    operation: "format",
+    name: levelName,
+    rows: sourceData.rows,
+    localLegends: level3dLocalLegendDrafts(sourceData),
+  }).then((result) => {
+    if (generation === level3dSourcePreviewGeneration) {
+      level3dSourcePreview.textContent = result.text;
+    }
+  }).catch((error) => {
+    if (generation === level3dSourcePreviewGeneration) {
+      level3dSourcePreview.textContent = `Could not format 3D level: ${userFacingRuntimeError(error)}`;
+    }
+  });
 }
 
 function level3dSourceData(source = level3dEditorSource(), exportData = previewBuild?.exportData) {
@@ -841,7 +815,7 @@ function level3dSourceData(source = level3dEditorSource(), exportData = previewB
   if (!entry) {
     return { rows: sourceDefinition.rows || [], unknownCells: 0 };
   }
-  const legendEntries = sourceLevel3dLegendEntries(source);
+  const legendEntries = sourceDefinition.legend;
   const rows = level3dRowsForEntry(entry, legendEntries);
   return rows;
 }
@@ -899,117 +873,52 @@ function normalizeLevel3dSourceData(levelData) {
   };
 }
 
-function sourceLevel3dLegendEntries(source) {
-  const entries = [];
-  for (const range of findLevels3Ranges(source)) {
-    entries.push(...sourceLevel3dLegendEntriesForRange(source, range));
-  }
-  if (!entries.some((entry) => entry.objects.length === 0)) {
-    entries.unshift({ char: LEVEL3D_EMPTY_CHAR, objects: [] });
-  }
-  return entries;
+function level3dSourceEntries(source) {
+  return surfaceEntriesForSource(source)
+    .filter((entry) => sourceTargetMatches(entry, "level", "3d"))
+    .map((entry) => {
+      const contract = entry?.sourceLevel;
+      if (
+        !contract
+        || !Array.isArray(contract.rows)
+        || !Array.isArray(contract.legend)
+        || contract.legend.some((legend) => !Array.isArray(legend.objects))
+      ) {
+        throw new Error("3D level source target is missing its typed sourceLevel contract.");
+      }
+      return {
+        ...entry,
+        bundle: entry.params?.bundle || "",
+        model: entry.params?.model || "",
+        rows: contract.rows,
+        legend: contract.legend.map((legend) => ({
+          char: legend.symbol,
+          objects: legend.objects || [],
+        })),
+        localLegends: (contract.localLegends || []).map((legend) => ({
+          symbol: legend.symbol,
+          selectors: legend.selectors || [],
+        })),
+      };
+    });
 }
 
 function currentLevel3dSourceDefinition(source) {
-  const ranges = findLevels3Ranges(source);
-  if (!ranges.length) {
-    return null;
+  const entries = level3dSourceEntries(source);
+  const loaded = Number.isInteger(level3d.sourceTargetStart)
+    ? entries.find((entry) => entry.start === level3d.sourceTargetStart)
+    : null;
+  if (loaded) {
+    return loaded;
   }
   const requestedBundle = String(level3dBundleInput?.value || "").trim();
   const requestedName = String(level3dNameInput?.value || "").trim();
-  for (const range of ranges) {
-    if (requestedBundle && range.bundle !== requestedBundle) {
-      continue;
-    }
-    const definitions = findLevel3dDefinitions(source, range);
-    if (!definitions.length) {
-      continue;
-    }
-    const exact = requestedName
-      ? definitions.find((definition) => definition.name === requestedName)
-      : null;
-    const definition = exact || defaultLevel3dSourceDefinition(source, [range]);
-    if (!definition) {
-      continue;
-    }
-    return level3dSourceDefinitionFromRange(source, range, definition);
-  }
-  return defaultLevel3dSourceDefinition(source, ranges);
-}
-
-function defaultLevel3dSourceDefinition(source, ranges = findLevels3Ranges(source)) {
-  for (const range of ranges) {
-    if (!sourceLevel3dRangeHasReadableLegend(source, range)) {
-      continue;
-    }
-    const definition = findLevel3dDefinitions(source, range)[0];
-    if (!definition) {
-      continue;
-    }
-    return level3dSourceDefinitionFromRange(source, range, definition);
-  }
-  for (const range of ranges) {
-    const definition = findLevel3dDefinitions(source, range)[0];
-    if (!definition) {
-      continue;
-    }
-    return level3dSourceDefinitionFromRange(source, range, definition);
-  }
-  return null;
-}
-
-function sourceLevel3dRangeHasReadableLegend(source, range) {
-  const entries = sourceLevel3dLegendEntriesForRange(source, range);
-  return entries.some((entry) => entry.objects.length > 0);
-}
-
-function sourceLevel3dLegendEntriesForRange(source, range) {
-  const block = String(source || "").slice(range?.bodyStart || 0, range?.bodyEnd || 0);
-  const legendMatch = block.match(/(^|\n)([\t ]*)legend\s*\{\n([\s\S]*?)\n\2\}/m);
-  if (!legendMatch) {
-    return [];
-  }
-  return sourceLevel3dLegendEntriesFromBlock(legendMatch[3]);
-}
-
-function sourceLevel3dLegendEntriesFromBlock(block) {
-  const entries = [];
-  for (const raw of String(block || "").split("\n")) {
-    const match = raw.trim().match(/^(\S)\s*=\s*(.+?)\s*$/);
-    if (!match) {
-      continue;
-    }
-    const expression = match[2].trim();
-    entries.push({
-      char: match[1],
-      objects: expression === "empty" ? [] : expression.split(/\s+/).filter(Boolean),
-    });
-  }
-  return entries;
-}
-
-function level3dSourceDefinitionFromRange(source, range, definition) {
-  return definition ? {
-    ...definition,
-    bundle: range.bundle,
-    model: range.model,
-    rows: rowsForLevel3dDefinition(source, definition),
-  } : null;
-}
-
-function rowsForLevel3dDefinition(source, definition) {
-  const rows = String(source || "")
-    .slice(definition.bodyStart, definition.bodyEnd)
-    .split("\n")
-    .map((line) => level3dScannerCode(line))
-    .map((line) => line.trim());
-  while (rows.length && !rows[0]) {
-    rows.shift();
-  }
-  while (rows.length && !rows[rows.length - 1]) {
-    rows.pop();
-  }
-  return rows;
+  return entries.find((entry) => (
+    (!requestedBundle || entry.bundle === requestedBundle)
+    && (!requestedName || entry.name === requestedName)
+  )) || entries.find((entry) => entry.legend.some((legend) => legend.objects.length > 0))
+    || entries[0]
+    || null;
 }
 
 function level3dObjectSetKey(objects) {
@@ -2457,38 +2366,6 @@ function level3dPositionInBounds(position) {
     && position.z < Math.max(1, level3d.height || 1);
 }
 
-function level3dSnippetSource(name, levelData, indent = "", options = {}) {
-  const legendLines = level3dTemporaryLegendSourceLines(levelData, indent);
-  const levelSource = levelDefinition3dSource(name, levelData, indent, options).trimEnd();
-  return legendLines.length
-    ? `${legendLines.join("\n")}\n\n${levelSource}\n`
-    : `${levelSource}\n`;
-}
-
-function levelDefinition3dSource(name, levelData, indent = "", options = {}) {
-  const { rows } = normalizeLevel3dSourceData(levelData);
-  const levelName = sanitizeLevel3dName(name);
-  const bodyIndent = Object.prototype.hasOwnProperty.call(options, "bodyIndent") ? options.bodyIndent : `${indent}  `;
-  return [
-    sourcePuzzleLevelHeaderSource(levelName, indent, { defaultName: "level 1", openBlock: true }),
-    ...rows.map((row) => String(row || "").length ? `${bodyIndent}${row}` : ""),
-    `${indent}}`,
-  ].join("\n") + (options.trailingNewline === false ? "" : "\n");
-}
-
-function level3dTemporaryLegendSourceLines(levelData, indent) {
-  const entries = level3dTemporaryLegendEntriesForLevelData(levelData);
-  if (!entries.length) {
-    return [];
-  }
-  const bodyIndent = `${indent}  `;
-  return [
-    `${indent}legend {`,
-    ...entries.map((entry) => `${bodyIndent}${entry.char} = ${entry.objects.join(" ")}`),
-    `${indent}}`,
-  ];
-}
-
 function level3dTemporaryLegendEntriesForLevelData(levelData) {
   const { rows } = normalizeLevel3dSourceData(levelData);
   const used = level3dUsedCharsInRows(rows);
@@ -2524,314 +2401,13 @@ function sanitizeLevel3dBundle(value) {
   return cleaned || currentLevel3dBundleName();
 }
 
-function findLevels3Ranges(source) {
-  const text = String(source || "");
-  const lines = level3dSourceLinesWithOffsets(text);
-  const ranges = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const code = level3dScannerCode(lines[index].raw);
-    const header = parseLevelsHeader(code);
-    if (!header) {
-      continue;
-    }
-    const close = findLevel3dBlockClose(lines, index);
-    if (!close) {
-      continue;
-    }
-    ranges.push({
-      bundle: header.bundle,
-      model: header.model,
-      start: lines[index].start,
-      bodyStart: lines[index].end + 1,
-      bodyEnd: close.start,
-      end: close.end,
-      indent: lineIndent(lines[index].raw) || "  ",
-    });
-    index = close.index;
-  }
-  return ranges;
-}
-
-function parseLevelsHeader(code) {
-  const match = String(code || "").match(/^levels(?:\s+([A-Za-z_][\w:.]*)(?:\s+of\s+([A-Za-z_][\w:.]*))?)?\s*\{$/);
-  if (!match) {
-    return null;
-  }
-  return { bundle: match[1] || "levels", model: match[2] || "" };
-}
-
-function findLevel3dBlockClose(lines, startIndex) {
-  let depth = 0;
-  for (let index = startIndex; index < lines.length; index += 1) {
-    const code = level3dScannerCode(lines[index].raw);
-    if (!code) {
-      continue;
-    }
-    if (code.endsWith("{")) {
-      depth += 1;
-    }
-    if (code === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return { ...lines[index], index };
-      }
-    }
-  }
-  return null;
-}
-
-function findLevel3dDefinitions(source, range) {
-  const text = String(source || "");
-  const lines = level3dSourceLinesWithOffsets(text);
-  const definitions = [];
-  const startIndex = lines.findIndex((line) => line.start >= range.bodyStart);
-  for (let index = Math.max(0, startIndex); index < lines.length && lines[index].start < range.bodyEnd; index += 1) {
-    const code = level3dScannerCode(lines[index].raw);
-    const name = sourcePuzzleLevelHeaderName(code);
-    if (name === null || !name || !code.endsWith("{")) {
-      continue;
-    }
-    const close = findLevel3dBlockClose(lines, index);
-    if (!close || close.end > range.end) {
-      continue;
-    }
-    definitions.push({
-      name,
-      start: lines[index].start,
-      bodyStart: lines[index].end + 1,
-      bodyEnd: close.start,
-      end: close.end,
-      nextIndex: close.index + 1,
-      indent: lineIndent(lines[index].raw) || range.indent || "  ",
-      bodyIndent: level3dDefinitionBodyIndent(lines, index, close.index, lineIndent(lines[index].raw) || range.indent || "  "),
-    });
-    index = close.index;
-  }
-  return definitions;
-}
-
-function findLevel3dDefinitionAtPosition(source, position) {
-  const safePosition = Math.max(0, Math.trunc(Number(position) || 0));
-  let levelIndex = 0;
-  for (const range of findLevels3Ranges(source)) {
-    for (const entry of findLevel3dDefinitions(source, range)) {
-      const currentIndex = levelIndex;
-      levelIndex += 1;
-      if (safePosition < entry.start || safePosition > entry.end) {
-        continue;
-      }
-      return {
-        ...entry,
-        bundle: range.bundle,
-        model: range.model,
-        levelIndex: currentIndex,
-        rows: rowsForLevel3dDefinition(source, entry),
-      };
-    }
-  }
-  return null;
-}
-
-function findLevels3InsertionRange(source, bundle = "") {
-  const requested = String(bundle || "").trim();
-  const ranges = findLevels3Ranges(source);
-  return (requested ? ranges.find((range) => range.bundle === requested) : null)
-    || ranges[0]
-    || null;
-}
-
-function insertLevel3d(source, name, levelData, bundle = "") {
-  let workingSource = String(source || "");
-  let range = findLevels3InsertionRange(workingSource, bundle);
-  if (!range) {
-    return "";
-  }
-  const prepared = prepareLevel3dLegendSourceForWrite(workingSource, range, levelData);
-  if (!prepared) {
-    return "";
-  }
-  workingSource = prepared.source;
-  range = findLevels3InsertionRange(workingSource, bundle);
-  if (!range) {
-    return "";
-  }
-  const definitions = findLevel3dDefinitions(workingSource, range);
-  const indent = definitions[0]?.indent || `${range.indent || ""}  `;
-  const bodyIndent = definitions[0]?.bodyIndent || `${indent}  `;
-  const levelSource = levelDefinition3dSource(name, prepared.levelData, indent, { bodyIndent }).trimEnd();
-  return `${workingSource.slice(0, range.bodyEnd).trimEnd()}\n\n${levelSource}\n${workingSource.slice(range.bodyEnd)}`;
-}
-
-function replaceLevel3dByName(source, name, levelData, bundle = "") {
-  const requested = sanitizeLevel3dName(name);
-  const requestedBundle = String(bundle || "").trim();
-  for (const range of findLevels3Ranges(source)) {
-    if (requestedBundle && range.bundle !== requestedBundle) {
-      continue;
-    }
-    const entry = findLevel3dDefinitions(source, range).find((candidate) => candidate.name === requested);
-    if (!entry) {
-      continue;
-    }
-    const prepared = prepareLevel3dLegendSourceForWrite(source, range, levelData);
-    if (!prepared) {
-      return null;
-    }
-    const updatedRange = findLevels3Ranges(prepared.source).find((candidate) => (
-      candidate.bundle === range.bundle
-      && candidate.model === range.model
-    ));
-    const updatedEntry = updatedRange
-      ? findLevel3dDefinitions(prepared.source, updatedRange).find((candidate) => candidate.name === requested)
-      : null;
-    if (!updatedEntry) {
-      return null;
-    }
-    const replacement = levelDefinition3dSource(requested, prepared.levelData, updatedEntry.indent, { bodyIndent: updatedEntry.bodyIndent }).trimEnd();
-    return {
-      source: replaceEditorSourceRangePreservingLineBoundary(prepared.source, updatedEntry.start, updatedEntry.end, replacement),
-    };
-  }
-  return null;
-}
-
-function prepareLevel3dLegendSourceForWrite(source, range, levelData) {
-  const prepared = level3dReconciledTemporaryLegendEntries(source, range, levelData);
-  if (!prepared) {
-    return null;
-  }
-  return {
-    source: insertLevel3dLegendEntries(source, range, prepared.entries),
-    levelData: prepared.levelData,
-  };
-}
-
-function level3dReconciledTemporaryLegendEntries(source, range, levelData) {
-  let { rows } = normalizeLevel3dSourceData(levelData);
-  rows = [...rows];
-  const existingEntries = sourceLevel3dLegendEntriesForRange(source, range);
-  const existingByChar = new Map(existingEntries.map((entry) => [entry.char, entry]));
-  const existingByObjects = new Map(existingEntries.map((entry) => [level3dObjectSetKey(entry.objects || []), entry.char]));
-  const usedChars = new Set([
-    LEVEL3D_EMPTY_CHAR,
-    ...sourceLevel3dLegendEntries(source).map((entry) => entry.char),
-    ...level3dUsedCharsInRows(rows),
-  ]);
-  const entries = [];
-  for (const entry of level3dTemporaryLegendEntriesForLevelData({ rows })) {
-    const objects = Array.isArray(entry.objects) ? entry.objects.filter(Boolean) : [];
-    const key = level3dObjectSetKey(objects);
-    const existingCharForObjects = existingByObjects.get(key);
-    if (existingCharForObjects) {
-      rows = replaceLevel3dRowsChar(rows, entry.char, existingCharForObjects);
-      continue;
-    }
-    let ch = entry.char;
-    const existingForChar = existingByChar.get(ch);
-    if (existingForChar && level3dObjectSetKey(existingForChar.objects || []) !== key) {
-      ch = nextTemporaryLevel3dLegendChar([...usedChars]);
-      if (!ch) {
-        return null;
-      }
-      rows = replaceLevel3dRowsChar(rows, entry.char, ch);
-    }
-    entries.push({ char: ch, objects });
-    existingByChar.set(ch, { char: ch, objects });
-    existingByObjects.set(key, ch);
-    usedChars.add(ch);
-  }
-  return { entries, levelData: { ...normalizeLevel3dSourceData(levelData), rows } };
-}
-
-function replaceLevel3dRowsChar(rows, from, to) {
-  if (!from || from === to) {
-    return rows;
-  }
-  return rows.map((row) => String(row || "").split(from).join(to));
-}
-
-function insertLevel3dLegendEntries(source, range, entries) {
-  if (!entries.length) {
-    return source;
-  }
-  const legend = findLevel3dLegendBlock(source, range);
-  if (legend) {
-    const lines = entries.map((entry) => `${legend.bodyIndent}${entry.char} = ${entry.objects.join(" ")}`);
-    return `${source.slice(0, legend.closeStart)}${lines.join("\n")}\n${source.slice(legend.closeStart)}`;
-  }
-  const indent = `${range.indent || ""}  `;
-  const bodyIndent = `${indent}  `;
-  const lines = [
-    `${indent}legend {`,
-    ...entries.map((entry) => `${bodyIndent}${entry.char} = ${entry.objects.join(" ")}`),
-    `${indent}}`,
-    "",
-  ];
-  return `${source.slice(0, range.bodyStart)}${lines.join("\n")}\n${source.slice(range.bodyStart)}`;
-}
-
-function findLevel3dLegendBlock(source, range) {
-  const block = String(source || "").slice(range?.bodyStart || 0, range?.bodyEnd || 0);
-  const match = /(^|\n)([\t ]*)legend\s*\{\n([\s\S]*?)\n\2\}/m.exec(block);
-  if (!match) {
-    return null;
-  }
-  const closeToken = `\n${match[2]}}`;
-  const closeOffset = match[0].lastIndexOf(closeToken);
-  if (closeOffset < 0) {
-    return null;
-  }
-  const closeStart = (range?.bodyStart || 0) + match.index + closeOffset + 1;
-  const bodyIndent = level3dLegendBodyIndent(match[3], match[2]);
-  return { closeStart, bodyIndent };
-}
-
-function level3dLegendBodyIndent(body, indent) {
-  for (const line of String(body || "").split("\n")) {
-    if (!level3dScannerCode(line)) {
-      continue;
-    }
-    const rowIndent = lineIndent(line);
-    if (rowIndent.length > indent.length) {
-      return rowIndent;
-    }
-    break;
-  }
-  return `${indent}  `;
-}
-
-function level3dDefinitionBodyIndent(lines, headerIndex, closeIndex, indent) {
-  for (let index = headerIndex + 1; index < closeIndex; index += 1) {
-    const line = lines[index];
-    const code = level3dScannerCode(line.raw);
-    if (!code) {
-      continue;
-    }
-    const childIndent = lineIndent(line.raw);
-    if (childIndent.startsWith(indent) && childIndent.length > indent.length) {
-      return childIndent;
-    }
-    break;
-  }
-  return `${indent}  `;
-}
-
 function currentLevel3dSourceLocation() {
   const document = level3dSourceDocument();
   const source = level3dEditorSource(document);
-  const name = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dEntry()?.name || "");
-  const bundle = sanitizeLevel3dBundle(level3dBundleInput?.value || "");
-  for (const range of findLevels3Ranges(source)) {
-    if (bundle && range.bundle !== bundle) {
-      continue;
-    }
-    const entry = findLevel3dDefinitions(source, range).find((candidate) => candidate.name === name);
-    if (entry) {
-      return { document, start: entry.start, key: `${range.bundle}:${entry.name}` };
-    }
-  }
-  const range = findLevels3InsertionRange(source, bundle);
-  return range ? { document, start: range.start, key: `${range.bundle}:levels` } : null;
+  const entry = currentLevel3dSourceDefinition(source);
+  return entry
+    ? { document, start: entry.start, key: `${entry.bundle}:${entry.name}` }
+    : null;
 }
 
 function loadLevel3dFromSourcePosition(position, options = {}) {
@@ -2839,7 +2415,10 @@ function loadLevel3dFromSourcePosition(position, options = {}) {
     return null;
   }
   const source = sourceEditorDocumentValue();
-  const entry = findLevel3dDefinitionAtPosition(source, position);
+  const safePosition = Math.max(0, Math.trunc(Number(position) || 0));
+  const entry = level3dSourceEntries(source).find((candidate) => (
+    safePosition >= candidate.start && safePosition <= candidate.end
+  ));
   if (!entry) {
     return null;
   }
@@ -2851,15 +2430,8 @@ function loadLevel3dSourceTarget(target, options = {}) {
     return null;
   }
   const source = sourceEditorDocumentValue();
-  const entry = Number.isInteger(target?.bodyStart) && Number.isInteger(target?.bodyEnd)
-    ? sourceEditableEntryFromTarget(source, target, {
-      defaultName: "level 1",
-      body: (_source, entry) => ({
-        bundle: entry.bundle || entry.params?.bundle || "",
-        model: entry.model || entry.params?.model || "",
-        rows: rowsForLevel3dDefinition(_source, entry),
-      }),
-    })
+  const entry = Number.isInteger(target?.start)
+    ? level3dSourceEntries(source).find((candidate) => candidate.start === target.start)
     : null;
   if (!entry) {
     return null;
@@ -2914,14 +2486,6 @@ function loadLevel3dSourceDefinition(entry, source, options = {}) {
   return `level3d:${entry.bundle || ""}:${entry.name}:${entry.start}`;
 }
 
-function level3dSourceLinesWithOffsets(source) {
-  return editorSourceLinesWithOffsets(source);
-}
-
-function level3dScannerCode(line) {
-  return String(line || "").split("//", 1)[0].trim();
-}
-
 function renderLevel3dRuntime() {
   if (!level3dRuntimeFrame) {
     renderLevel3dStageOverlay();
@@ -2930,7 +2494,10 @@ function renderLevel3dRuntime() {
   const update = level3dRuntimePreviewUpdate();
   if (!previewBuild?.html || !update) {
     showBlankLevel3dRuntimeFrame(level3dRuntimeFrame);
-    level3dRuntimeFrameLoaded = false;
+    level3dRuntimeFrameDocumentLoaded = false;
+    level3dRuntimeFrameRuntimeReady = false;
+    level3dRuntimeFrameFailure = null;
+    level3dRuntimeFrameProgress = [];
     level3dRuntimeFrameKey = "";
     level3dStageRendererView = null;
     setLevel3dActionStatus(previewBuild?.html ? "Load a 3D level first" : "Run Preview first", "");
@@ -2938,14 +2505,24 @@ function renderLevel3dRuntime() {
   }
   const key = `${activePreviewDocument()?.id || ""}:${previewBuild?.html.length}:${currentEditableLevelIndex()}`;
   if (level3dRuntimeFrameKey !== key) {
-    level3dRuntimeFrameLoaded = false;
+    const previousFrame = level3dRuntimeFrame;
+    const nextFrame = previousFrame.cloneNode(false);
+    previousFrame.replaceWith(nextFrame);
+    level3dRuntimeFrame = nextFrame;
+    level3dRuntimeFrameDocumentLoaded = false;
+    level3dRuntimeFrameRuntimeReady = false;
+    level3dRuntimeFrameFailure = null;
+    level3dRuntimeFrameProgress = [];
     level3dStageRendererView = null;
     level3dRuntimeFrameKey = key;
-    level3dRuntimeFrame.addEventListener("load", () => {
-      level3dRuntimeFrameLoaded = true;
+    nextFrame.addEventListener("load", () => {
+      if (level3dRuntimeFrame !== nextFrame || level3dRuntimeFrameKey !== key) {
+        return;
+      }
+      level3dRuntimeFrameDocumentLoaded = true;
       sendLevel3dSnapshotToRuntime();
     }, { once: true });
-    level3dRuntimeFrame.srcdoc = level3dRuntimePreviewDocument(update);
+    nextFrame.srcdoc = level3dRuntimePreviewDocument(update);
     return;
   }
   sendLevel3dSnapshotToRuntime();
@@ -2953,13 +2530,15 @@ function renderLevel3dRuntime() {
 }
 
 function sendLevel3dSnapshotToRuntime() {
-  if (!level3dRuntimeFrameLoaded || !level3dRuntimeFrame?.contentWindow) {
+  if (!level3dRuntimeFrameDocumentLoaded || !level3dRuntimeFrame?.contentWindow) {
     return;
   }
   const update = level3dRuntimePreviewUpdate();
   if (!update) {
     showBlankLevel3dRuntimeFrame(level3dRuntimeFrame);
-    level3dRuntimeFrameLoaded = false;
+    level3dRuntimeFrameDocumentLoaded = false;
+    level3dRuntimeFrameRuntimeReady = false;
+    level3dRuntimeFrameFailure = null;
     level3dRuntimeFrameKey = "";
     return;
   }
@@ -2968,7 +2547,7 @@ function sendLevel3dSnapshotToRuntime() {
 
 function refreshLevel3dRuntimePreviews() {
   level3dStageRendererView = null;
-  if (!level3dRuntimeFrameLoaded || !level3dRuntimeFrame?.contentWindow) {
+  if (!level3dRuntimeFrameDocumentLoaded || !level3dRuntimeFrame?.contentWindow) {
     renderLevel3dRuntime();
   } else {
     sendLevel3dSnapshotToRuntime();
@@ -3093,7 +2672,7 @@ function focusLevel3dPlaytestTarget() {
 
 function level3dPlaytestFrameWindow() {
   if (level3dRuntimeFrame) {
-    return level3dRuntimeFrameLoaded ? level3dRuntimeFrame.contentWindow : null;
+    return level3dRuntimeFrameRuntimeReady ? level3dRuntimeFrame.contentWindow : null;
   }
   return previewFrame?.contentWindow || null;
 }
@@ -3317,7 +2896,18 @@ function level3dPreviewSurfacePayload(update = {}) {
 }
 
 function level3dModelPreviewComponent() {
-  return { kind: "puzzle3", source: "__editor_level3d_preview__" };
+  const model = String(previewBuild?.exportData?.modelName || "").trim();
+  if (!model) {
+    throw new Error("3D level preview is missing its typed model identity.");
+  }
+  return {
+    kind: "puzzle3",
+    source: {
+      model,
+      component: "__editor_level3d_preview__",
+      source: model,
+    },
+  };
 }
 
 function level3dRuntimePreviewResources(exportData = previewBuild?.exportData) {
@@ -3333,144 +2923,8 @@ function level3dRuntimePreviewResources(exportData = previewBuild?.exportData) {
   };
 }
 
-function level3dPreviewVisuals(exportData = previewBuild?.exportData, source = level3dEditorSource()) {
-  return {
-    ...(exportData?.visuals || {}),
-    ...sourceLevel3dVisuals(source),
-  };
-}
-
-function sourceLevel3dVisuals(source) {
-  const visuals = {};
-  for (const block of sourceLevel3dVisualBlocks(source)) {
-    Object.assign(visuals, sourceLevel3dVisualsFromBlock(String(source || "").slice(block.bodyStart, block.bodyEnd)));
-  }
-  return visuals;
-}
-
-function sourceLevel3dVisualBlocks(source) {
-  const text = String(source || "");
-  const pattern = /(^|\n)([\t ]*)visuals(?:\s+[^\n{]+)?\s*\{/gm;
-  const blocks = [];
-  let match = null;
-  while ((match = pattern.exec(text))) {
-    const start = match.index + match[1].length;
-    const openIndex = text.indexOf("{", start);
-    const closeIndex = level3dMatchingBrace(text, openIndex);
-    if (openIndex < 0 || closeIndex < 0) {
-      continue;
-    }
-    blocks.push({ bodyStart: openIndex + 1, bodyEnd: closeIndex });
-    pattern.lastIndex = closeIndex + 1;
-  }
-  return blocks;
-}
-
-function sourceLevel3dVisualsFromBlock(block) {
-  const lines = String(block || "")
-    .split("\n")
-    .map((raw) => level3dScannerCode(raw).trim());
-  const visuals = {};
-  for (let index = 0; index < lines.length; index += 1) {
-    const name = lines[index];
-    if (!isLevel3dVisualName(name) || !isLevel3dVisualPaletteRow(nextLevel3dNonEmptyLine(lines, index + 1))) {
-      continue;
-    }
-    let paletteIndex = index + 1;
-    while (paletteIndex < lines.length && !lines[paletteIndex]) {
-      paletteIndex += 1;
-    }
-    const palette = level3dVisualPaletteFromLine(lines[paletteIndex]);
-    if (!palette) {
-      continue;
-    }
-    const bitmap = [];
-    for (let rowIndex = paletteIndex + 1; rowIndex < lines.length; rowIndex += 1) {
-      const row = lines[rowIndex];
-      if (isLevel3dVisualName(row) && isLevel3dVisualPaletteRow(nextLevel3dNonEmptyLine(lines, rowIndex + 1))) {
-        break;
-      }
-      bitmap.push(row);
-    }
-    if (bitmap.some((row) => row.length > 0) && level3dVisualBitmapUsesPalette(bitmap, palette)) {
-      visuals[name] = { palette, bitmap };
-    }
-  }
-  return visuals;
-}
-
-function level3dVisualBitmapUsesPalette(bitmap, palette) {
-  const keys = new Set(Object.keys(palette || {}));
-  for (const row of bitmap || []) {
-    for (const char of String(row || "")) {
-      if (char !== "." && char !== " " && !keys.has(char)) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-function level3dMatchingBrace(text, openIndex) {
-  if (openIndex < 0 || text[openIndex] !== "{") {
-    return -1;
-  }
-  let depth = 0;
-  for (let index = openIndex; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-  return -1;
-}
-
-function nextLevel3dNonEmptyLine(lines, start) {
-  for (let index = start; index < lines.length; index += 1) {
-    if (lines[index]) {
-      return lines[index];
-    }
-  }
-  return "";
-}
-
-function isLevel3dVisualName(value) {
-  return /^@?[A-Za-z_][\w:]*$/.test(String(value || "")) && !isLevel3dVisualPaletteRow(value);
-}
-
-function isLevel3dVisualPaletteRow(value) {
-  const tokens = String(value || "").split(/\s+/).filter(Boolean);
-  return tokens.length > 0 && tokens.every((token) => Boolean(level3dVisualColorToken(token)));
-}
-
-function level3dVisualPaletteFromLine(line) {
-  const keys = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const palette = {};
-  const tokens = String(line || "").split(/\s+/).filter(Boolean);
-  if (!tokens.length || tokens.length > keys.length) {
-    return null;
-  }
-  for (const [index, token] of tokens.entries()) {
-    const color = level3dVisualColorToken(token);
-    if (!color) {
-      return null;
-    }
-    palette[keys[index]] = color;
-  }
-  return palette;
-}
-
-function level3dVisualColorToken(token) {
-  const value = String(token || "");
-  if (value.toLowerCase() === "transparent") {
-    return "transparent";
-  }
-  return /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(value) ? value : null;
+function level3dPreviewVisuals(exportData = previewBuild?.exportData) {
+  return exportData?.visuals || {};
 }
 
 function level3dLayerRuntimeSnapshot() {
@@ -3851,6 +3305,45 @@ function handleLevel3dStageRendererViewMessage(event) {
   renderLevel3dStageOverlay();
 }
 
+function handleLevel3dRuntimeLifecycleMessage(event) {
+  if (event.source !== level3dRuntimeFrame?.contentWindow) {
+    return;
+  }
+  if (event.data?.type === "PuzzleStudioPreviewRuntimeReady") {
+    level3dRuntimeFrameRuntimeReady = true;
+    level3dRuntimeFrameFailure = null;
+    return;
+  }
+  if (event.data?.type !== "PuzzleStudioPreviewRuntimeError") {
+    return;
+  }
+  level3dRuntimeFrameRuntimeReady = false;
+  level3dRuntimeFrameFailure = {
+    label: String(event.data.label || "runtime failed"),
+    message: String(event.data.message || "unknown error"),
+  };
+  setLevel3dActionStatus(
+    `3D preview ${level3dRuntimeFrameFailure.label}: ${level3dRuntimeFrameFailure.message}`,
+    "is-error",
+  );
+}
+
+function handleLevel3dRuntimeProgressMessage(event) {
+  if (
+    event.source !== level3dRuntimeFrame?.contentWindow
+    || event.data?.type !== "PuzzleStudioLevel3dFrameProgress"
+  ) {
+    return;
+  }
+  level3dRuntimeFrameProgress = [
+    ...level3dRuntimeFrameProgress,
+    {
+      stage: String(event.data.stage || ""),
+      detail: String(event.data.detail || ""),
+    },
+  ].slice(-20);
+}
+
 function level3dNormalizeRuntimeProjectionView(view) {
   const scale = Number(view?.scale);
   const width = Number(view?.width);
@@ -4167,8 +3660,28 @@ function level3dRuntimePreviewDocument(update) {
     .replace(/\u2029/g, "\\u2029");
   const seedScript = `<script id="puzzle-studio-initial-model-preview">
 (() => {
+  const report = (stage, detail = "") => window.parent?.postMessage({
+    type: "PuzzleStudioLevel3dFrameProgress",
+    stage,
+    detail: String(detail || ""),
+  }, "*");
+  window.addEventListener("error", (event) => {
+    window.parent?.postMessage({
+      type: "PuzzleStudioPreviewRuntimeError",
+      label: "isolated preview script failed",
+      message: String(event.error?.stack || event.error?.message || event.message || "unknown error"),
+    }, "*");
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    window.parent?.postMessage({
+      type: "PuzzleStudioPreviewRuntimeError",
+      label: "isolated preview promise failed",
+      message: String(event.reason?.message || event.reason || "unknown error"),
+    }, "*");
+  });
   const update = ${json};
   window.PuzzleStudioInitialPreviewSurface = update;
+  report("seed-installed");
   window.PuzzleStudioModelComponentPreviewFixture = function(source, incoming = update) {
     const next = JSON.parse(JSON.stringify(source || {}));
     const payload = incoming.payload || incoming;
@@ -4253,6 +3766,11 @@ function level3dRuntimePreviewDocument(update) {
   const bootScript = `<script id="puzzle-studio-initial-model-preview-boot">
 (() => {
   const update = window.PuzzleStudioInitialPreviewSurface;
+  window.parent?.postMessage({
+    type: "PuzzleStudioLevel3dFrameProgress",
+    stage: "boot-start",
+    detail: "",
+  }, "*");
   if (!update || update.type !== "${LEVEL3D_PREVIEW_SURFACE_MESSAGE}") {
     return;
   }
@@ -4260,7 +3778,12 @@ function level3dRuntimePreviewDocument(update) {
     return;
   }
   if (typeof window.applyPuzzleStudioPreviewSurfaceUpdate === "function") {
-    window.applyPuzzleStudioPreviewSurfaceUpdate(update);
+    const applied = window.applyPuzzleStudioPreviewSurfaceUpdate(update);
+    window.parent?.postMessage({
+      type: "PuzzleStudioLevel3dFrameProgress",
+      stage: "surface-applied",
+      detail: String(applied),
+    }, "*");
     return;
   }
   if (typeof window.loadSnapshotData !== "function") {
@@ -5944,56 +5467,109 @@ function level3dClampNumber(value, min, max) {
 }
 
 async function copyLevel3dToClipboard() {
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dEntry()?.name || "level 1");
-  await copyTextToClipboard(level3dSnippetSource(levelName, level3dSourceData(), "", { bodyIndent: "" }));
-  setLevel3dActionStatus("Copied 3D level", "is-ok");
+  try {
+    const levelName = sanitizeLevel3dName(level3dNameInput?.value || currentLevel3dEntry()?.name || "level 1");
+    const source = level3dEditorSource();
+    const levelData = level3dSourceData();
+    const result = await levelSourceRequest(source, {
+      operation: "format",
+      name: levelName,
+      rows: levelData.rows,
+      localLegends: level3dLocalLegendDrafts(levelData),
+    });
+    await copyTextToClipboard(result.text);
+    setLevel3dActionStatus("Copied 3D level", "is-ok");
+  } catch (error) {
+    setLevel3dActionStatus(`Could not copy 3D level: ${userFacingRuntimeError(error)}`, "is-error");
+  }
 }
 
-function addLevel3dToSource() {
+async function addLevel3dToSource() {
   const sourceDocument = level3dSourceDocument();
   if (!sourceDocument) {
     setLevel3dActionStatus("No game entry for 3D level", "is-error");
     return;
   }
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level 1");
-  const bundle = sanitizeLevel3dBundle(level3dBundleInput?.value || "");
-  const nextSource = insertLevel3d(level3dEditorSource(sourceDocument), levelName, level3dSourceData(), bundle);
-  if (!nextSource) {
-    setLevel3dActionStatus(`No levels block named ${bundle}`, "is-error");
-    return;
+  let source;
+  try {
+    const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level 1");
+    const bundle = sanitizeLevel3dBundle(level3dBundleInput?.value || "");
+    source = level3dEditorSource(sourceDocument);
+    const levelData = level3dSourceData();
+    const result = await levelSourceRequest(source, {
+      operation: "insert",
+      name: levelName,
+      namespace: bundle,
+      rows: levelData.rows,
+      localLegends: level3dLocalLegendDrafts(levelData),
+      cursor: currentLevel3dSourceDefinition(source)?.start ?? null,
+      createContainer: false,
+    });
+    if (!applyPuzzleSourceMutation(sourceDocument, source, result.source)) {
+      setLevel3dActionStatus("3D level source changed while the edit was being prepared; retry the edit.", "is-error");
+      return;
+    }
+    recordLevel3dSourceMutation(sourceDocument);
+    level3d.sourceTargetStart = null;
+    level3dNameInput.value = nextLevelName(levelName);
+    syncLevel3dNameOptions();
+    setLevel3dActionStatus("Added 3D level", "is-ok");
+  } catch (error) {
+    setLevel3dActionStatus(`Could not add 3D level: ${userFacingRuntimeError(error)}`, "is-error");
   }
-  applyLevel3dSourceChange(sourceDocument, nextSource);
-  level3dNameInput.value = nextLevelName(levelName);
-  syncLevel3dNameOptions();
-  setLevel3dActionStatus("Added 3D level", "is-ok");
 }
 
-function updateLevel3dInSource() {
+async function updateLevel3dInSource() {
   const sourceDocument = level3dSourceDocument();
   if (!sourceDocument) {
     setLevel3dActionStatus("No game entry for 3D level", "is-error");
     return;
   }
-  const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level 1");
-  const bundle = sanitizeLevel3dBundle(level3dBundleInput?.value || "");
-  const result = replaceLevel3dByName(level3dEditorSource(sourceDocument), levelName, level3dSourceData(), bundle);
-  if (!result) {
-    setLevel3dActionStatus(`No 3D level named ${bundle}.${levelName}`, "is-error");
-    return;
+  let source;
+  try {
+    const levelName = sanitizeLevel3dName(level3dNameInput?.value || "level 1");
+    source = level3dEditorSource(sourceDocument);
+    const target = currentLevel3dSourceDefinition(source);
+    if (!target) {
+      setLevel3dActionStatus("No typed 3D level source target is selected", "is-error");
+      return;
+    }
+    const levelData = level3dSourceData();
+    const result = await levelSourceRequest(source, {
+      operation: "update",
+      targetStart: target.start,
+      name: levelName,
+      rows: levelData.rows,
+      localLegends: level3dLocalLegendDrafts(levelData),
+    });
+    if (!applyPuzzleSourceMutation(sourceDocument, source, result.source)) {
+      setLevel3dActionStatus("3D level source changed while the edit was being prepared; retry the edit.", "is-error");
+      return;
+    }
+    recordLevel3dSourceMutation(sourceDocument);
+    level3d.sourceTargetStart = result.start;
+    setLevel3dActionStatus(`Updated 3D level ${levelName}`, "is-ok");
+  } catch (error) {
+    setLevel3dActionStatus(`Could not update 3D level: ${userFacingRuntimeError(error)}`, "is-error");
   }
-  applyLevel3dSourceChange(sourceDocument, result.source);
-  setLevel3dActionStatus(`Updated 3D level ${levelName}`, "is-ok");
 }
 
-function applyLevel3dSourceChange(sourceDocument, source) {
-  sourceDocument.source = source;
+function level3dLocalLegendDrafts(levelData) {
+  const used = level3dUsedCharsInRows(levelData.rows);
+  const bySymbol = new Map((level3d.sourceLocalLegends || []).map((entry) => [
+    entry.symbol,
+    { symbol: entry.symbol, selectors: [...(entry.selectors || [])] },
+  ]));
+  for (const entry of level3d.palette || []) {
+    if (!entry.temporary || !used.has(entry.char)) continue;
+    bySymbol.set(entry.char, { symbol: entry.char, selectors: [...(entry.objects || [])] });
+  }
+  return [...bySymbol.values()];
+}
+
+function recordLevel3dSourceMutation(sourceDocument) {
   level3d.sourceDocumentId = sourceDocument.id || level3d.sourceDocumentId || "";
   level3d.sourceKey = "";
-  if (sourceDocument.id === activeDocument()?.id) {
-    setSourceEditorValue(source, { resetUndo: false });
-  }
-  scheduleLocalSave();
-  schedulePreview();
 }
 
 function resetLevel3dPreviewView() {
@@ -6351,6 +5927,8 @@ document.querySelectorAll("[data-level3d-layer-edge]").forEach((button) => {
 });
 window.addEventListener("message", handleLevel3dLayerRendererViewMessage);
 window.addEventListener("message", handleLevel3dStageRendererViewMessage);
+window.addEventListener("message", handleLevel3dRuntimeLifecycleMessage);
+window.addEventListener("message", handleLevel3dRuntimeProgressMessage);
 window.addEventListener("message", handleLevel3dPlaytestStateMessage);
 window.addEventListener("resize", scheduleLevel3dSurfaceResize);
 document.addEventListener("keydown", (event) => {

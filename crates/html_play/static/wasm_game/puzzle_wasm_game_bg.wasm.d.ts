@@ -2,45 +2,33 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const __wbg_wasmstandalonesession_free: (a: number, b: number) => void;
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 export const wasmstandalonesession_apply_debug_input_name: (a: number, b: number, c: number) => [number, number, number, number];
 export const wasmstandalonesession_audio_feedback_event: (a: number, b: number) => [number, number];
-=======
-export const hydrate_render_scene_images: (a: number, b: number, c: number, d: number) => [number, number, number, number];
-export const project_renderer_state: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
-export const resolve_render_frame: (a: number, b: number, c: number) => [number, number, number, number];
-export const resolve_render_moment: (a: number, b: number, c: number, d: number) => [number, number, number, number];
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
-export const wasmstandalonesession_confirm_progress_save_cleared: (a: number) => void;
-export const wasmstandalonesession_confirm_progress_save_written: (a: number, b: number) => [number, number];
+export const wasmstandalonesession_confirm_progress_persistence_applied: (a: number, b: number) => [number, number];
+export const wasmstandalonesession_development_snapshot: (a: number) => [number, number, number, number];
 export const wasmstandalonesession_dispatch: (a: number, b: number, c: number) => [number, number, number, number];
 export const wasmstandalonesession_fromExport: (a: number, b: number) => [number, number, number];
 export const wasmstandalonesession_new: (a: number, b: number, c: number, d: number) => [number, number, number];
-<<<<<<< 98103c50f8b944de451f9367f6d21d34bc55e3b6
 export const wasmstandalonesession_presentation_event_consumed: (a: number, b: number) => [number, number, number, number];
 export const wasmstandalonesession_presentation_frame: (a: number, b: number) => [number, number];
 export const wasmstandalonesession_progress_save: (a: number) => [number, number];
 export const wasmstandalonesession_progress_save_request: (a: number) => [number, number];
 export const wasmstandalonesession_progress_storage_key: (a: number) => [number, number];
 export const wasmstandalonesession_progress_storage_save_version: (a: number) => number;
-=======
-export const wasmstandalonesession_progress_save_request: (a: number) => [number, number];
-export const wasmstandalonesession_resolve_scene_presentation: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
->>>>>>> dcbfa1ffd87009bdea112730e23f98056f777544
+export const wasmstandalonesession_resolve_render_moment: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
 export const wasmstandalonesession_restore_progress_save: (a: number, b: number, c: number) => [number, number];
 export const wasmstandalonesession_set_audio_feedback_wakeup: (a: number, b: any) => void;
 export const wasmstandalonesession_set_audio_visible: (a: number, b: number, c: number) => [number, number];
 export const wasmstandalonesession_set_current_state: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const wasmstandalonesession_set_progress_persistence_enabled: (a: number, b: number) => void;
-export const wasmstandalonesession_snapshot: (a: number) => [number, number];
 export const wasmstandalonesession_unlock_audio: (a: number, b: number) => any;
 export const wasmstandalonesession_visual_image_count: (a: number) => number;
 export const wasmstandalonesession_audio_tick: (a: number, b: number) => [number, number];
-export const wasm_bindgen__convert__closures_____invoke__h5b8ed1e5fec17ec2: (a: number, b: number, c: any) => [number, number];
-export const wasm_bindgen__convert__closures_____invoke__h709bd5d4c0b96c84: (a: number, b: number, c: any, d: any) => void;
-export const wasm_bindgen__convert__closures_____invoke__h44b7ab73cd046207: (a: number, b: number, c: any) => void;
-export const wasm_bindgen__convert__closures_____invoke__h44b7ab73cd046207_2: (a: number, b: number, c: any) => void;
-export const wasm_bindgen__convert__closures_____invoke__h4681ec085113b112: (a: number, b: number) => void;
+export const wasm_bindgen__convert__closures_____invoke__h01a4c02d46983c91: (a: number, b: number, c: any) => [number, number];
+export const wasm_bindgen__convert__closures_____invoke__hc88b208178540d95: (a: number, b: number, c: any, d: any) => void;
+export const wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540: (a: number, b: number, c: any) => void;
+export const wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540_2: (a: number, b: number, c: any) => void;
+export const wasm_bindgen__convert__closures_____invoke__h0e52773364796bcc: (a: number, b: number) => void;
 export const __wbindgen_malloc: (a: number, b: number) => number;
 export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
 export const __wbindgen_exn_store: (a: number) => void;

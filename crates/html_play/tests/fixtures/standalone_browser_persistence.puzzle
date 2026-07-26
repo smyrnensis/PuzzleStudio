@@ -1,0 +1,61 @@
+const title = "Standalone Persistence"
+
+scene title {
+layout {
+  if has_progress_save {
+    choice "Continue Restored Progress" -> goto restored
+  }
+  choice "New Game" -> {
+    clear_game_progress
+    start playing
+  }
+}
+}
+
+scene restored {
+layout {
+  board
+  choice "Clear Restored Progress" -> {
+    clear_game_progress
+    goto playing
+  }
+}
+}
+
+puzzle board {
+persistent var moves = 0
+layers {
+actor = Player
+}
+rules {
+input horizontal [ Player | no Player ] -> [ | Player ] moves += 1
+}
+}
+
+visuals simple of board {
+Player
+#f55
+0
+}
+
+scene playing {
+keys {
+q -> goto title
+}
+layout {
+  board
+}
+rules {
+  step board
+}
+}
+
+levels main of board {
+legend {
+. = empty
+P = Player
+}
+level "one" {
+P.
+}
+}

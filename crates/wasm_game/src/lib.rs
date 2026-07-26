@@ -40,8 +40,12 @@ impl WasmStandaloneSession {
         Self::from_runtime_parts(runtime, visual_images, Some(progress_storage))
     }
 
-    pub fn snapshot(&mut self) -> String {
-        self.inner.snapshot_json()
+    pub fn development_snapshot(&self) -> Result<String, JsValue> {
+        puzzle_presentation_json::to_string(&self.inner.development_snapshot()).map_err(|error| {
+            JsValue::from_str(&format!(
+                "development snapshot JSON could not be serialized: {error}"
+            ))
+        })
     }
 
     pub fn dispatch(&mut self, action_json: &str) -> Result<String, JsValue> {
@@ -49,11 +53,13 @@ impl WasmStandaloneSession {
             .map_err(|error| JsValue::from_str(&format!("invalid session action: {error}")))?;
         let mut snapshot = self
             .inner
-            .dispatch_typed(action)
+            .dispatch_development_typed(action)
             .map_err(|error| JsValue::from_str(&error))?;
-        self.project_snapshot_presentation(&mut snapshot);
+        self.project_snapshot_presentation(&mut snapshot.player);
         puzzle_presentation_json::to_string(&snapshot).map_err(|error| {
-            JsValue::from_str(&format!("snapshot JSON could not be serialized: {error}"))
+            JsValue::from_str(&format!(
+                "development snapshot JSON could not be serialized: {error}"
+            ))
         })
     }
 
@@ -63,9 +69,12 @@ impl WasmStandaloneSession {
             .apply_debug_input_name(input_name)
             .map_err(|error| JsValue::from_str(&error))?;
         self.project_snapshot_presentation(&mut dispatch.snapshot);
-        let snapshot = puzzle_presentation_json::to_value(&dispatch.snapshot).map_err(|error| {
+        let snapshot = puzzle_presentation_json::to_value(
+            &self.development_snapshot_with_player(dispatch.snapshot),
+        )
+        .map_err(|error| {
             JsValue::from_str(&format!(
-                "debug snapshot JSON could not be serialized: {error}"
+                "debug development snapshot JSON could not be serialized: {error}"
             ))
         })?;
         Ok(serde_json::json!({
@@ -86,6 +95,29 @@ impl WasmStandaloneSession {
         self.inner
             .set_current_state_json(state_json, level_index, materialize_level_start)
             .map_err(|error| JsValue::from_str(&error))
+    }
+
+    pub fn resolve_render_moment(
+        &self,
+        render_scene_json: &str,
+        render_moment_json: &str,
+    ) -> Result<String, JsValue> {
+        let scene = serde_json::from_str::<puzzle_runtime_contract::RuntimeResolvedRenderScene>(
+            render_scene_json,
+        )
+        .map_err(|error| JsValue::from_str(&format!("invalid resolved render scene: {error}")))?;
+        let moment = serde_json::from_str::<puzzle_runtime_contract::RuntimeResolvedRenderMoment>(
+            render_moment_json,
+        )
+        .map_err(|error| JsValue::from_str(&format!("invalid resolved render moment: {error}")))?;
+        let frame =
+            puzzle_presentation::resolve_render_moment(&scene, &self.visual_images, &moment)
+                .map_err(|error| {
+                    JsValue::from_str(&format!("render moment resolution failed: {error:?}"))
+                })?;
+        serde_json::to_string(&frame).map_err(|error| {
+            JsValue::from_str(&format!("render frame serialization failed: {error}"))
+        })
     }
 
     pub fn progress_save(&self) -> String {
@@ -139,14 +171,10 @@ impl WasmStandaloneSession {
             .expect("progress save request JSON should serialize")
     }
 
-    pub fn confirm_progress_save_written(&mut self, request_id: u32) -> Result<(), JsValue> {
+    pub fn confirm_progress_persistence_applied(&mut self, request_id: u32) -> Result<(), JsValue> {
         self.inner
-            .confirm_progress_save_written(request_id)
+            .confirm_progress_persistence_applied(request_id)
             .map_err(|error| JsValue::from_str(&error))
-    }
-
-    pub fn confirm_progress_save_cleared(&mut self) {
-        self.inner.confirm_progress_save_cleared();
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -220,6 +248,13 @@ impl WasmStandaloneSession {
 }
 
 impl WasmStandaloneSession {
+    fn development_snapshot_with_player(
+        &self,
+        player: puzzle_session_contract::RuntimeSessionSnapshot,
+    ) -> puzzle_session_contract::RuntimeDevelopmentSessionSnapshot {
+        self.inner.development_snapshot_from_player(player)
+    }
+
     fn project_snapshot_presentation(
         &mut self,
         snapshot: &mut puzzle_session_contract::RuntimeSessionSnapshot,
@@ -494,6 +529,66 @@ fn audio_frame(now_seconds: f64) -> u64 {
 mod tests {
     use super::*;
     use puzzle_audio::{AudioCommand, SfxAssetId};
+    use serde_json::json;
+
+    #[test]
+    fn editor_runtime_resolves_typed_render_moments_with_owned_assets() {
+        let source = r#"
+const title = render_moment
+
+puzzle board {
+layers {
+actor = Player
+}
+empty .
+rules {
+[ Player ] -> [ Player ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "first" {
+P
+}
+}
+}
+
+scene playing {
+layout {
+puzzle board = board
+}
+rules {
+step board
+}
+}
+"#;
+        let session = WasmStandaloneSession::new(source, "render_moment.puzzle")
+            .expect("editor runtime fixture");
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&session.development_snapshot().unwrap()).unwrap();
+        let render_scene = snapshot["viewportSources"][0]["state"]["renderScene"].clone();
+        assert!(render_scene.is_object());
+
+        let frame: serde_json::Value = serde_json::from_str(
+            &session
+                .resolve_render_moment(
+                    &render_scene.to_string(),
+                    &json!({
+                        "clipElapsedMs": 0,
+                        "animationElapsedMs": 0,
+                        "animations": []
+                    })
+                    .to_string(),
+                )
+                .expect("resolve typed render moment"),
+        )
+        .unwrap();
+        assert!(frame["batches"].is_array());
+        assert!(frame["decorations"].is_array());
+        assert_eq!(frame["continueAnimation"], false);
+    }
 
     #[test]
     fn editor_timeline_keeps_audio_out_of_snapshot_json() {
