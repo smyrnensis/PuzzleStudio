@@ -76,7 +76,7 @@ levels main of board {
 }
 `;
 
-const build = JSON.parse(compile_preview(source, "game.puzzle", "", ""));
+const build = JSON.parse(compile_preview(source, "game.puzzle"));
 if (
   typeof build.html !== "string"
   || build.documentMetadata?.title !== "Editor Preview Contract"
@@ -179,7 +179,7 @@ let missingImportDiagnostic = null;
 try {
   new WasmWorkspaceSession([
     { path: "game.puzzle", source: "// heading\nimport missing = \"missing.puzzle\"\n" },
-  ]).compile_preview("game.puzzle", "", "");
+  ]).compile_preview("game.puzzle");
 } catch (error) {
   missingImportDiagnostic = error?.diagnostics?.[0] || null;
 }
@@ -205,7 +205,7 @@ try {
       { path: "game.puzzle", source: "import part = \"parts/game.puzzle\"\n" },
       { path: "parts/game.puzzle", source: importedInvalidSource },
     ],
-  ).compile_preview("game.puzzle", "", "");
+  ).compile_preview("game.puzzle");
 } catch (error) {
   importedCompileDiagnostic = error?.diagnostics?.[0] || null;
 }
@@ -290,12 +290,9 @@ levels default of preview {
 }
 
 `;
-const puzzle3Build = JSON.parse(compile_preview(
-  puzzle3Source,
-  "spec_3d_preview_contract.puzzle",
-  "",
-  "",
-));
+const puzzle3Build = JSON.parse(
+  compile_preview(puzzle3Source, "spec_3d_preview_contract.puzzle"),
+);
 const puzzle3Html = puzzle3Build.html;
 if (
   puzzle3Build.models?.preview?.kind !== "puzzle3d"
@@ -359,7 +356,7 @@ if (!visual.includes('"colors":{"0":"#fff"}')) {
 }
 let fullCompileError = null;
 try {
-  compile_preview(editorSource, "game.puzzle", "", "");
+  compile_preview(editorSource, "game.puzzle");
 } catch (error) {
   fullCompileError = typeof error === "object" ? JSON.stringify(error) : String(error);
 }
