@@ -157,13 +157,9 @@ fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
         ("GET", "/") | ("GET", "/index.html") => http_ok("text/html; charset=utf-8", INDEX_HTML),
         ("GET", "/app.css") => http_ok("text/css; charset=utf-8", APP_CSS),
         ("GET", "/renderer.css") => http_ok("text/css; charset=utf-8", RENDERER_CSS),
-        ("GET", "/game.css") => {
+        ("GET", "/assets.js") => {
             let state = state.lock().expect("server state poisoned");
-            http_ok("text/css; charset=utf-8", &state.game_css)
-        }
-        ("GET", "/game.visuals.js") => {
-            let state = state.lock().expect("server state poisoned");
-            http_ok("text/javascript; charset=utf-8", &state.game_visuals_js)
+            http_ok("text/javascript; charset=utf-8", &state.asset_resolver_js)
         }
         ("GET", "/app.js") => http_ok("text/javascript; charset=utf-8", APP_JS),
         ("GET", "/visual_tween_core.js") => {

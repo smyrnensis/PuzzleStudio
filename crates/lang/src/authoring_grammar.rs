@@ -2786,9 +2786,9 @@ mod tests {
     fn parses_assets_as_content_rows() {
         let lines = vec![
             "assets {".to_string(),
-            "\"game.css\"".to_string(),
-            "\"visuals.js\"".to_string(),
             "\"visuals/player.png\"".to_string(),
+            "\"audio/push.wav\"".to_string(),
+            "\"data/labels.json\"".to_string(),
             "}".to_string(),
         ];
         let lines = logical_test_lines(lines);
@@ -2809,7 +2809,7 @@ mod tests {
         assert_eq!(node.content_rows.len(), 3);
         assert_eq!(
             authoring_capture_first(&node.content_rows[0].captures, "path"),
-            Some("\"game.css\"")
+            Some("\"visuals/player.png\"")
         );
     }
 
@@ -2823,12 +2823,15 @@ mod tests {
         assert_eq!(rows[0].kind, AuthoringContentRowKind::AssetPath);
         assert_eq!(rows[0].usage, "<string>");
 
-        let row = parse_authoring_content_row(AuthoringContentKind::AssetsEntries, "\"game.css\"")
-            .unwrap()
-            .unwrap();
+        let row = parse_authoring_content_row(
+            AuthoringContentKind::AssetsEntries,
+            "\"visuals/player.png\"",
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             authoring_capture_first(&row.captures, "path"),
-            Some("\"game.css\"")
+            Some("\"visuals/player.png\"")
         );
     }
 

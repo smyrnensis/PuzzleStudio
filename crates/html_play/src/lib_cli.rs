@@ -41,9 +41,8 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     }
 
     let loaded = loaded_document_scene_host_loaded_game(&document).map_err(AppError::Config)?;
-    let game_css = load_game_css(&config.puzzle_path, &loaded)?;
     print_warnings(&loaded);
-    let game_visuals_js = load_game_visuals_js(&config.puzzle_path, &loaded)?;
+    let asset_resolver_js = load_game_asset_resolver_js(&config.puzzle_path, &document)?;
     let visual_images = load_visual_image_bundle_for_export(
         &document,
         &config.puzzle_path.display().to_string(),
@@ -58,8 +57,7 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
         document,
         loaded,
         visual_images,
-        game_css,
-        game_visuals_js,
+        asset_resolver_js,
         config.solver,
     )));
     let (listener, port) = bind_listener(config.port)?;

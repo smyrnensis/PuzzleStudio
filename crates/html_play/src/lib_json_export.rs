@@ -59,8 +59,6 @@ fn push_editor_preview_data(out: &mut String, state: &EditorPreviewState) {
     out.push(',');
     push_export_variables(out, &document.variables);
     out.push(',');
-    push_export_assets_from_entries(out, &document.assets);
-    out.push(',');
     push_json_number(out, "defaultWaitMs", document.default_wait_ms);
     out.push(',');
     push_export_input_buffer_values(
@@ -152,8 +150,6 @@ fn push_editor_preview_models(out: &mut String, document: &puzzle_lang::LoadedDo
                 out.push(',');
                 push_export_variables(out, &game.variables);
                 out.push(',');
-                push_export_assets(out, game);
-                out.push(',');
                 push_json_number(out, "defaultWaitMs", game.default_wait_ms);
                 out.push(',');
                 push_export_input_buffer(out, game);
@@ -233,33 +229,6 @@ fn progress_hash_str(hash: &mut u64, value: &str) {
 
 fn progress_hash_mix(hash: u64, value: u64) -> u64 {
     (hash ^ value).wrapping_mul(0x100000001b3)
-}
-
-fn push_export_assets(out: &mut String, loaded: &LoadedGame) {
-    push_export_assets_from_entries(out, &loaded.assets);
-}
-
-fn push_export_assets_from_entries(out: &mut String, assets: &puzzle_lang::AssetsDef) {
-    out.push_str("\"assets\":[");
-    for (index, asset) in assets.entries.iter().enumerate() {
-        if index > 0 {
-            out.push(',');
-        }
-        out.push('{');
-        push_json_pair(
-            out,
-            "kind",
-            match asset.kind {
-                AssetKind::Css => "css",
-                AssetKind::Script => "script",
-                AssetKind::File => "file",
-            },
-        );
-        out.push(',');
-        push_json_pair(out, "path", &asset.path);
-        out.push('}');
-    }
-    out.push(']');
 }
 
 fn push_export_animation(out: &mut String, loaded: &LoadedGame) {

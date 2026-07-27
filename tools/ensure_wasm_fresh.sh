@@ -256,7 +256,6 @@ html_play_preview_sources=(
   crates/html_play/static/index.html
   crates/html_play/static/app.css
   crates/html_play/static/renderer.css
-  crates/html_play/static/visuals.js
   crates/html_play/static/app.js
   crates/html_play/static/renderer.js
   crates/html_play/static/standalone.js

@@ -28,7 +28,6 @@ class PuzzleRenderer {
     this.root.dataset.viewportHeight = String(view.height);
     this.root.replaceChildren();
     this.renderCanvas(scene, view);
-    window.PuzzleStudio?.dispatchRender({ scene, board: this.root });
   }
 
   resolvedView(value) {

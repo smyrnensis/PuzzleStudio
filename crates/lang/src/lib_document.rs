@@ -218,7 +218,7 @@ fn validate_imported_document_shell(
         || !shell.sounds.music.is_empty()
         || shell.theme.name != default.theme.name
         || !shell.theme.variables.is_empty()
-        || !shell.assets.entries.is_empty();
+        || !shell.assets.files.is_empty();
     if has_settings {
         return Err(DiagnosticReport::error(format!(
             "imported document `{path}` declares game-wide settings; document settings belong to the workspace entry"
@@ -233,8 +233,8 @@ fn qualify_workspace_document_parts(
     namespaces: &HashMap<String, String>,
     exports: &HashMap<String, WorkspaceModuleExports>,
 ) -> Result<(), DiagnosticReport> {
-    for asset in &mut parts.shell.assets.entries {
-        asset.path = qualify_workspace_resource_path(plan.path, &asset.path)?;
+    for path in &mut parts.shell.assets.files {
+        *path = qualify_workspace_resource_path(plan.path, path)?;
     }
     for model in &mut parts.models {
         model.name = qualify_local_declaration(&plan.namespace, &model.name);
@@ -1551,7 +1551,6 @@ fn lower_model_with_shell_inner(
     let mut animation = shell.animation.clone();
     let sounds = shell.sounds.clone();
     let theme = shell.theme.clone();
-    let assets = shell.assets.clone();
     let mut puzzle_screen = PuzzleScreenDef::default();
     let default_wait_ms = shell.default_wait_ms;
     let input_buffer = shell.input_buffer.clone();
@@ -1895,7 +1894,6 @@ fn lower_model_with_shell_inner(
             sounds,
             model_operation_sounds,
             theme,
-            assets,
             visuals,
             render,
             screen: puzzle_screen,
@@ -2036,7 +2034,6 @@ fn lower_model_with_shell_inner(
         sounds,
         model_operation_sounds,
         theme,
-        assets,
         visuals,
         render,
         screen: puzzle_screen,

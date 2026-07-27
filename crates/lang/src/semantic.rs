@@ -679,7 +679,7 @@ queue_during_wait = false
 }
 
 assets {
-"game.css"
+"visuals/player.png"
 }
 
 puzzle board {
@@ -748,7 +748,7 @@ smoothing = false
         assert!(has("0.5", SemanticKind::Number));
         assert!(has("queue_during_wait", SemanticKind::Setting));
         assert!(has("false", SemanticKind::Literal));
-        assert!(has("game.css", SemanticKind::String));
+        assert!(has("visuals/player.png", SemanticKind::String));
         assert!(has("tween_duration", SemanticKind::Setting));
         assert!(has("64ms", SemanticKind::Number));
         assert!(has("type", SemanticKind::Setting));

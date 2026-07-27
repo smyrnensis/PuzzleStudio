@@ -31,8 +31,6 @@ fn export_html_with_runtime_wasm(
     let html = standalone_html(
         &boot_data,
         &runtime_export,
-        &state.game_css,
-        &state.game_visuals_js,
         document_uses_puzzle3_renderer(preview_state_document(state)),
         host_mode,
         runtime_wasm,
@@ -118,8 +116,6 @@ window.PuzzleRuntimeExportJson = "{runtime_export}";
 fn standalone_html(
     boot_data: &str,
     runtime_export: &str,
-    game_css: &str,
-    game_visuals_js: &str,
     uses_puzzle3_frames: bool,
     host_mode: StandaloneHostMode,
     runtime_wasm: StandaloneRuntimeWasm<'_>,
@@ -128,8 +124,6 @@ fn standalone_html(
     let runtime_export = escape_script_json(runtime_export);
     let app_css = escape_style(APP_CSS);
     let renderer_css = escape_style(RENDERER_CSS);
-    let game_css = escape_style(game_css);
-    let game_visuals_js = escape_script(game_visuals_js);
     let visual_tween_core_js = escape_script(VISUAL_TWEEN_CORE_JS);
     let renderer_js = escape_script(RENDERER_JS);
     let standalone_js_source = standalone_runtime_js(host_mode);
@@ -150,14 +144,6 @@ fn standalone_html(
         .replace(
             r#"<link rel="stylesheet" href="/renderer.css">"#,
             &format!("<style>\n{renderer_css}\n</style>"),
-        )
-        .replace(
-            r#"<link rel="stylesheet" href="/game.css">"#,
-            &format!("<style>\n{game_css}\n</style>"),
-        )
-        .replace(
-            r#"<script src="/game.visuals.js"></script>"#,
-            &format!("<script>\n{game_visuals_js}\n</script>"),
         )
         .replace(
             r#"<script src="/app.js"></script>"#,
@@ -534,14 +520,10 @@ fn inject_puzzle3_frame_assets(
 pub fn export_html_from_source(
     source: &str,
     puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
 ) -> Result<String, DiagnosticReport> {
     export_html_from_source_with_host_mode(
         source,
         puzzle_path,
-        game_css,
-        game_visuals_js,
         StandaloneHostMode::Export,
     )
 }
@@ -549,8 +531,6 @@ pub fn export_html_from_source(
 pub fn export_html_from_source_with_embedded_wasm(
     source: &str,
     puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
     player_runtime_module_js: &str,
     player_runtime_wasm_base64: &str,
 ) -> Result<String, DiagnosticReport> {
@@ -569,8 +549,6 @@ pub fn export_html_from_source_with_embedded_wasm(
         &document,
         source,
         puzzle_path,
-        game_css,
-        game_visuals_js,
         StandaloneHostMode::Export,
         StandaloneRuntimeWasm::EmbeddedBase64 {
             module_source: player_runtime_module_js,
@@ -583,8 +561,6 @@ pub fn export_html_from_document_with_embedded_wasm(
     document: &puzzle_lang::LoadedDocument,
     entry_source: &str,
     puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
     player_runtime_module_js: &str,
     player_runtime_wasm_base64: &str,
 ) -> Result<String, DiagnosticReport> {
@@ -602,8 +578,6 @@ pub fn export_html_from_document_with_embedded_wasm(
         document,
         entry_source,
         puzzle_path,
-        game_css,
-        game_visuals_js,
         StandaloneHostMode::Export,
         StandaloneRuntimeWasm::EmbeddedBase64 {
             module_source: player_runtime_module_js,
@@ -615,14 +589,10 @@ pub fn export_html_from_document_with_embedded_wasm(
 pub fn export_editor_preview_html_from_source(
     source: &str,
     puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
 ) -> Result<String, DiagnosticReport> {
     export_html_from_source_with_host_mode(
         source,
         puzzle_path,
-        game_css,
-        game_visuals_js,
         StandaloneHostMode::EditorPreview,
     )
 }
@@ -631,15 +601,11 @@ pub fn export_editor_preview_html_from_document(
     document: &puzzle_lang::LoadedDocument,
     entry_source: &str,
     puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
 ) -> Result<String, DiagnosticReport> {
     export_html_from_document_with_runtime_wasm(
         document,
         entry_source,
         puzzle_path,
-        game_css,
-        game_visuals_js,
         StandaloneHostMode::EditorPreview,
         StandaloneRuntimeWasm::HostDefault,
     )
@@ -649,8 +615,6 @@ pub fn export_editor_preview_build_from_document(
     document: &puzzle_lang::LoadedDocument,
     entry_source: &str,
     puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
 ) -> Result<String, DiagnosticReport> {
     let visual_images = load_visual_image_bundle_for_export(document, puzzle_path)?;
     let state = EditorPreviewState::new(
@@ -658,8 +622,6 @@ pub fn export_editor_preview_build_from_document(
         entry_source.to_string(),
         puzzle_path.to_string(),
         visual_images,
-        game_css.to_string(),
-        game_visuals_js.to_string(),
     )
     .map_err(DiagnosticReport::error)?;
     let html = export_html_with_runtime_wasm(
@@ -673,15 +635,11 @@ pub fn export_editor_preview_build_from_document(
 fn export_html_from_source_with_host_mode(
     source: &str,
     puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
     host_mode: StandaloneHostMode,
 ) -> Result<String, DiagnosticReport> {
     export_html_from_source_with_runtime_wasm(
         source,
         puzzle_path,
-        game_css,
-        game_visuals_js,
         host_mode,
         StandaloneRuntimeWasm::HostDefault,
     )
@@ -690,8 +648,6 @@ fn export_html_from_source_with_host_mode(
 fn export_html_from_source_with_runtime_wasm(
     source: &str,
     puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
     host_mode: StandaloneHostMode,
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, DiagnosticReport> {
@@ -700,8 +656,6 @@ fn export_html_from_source_with_runtime_wasm(
         &document,
         source,
         puzzle_path,
-        game_css,
-        game_visuals_js,
         host_mode,
         runtime_wasm,
     )
@@ -711,8 +665,6 @@ fn export_html_from_document_with_runtime_wasm(
     document: &puzzle_lang::LoadedDocument,
     entry_source: &str,
     puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
     host_mode: StandaloneHostMode,
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> Result<String, DiagnosticReport> {
@@ -726,8 +678,6 @@ fn export_html_from_document_with_runtime_wasm(
         entry_source.to_string(),
         puzzle_path.to_string(),
         visual_images,
-        game_css.to_string(),
-        game_visuals_js.to_string(),
     )
     .map_err(DiagnosticReport::error)?;
     Ok(export_html_with_runtime_wasm(
@@ -748,12 +698,4 @@ pub fn export_html_file(path: impl AsRef<Path>) -> Result<String, String> {
         &puzzle_path.display().to_string(),
         StandaloneRuntimeWasm::HostDefault,
     )
-}
-
-pub fn export_visuals_js_from_source(
-    source: &str,
-    base_visuals_js: &str,
-) -> Result<String, String> {
-    puzzle_lang::parse_game(source).map_err(|error| error.to_string())?;
-    Ok(base_visuals_js.to_string())
 }

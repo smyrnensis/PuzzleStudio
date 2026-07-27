@@ -1,8 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
-fn load_game_css(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, AppError> {
-    load_asset_css(puzzle_path, &loaded.assets)
-}
-
 fn load_visual_image_bundle_for_export(
     document: &puzzle_lang::LoadedDocument,
     puzzle_path: &str,
@@ -67,43 +62,11 @@ fn load_visual_image_bundle_for_export(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn load_asset_css(puzzle_path: &Path, assets: &AssetsDef) -> Result<String, AppError> {
-    let base_dir = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut parts = Vec::new();
-    for asset in assets
-        .entries
-        .iter()
-        .filter(|asset| asset.kind == AssetKind::Css)
-    {
-        let css_path = resolve_asset_path(base_dir, &asset.path)?;
-        let css = fs::read_to_string(&css_path)?;
-        parts.push(inline_css_urls(
-            &css,
-            css_path.parent().unwrap_or_else(|| Path::new(".")),
-        )?);
-    }
-    Ok(parts.join("\n"))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn load_game_visuals_js(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, AppError> {
-    let mut scripts = vec![
-        asset_resolver_js(puzzle_path, loaded)?,
-        VISUALS_JS.to_string(),
-    ];
-    let base_dir = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
-    for asset in loaded
-        .assets
-        .entries
-        .iter()
-        .filter(|asset| asset.kind == AssetKind::Script)
-    {
-        scripts.push(fs::read_to_string(resolve_asset_path(
-            base_dir,
-            &asset.path,
-        )?)?);
-    }
-    Ok(scripts.join("\n"))
+fn load_game_asset_resolver_js(
+    puzzle_path: &Path,
+    document: &puzzle_lang::LoadedDocument,
+) -> Result<String, AppError> {
+    asset_resolver_js(puzzle_path, document)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -129,57 +92,21 @@ fn resolve_asset_path(base_dir: &Path, asset_path: &str) -> Result<PathBuf, AppE
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn inline_css_urls(css: &str, base_dir: &Path) -> Result<String, AppError> {
-    let mut out = String::new();
-    let mut rest = css;
-    while let Some(start) = rest.find("url(") {
-        let (before, after_start) = rest.split_at(start);
-        out.push_str(before);
-        let Some(end) = after_start.find(')') else {
-            out.push_str(after_start);
-            return Ok(out);
-        };
-        let raw = after_start[4..end].trim().trim_matches(['"', '\'']);
-        if raw.starts_with("data:")
-            || raw.starts_with("http:")
-            || raw.starts_with("https:")
-            || raw.starts_with('#')
-        {
-            out.push_str(&after_start[..=end]);
-        } else {
-            let asset_path = base_dir.join(raw);
-            if asset_path.exists() {
-                let mime_type = mime_type(&asset_path);
-                let encoded = base64_encode(&fs::read(asset_path)?);
-                out.push_str(&format!("url(\"data:{mime_type};base64,{encoded}\")"));
-            } else {
-                out.push_str(&after_start[..=end]);
-            }
-        }
-        rest = &after_start[end + 1..];
-    }
-    out.push_str(rest);
-    Ok(out)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn asset_resolver_js(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, AppError> {
+fn asset_resolver_js(
+    puzzle_path: &Path,
+    document: &puzzle_lang::LoadedDocument,
+) -> Result<String, AppError> {
     let parent = puzzle_path.parent().unwrap_or_else(|| Path::new("."));
     let mut files = String::new();
     files.push('{');
     let mut first = true;
-    let mut paths = loaded
-        .assets
-        .entries
-        .iter()
-        .filter(|asset| asset.kind == AssetKind::File)
-        .map(|asset| asset.path.clone())
-        .collect::<Vec<_>>();
-    for visual in &loaded.visuals.entries {
-        if let VisualKind::Image { asset } = &visual.kind
-            && !paths.iter().any(|path| path == &asset.path)
-        {
-            paths.push(asset.path.clone());
+    let mut paths = document.assets.files.clone();
+    for image in puzzle_lang::loaded_document_presentation_manifest(document)
+        .map_err(AppError::Lang)?
+        .visual_image_assets
+    {
+        if !paths.iter().any(|path| path == &image.path) {
+            paths.push(image.path);
         }
     }
     for asset_path in paths {
@@ -188,7 +115,7 @@ fn asset_resolver_js(puzzle_path: &Path, loaded: &LoadedGame) -> Result<String, 
     }
     files.push('}');
     Ok(format!(
-        "window.PuzzleAssets = {{ files: {files}, url(path) {{ const key = String(path || '').replaceAll('\\\\\\\\', '/'); if (Object.prototype.hasOwnProperty.call(this.files, key)) return this.files[key]; if (/^(?:data:|https?:|#)/.test(key)) return key; throw new Error(`Puzzle asset is not embedded: ${{key}}. Declare it with file \\\"${{key}}\\\" in assets.`); }} }};"
+        "window.PuzzleAssets = {{ files: {files}, url(path) {{ const key = String(path || '').replaceAll('\\\\\\\\', '/'); if (Object.prototype.hasOwnProperty.call(this.files, key)) return this.files[key]; if (/^(?:data:|https?:|#)/.test(key)) return key; throw new Error(`Puzzle asset is not embedded: ${{key}}. Declare \\\"${{key}}\\\" in assets.`); }} }};"
     ))
 }
 
@@ -237,7 +164,7 @@ fn is_text_file(path: &Path) -> bool {
         path.extension()
             .and_then(|value| value.to_str())
             .unwrap_or(""),
-        "css" | "js" | "mjs" | "svg" | "json" | "txt" | "md"
+        "svg" | "json" | "txt" | "md"
     )
 }
 
@@ -248,10 +175,8 @@ fn mime_type(path: &Path) -> &'static str {
         .and_then(|value| value.to_str())
         .unwrap_or("")
     {
-        "css" => "text/css",
         "gif" => "image/gif",
         "jpg" | "jpeg" => "image/jpeg",
-        "js" | "mjs" => "text/javascript",
         "json" => "application/json",
         "mp3" => "audio/mpeg",
         "ogg" => "audio/ogg",

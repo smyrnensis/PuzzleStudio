@@ -827,9 +827,9 @@ fn parser_document_completion_symbols(
         parts
             .shell
             .assets
-            .entries
+            .files
             .iter()
-            .map(|asset| asset.path.clone()),
+            .cloned(),
     );
     symbols.sfx.extend(
         parts
