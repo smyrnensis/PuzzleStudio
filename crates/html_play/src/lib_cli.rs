@@ -146,7 +146,6 @@ struct Config {
     output_path: Option<PathBuf>,
     serve: bool,
     port: u16,
-    solver: SolverConfig,
     screenshot: Option<ScreenshotConfig>,
 }
 
@@ -167,7 +166,6 @@ impl Config {
         let mut output_path = None;
         let mut serve = false;
         let mut port = 7878;
-        let mut solver = SolverConfig::default();
         let mut screenshot = None::<ScreenshotConfig>;
         let mut screenshot_width = 1280_u32;
         let mut screenshot_height = 720_u32;
@@ -194,15 +192,6 @@ impl Config {
                     port = value
                         .parse()
                         .map_err(|_| AppError::Config("port must be a u16".to_string()))?;
-                }
-                "--solver-depth" => {
-                    parse_solver_depth_arg(&mut solver, &mut args)?;
-                }
-                "--solver-nodes" => {
-                    parse_solver_nodes_arg(&mut solver, &mut args)?;
-                }
-                "--solver-ms" => {
-                    parse_solver_ms_arg(&mut solver, &mut args)?;
                 }
                 "--screenshot" => {
                     let Some(value) = args.next() else {
@@ -237,7 +226,7 @@ impl Config {
                 }
                 "--help" | "-h" => {
                     return Err(AppError::Config(
-                        "usage: html-play [path/to/game-folder-or-game.puzzle-or-game.puzzle] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--width 1280] [--height 720] [--browser path] [--solver-depth 128] [--solver-nodes 1000000] [--solver-ms N]".to_string(),
+                        "usage: html-play [path/to/game-folder-or-game.puzzle-or-game.puzzle] [-o game.html] [--serve] [--port 7878] [--screenshot out.png] [--width 1280] [--height 720] [--browser path]".to_string(),
                     ));
                 }
                 value if value.starts_with('-') => {
@@ -285,7 +274,6 @@ impl Config {
             output_path,
             serve,
             port,
-            solver,
             screenshot,
         })
     }
@@ -298,4 +286,17 @@ impl Config {
                 .join("game.html")
         })
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_arg<T>(args: &mut impl Iterator<Item = String>, name: &str) -> Result<T, AppError>
+where
+    T: std::str::FromStr,
+{
+    let Some(value) = args.next() else {
+        return Err(AppError::Config(format!("{name} requires a value")));
+    };
+    value
+        .parse()
+        .map_err(|_| AppError::Config(format!("{name} has an invalid value")))
 }

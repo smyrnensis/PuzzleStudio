@@ -1,4 +1,4 @@
-#![cfg_attr(any(target_arch = "wasm32", not(feature = "solver")), allow(dead_code))]
+#![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::env;
@@ -14,19 +14,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use std::process::Stdio;
-#[cfg(any(not(target_arch = "wasm32"), feature = "solver"))]
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
-#[cfg(any(feature = "solver", test))]
-use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
-use puzzle_assets::EncodedVisualImageBundle;
 #[cfg(not(target_arch = "wasm32"))]
-use puzzle_assets::{DecodedVisualImageCatalog, EncodedVisualImageAsset};
+use puzzle_assets::EncodedVisualImageAsset;
+use puzzle_assets::EncodedVisualImageBundle;
 use puzzle_core::{
     ComparisonOp, CompiledGame, ConditionValueKind, GridSize, InputId, MarkPattern, MarkValueMatch,
-    ObjectId, Offset, PatchOp, Pattern, RuleFiring, State, TransitionCommand,
+    ObjectId, Offset, Pattern, State,
 };
 pub use puzzle_game_runtime::RuntimeSession;
 use puzzle_lang::DiagnosticReport;
@@ -36,20 +34,15 @@ use puzzle_lang::SceneComponent;
 use puzzle_lang::resolve_game_entry;
 use puzzle_lang::{
     GoalCondition, GoalExpr, GoalValue, Level, LoadedDocumentModel, LoadedGame, RuleAnimation,
-    RuleAnimationTrigger, SceneValue, parse_game2d as parse_game,
+    RuleAnimationTrigger, SceneValue,
 };
 #[cfg(test)]
 use puzzle_play::loaded_document_scene_host_loaded_game;
-use puzzle_play::{
-    animation_events_contract_2d, animation_events_for_trace, scene_value_to_string,
-};
+use puzzle_play::scene_value_to_string;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use puzzle_runtime_contract::SessionAction;
 use puzzle_runtime_contract::{
-    RuntimeChangedCell, RuntimeCoord, RuntimeMarkValueMatch, RuntimePatchOp, RuntimeRuleFiring,
-    RuntimeStateSnapshot, RuntimeStateSnapshot2d, RuntimeTransitionCommand,
-    RuntimeTransitionCurrentOutcome, RuntimeTransitionProgramOutcome, StandaloneProgressStorage,
-    StandaloneRuntimeExport,
+    RuntimeStateSnapshot2d, StandaloneProgressStorage, StandaloneRuntimeExport,
 };
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const APP_CSS: &str = include_str!("../static/app.css");
@@ -76,9 +69,8 @@ const THREE_MODULE_JS: &str = include_str!("../static/vendor/three/three.module.
 include!("lib_cli.rs");
 include!("lib_screenshot.rs");
 include!("lib_assets.rs");
-include!("lib_solver_runtime.rs");
+include!("lib_editor_preview_state.rs");
 include!("lib_export.rs");
-include!("lib_runtime_bridge.rs");
 include!("lib_json_export.rs");
 include!("lib_server.rs");
 
@@ -161,6 +153,7 @@ levels default of cube {
             ("GET", "/visual_tween_core.js"),
             ("GET", "/game.css"),
             ("GET", "/game.visuals.js"),
+            ("GET", "/assets.js"),
             ("GET", "/api/state"),
             ("POST", "/api/action"),
             ("POST", "/api/render-moment"),
@@ -195,6 +188,20 @@ levels default of cube {
         let cli_source = include_str!("lib_cli.rs");
         assert!(!cli_source.contains("document_uses_puzzle3_renderer"));
         assert!(!cli_source.contains("ServerState::new"));
+        for removed_option in ["--solver-depth", "--solver-nodes", "--solver-ms"] {
+            let error = Config::from_args([
+                "game.puzzle".to_string(),
+                removed_option.to_string(),
+                "1".to_string(),
+            ])
+            .expect_err("legacy solver CLI option must be rejected")
+            .to_string();
+            assert_eq!(error, format!("unknown option: {removed_option}"));
+        }
+        let manifest = include_str!("../Cargo.toml");
+        assert!(!manifest.contains("puzzle-solver-runtime"));
+        assert!(!manifest.contains("solver-session"));
+        assert!(!cli_source.contains("SolverConfig"));
     }
 
     #[test]
@@ -254,26 +261,6 @@ levels default of board {{
         );
     }
 
-    const RUNTIME_CURRENT_OUTCOME_COMMON_KEYS: &[&str] = &[
-        "cancelled",
-        "changed",
-        "completed",
-        "commands",
-        "effects",
-        "firings",
-        "stateHash",
-        "stateHashKey",
-        "changedCells",
-        "animationEvents",
-        "variables",
-        "levelFiredRules",
-        "previousStateHandle",
-    ];
-
-    fn parse_json_object(source: &str) -> Value {
-        serde_json::from_str(source).expect("runtime outcome should be valid JSON")
-    }
-
     fn editor_preview_state(
         document: puzzle_lang::LoadedDocument,
         source: &str,
@@ -286,13 +273,6 @@ levels default of board {{
             EncodedVisualImageBundle::default(),
         )
         .expect("test editor preview document must construct its runtime")
-    }
-
-    fn assert_has_object_keys(value: &Value, keys: &[&str]) {
-        let object = value.as_object().expect("value should be a JSON object");
-        for key in keys {
-            assert!(object.contains_key(*key), "missing JSON key {key}");
-        }
     }
 
     fn cell_has_object(cell: &Value, object: &str) -> bool {
@@ -609,91 +589,6 @@ level "one" {
         assert!(error.contains("failed to decode visual image `visuals/tile.png`"));
 
         std::fs::remove_dir_all(dir).expect("remove visual fixture directory");
-    }
-
-    #[test]
-    fn stateful_core_runtime_exposes_changed_cells_for_2d() {
-        let source = r#"
-puzzle board {
-  render {
-    tween = true
-  }
-  layers {
-    actor = Player
-  }
-  empty .
-  rules {
-    once [ Player | no Player ] -> [ | Player ]
-  }
-}
-
-levels default of board {
-  legend P = Player
-  level "one" {
-    P.
-  }
-}
-"#;
-        let mut runtime = CoreRuntimeBridge::from_source(source).expect("load 2D runtime");
-        let mut state_json = String::new();
-        push_state_data(&mut state_json, &runtime.loaded.levels[0].initial_state);
-        runtime
-            .set_state_json(&state_json)
-            .expect("set current state");
-        let saved = runtime.save_current_state().expect("save current state");
-
-        let outcome = runtime
-            .transition_current_outcome_json("main", -1, 4)
-            .expect("transition current state");
-        let outcome_json = parse_json_object(&outcome);
-        let outcome_contract: RuntimeTransitionCurrentOutcome =
-            serde_json::from_str(&outcome).expect("2D current outcome should match contract");
-
-        assert_has_object_keys(&outcome_json, RUNTIME_CURRENT_OUTCOME_COMMON_KEYS);
-        assert!(!outcome_contract.completed);
-        assert_eq!(
-            outcome_json["changedCells"],
-            json!([
-                { "position": { "x": 0, "y": 0 }, "objects": [] },
-                { "position": { "x": 1, "y": 0 }, "objects": [1] }
-            ])
-        );
-        assert_eq!(
-            outcome_json["animationEvents"],
-            json!([
-                {
-                    "kind": "move",
-                    "name": "tween",
-                    "occurrenceId": 1,
-                    "objectId": 1,
-                    "from": { "x": 0, "y": 0 },
-                    "to": { "x": 1, "y": 0 }
-                }
-            ])
-        );
-        assert!(outcome_json.get("state").is_none());
-        assert!(outcome_json["previousStateHandle"].is_u64());
-        assert_eq!(outcome_json["variables"], json!([]));
-        assert!(outcome_json["levelFiredRules"].is_array());
-        runtime
-            .restore_saved_state(saved)
-            .expect("restore saved current state");
-        assert_eq!(runtime.current_state_json().unwrap(), state_json);
-
-        let state_outcome = runtime
-            .transition_current_state_outcome_json("main", -1, 4)
-            .expect("transition current state with state payload");
-        let state_outcome_json = parse_json_object(&state_outcome);
-        assert_eq!(state_outcome_json["state"]["width"], 2);
-        assert_eq!(state_outcome_json["state"]["height"], 1);
-        assert_eq!(
-            state_outcome_json["changedCells"],
-            outcome_json["changedCells"]
-        );
-        assert_eq!(
-            state_outcome_json["animationEvents"],
-            outcome_json["animationEvents"]
-        );
     }
 
     #[test]
@@ -2571,49 +2466,6 @@ process.stdout.write(JSON.stringify({ valid, stringError, mismatchError }));
     }
 
     #[test]
-    fn core_runtime_bridge_uses_core_once_all_semantics() {
-        let source = r#"
-const title = once_all_overlap
-
-puzzle board {
-  layers {
-    tiles = A B
-  }
-  empty .
-  rules {
-    once_all [ A | A ] -> [ | B ]
-  }
-}
-
-levels default of board {
-  legend A = A
-  legend B = B
-  level "start" {
-    AAA
-  }
-}
-
-scene playing {
-  layout {
-    puzzle board
-  }
-}
-"#;
-        let loaded = parse_game(source).unwrap();
-        let mut state_json = String::new();
-        push_state_data(&mut state_json, &loaded.levels[0].initial_state);
-
-        let outcome =
-            transition_program_outcome_json_from_source(source, "main", -1, &state_json, 0)
-                .unwrap();
-        let outcome_contract: RuntimeTransitionProgramOutcome =
-            serde_json::from_str(&outcome).expect("2D program outcome should match contract");
-
-        assert!(outcome.contains(r#""slots":[2,0,1]"#));
-        assert!(!outcome_contract.completed);
-    }
-
-    #[test]
     fn standalone_export_embeds_player_wasm_runtime() {
         let source = r#"
 	 const title = "Wasm Export"
@@ -4269,81 +4121,6 @@ levels default of cube {
         assert!(PUZZLE3_COMPONENT_JS.contains("canvas.getContext(\"2d\", { alpha: true })"));
     }
 
-    #[cfg(feature = "solver")]
-    #[test]
-    fn native_solver_route_uses_the_shared_typed_solver_result() {
-        let source = r#"
-const title = shared_native_solver
-
-puzzle default {
-layers {
-floor = Goal
-actor = Player Box
-}
-keys {
-d ArrowRight -> right
-}
-rules {
-input right [ Player | Box | no actor ] -> [ | Player | Box ]
-}
-win_conditions {
-all Goal on Box
-}
-}
-
-levels tiny of default {
-legend {
-P = Player
-B = Box
-G = Goal
-}
-level "start" {
-PBG
-}
-}
-"#;
-        let document = puzzle_lang::parse_game_for_path(source, "shared_native_solver.puzzle")
-            .expect("compile native solver fixture");
-        let loaded =
-            loaded_document_scene_host_loaded_game(&document).expect("select native solver model");
-        let mut state = ServerState::new(
-            document,
-            loaded,
-            DecodedVisualImageCatalog::default(),
-            String::new(),
-            SolverConfig::default(),
-        );
-
-        let result: Value =
-            serde_json::from_str(&state.solve_json().expect("solve native session"))
-                .expect("native solver response is typed JSON");
-        assert_eq!(result["model"], "2d");
-        assert_eq!(result["result"], "solved");
-        assert_eq!(result["depth"], 1);
-        assert_eq!(result["steps"][0]["state"]["kind"], "2d");
-        assert!(result["steps"][0].get("scene").is_none());
-
-        state.solver.max_duration = Duration::ZERO;
-        let limited: Value =
-            serde_json::from_str(&state.solve_json().expect("bound native solver session"))
-                .expect("bounded native solver response is typed JSON");
-        assert_eq!(limited["result"], "budget_exceeded");
-        assert!(limited["observations"].is_array());
-    }
-
-    #[cfg(feature = "solver")]
-    #[test]
-    fn html_play_contains_no_search_orchestration_owner() {
-        let runtime = include_str!("lib_solver_runtime.rs");
-        let bridge = include_str!("lib_runtime_bridge.rs");
-        let manifest = include_str!("../Cargo.toml");
-        assert!(!runtime.contains("best_first"));
-        assert!(!runtime.contains("SearchBudget"));
-        assert!(!bridge.contains("solve_request_json"));
-        assert!(manifest.contains("puzzle-solver-runtime"));
-        assert!(!manifest.contains("puzzle-solver ="));
-    }
-
     #[test]
     fn screenshot_scene_override_is_not_a_player_contract() {
         let error = Config::from_args(["--scene".to_string(), "playing".to_string()])
@@ -4385,42 +4162,7 @@ impl std::fmt::Display for AppError {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Io(error) => write!(f, "{error}"),
             Self::Lang(error) => write!(f, "{error}"),
-            Self::CoreTransition(error) => write!(f, "{error:?}"),
             Self::Config(error) => write!(f, "{error}"),
         }
     }
-}
-#[cfg(feature = "solver")]
-#[test]
-fn solver_defaults_match_product_entry_points() {
-    let defaults = SolverConfig::default();
-    assert_eq!(defaults.max_nodes, 1_000_000);
-    assert_eq!(defaults.max_duration, Duration::from_secs(5));
-    let solve_start = APP_JS
-        .find("async function solveStandaloneCurrentState(")
-        .expect("standalone solve entry point");
-    let solve_end = APP_JS[solve_start..]
-        .find("\n}\n/* puzzle-host:optional:solver:end */")
-        .map(|index| solve_start + index)
-        .expect("standalone solve entry point end");
-    let solve_source = &APP_JS[solve_start..solve_end];
-    assert!(solve_source.contains("options.maxNodes ?? 5_000_000"));
-    assert!(!solve_source.contains("options.maxNodes ?? 1000"));
-}
-
-#[cfg(feature = "solver")]
-#[test]
-fn solver_cli_can_override_the_wall_clock_limit() {
-    let puzzle_path = format!("{}/../../games/spec_3d.puzzle", env!("CARGO_MANIFEST_DIR"));
-    let defaults = Config::from_args([puzzle_path.clone()]).unwrap();
-    assert_eq!(defaults.solver.max_duration, Duration::from_secs(5));
-
-    let help = Config::from_args(["--help".to_string()])
-        .expect_err("help exits through the config diagnostic")
-        .to_string();
-    assert!(help.contains("[--solver-nodes 1000000]"));
-
-    let bounded =
-        Config::from_args([puzzle_path, "--solver-ms".to_string(), "250".to_string()]).unwrap();
-    assert_eq!(bounded.solver.max_duration, Duration::from_millis(250));
 }
