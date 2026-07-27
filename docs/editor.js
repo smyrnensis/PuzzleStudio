@@ -999,135 +999,6 @@ async function requestJson(url) {
   return body;
 }
 
-function applyGameCss(css) {
-  let style = document.querySelector("#gameStyle");
-  if (!style) {
-    style = document.createElement("style");
-    style.id = "gameStyle";
-    const link = document.querySelector("#gameStyleLink");
-    if (link) {
-      link.replaceWith(style);
-    } else {
-      document.head.append(style);
-    }
-  }
-  style.textContent = scopeGameCss(css || "");
-}
-
-function scopeGameCss(css, scope = ".game-preview-scope") {
-  return scopeCssBlock(String(css || ""), scope);
-}
-
-function scopeCssBlock(css, scope) {
-  let output = "";
-  let index = 0;
-  while (index < css.length) {
-    const open = css.indexOf("{", index);
-    if (open < 0) {
-      output += css.slice(index);
-      break;
-    }
-    const selector = css.slice(index, open).trim();
-    const close = matchingCssBrace(css, open);
-    if (close < 0) {
-      output += css.slice(index);
-      break;
-    }
-    const body = css.slice(open + 1, close);
-    if (selector.startsWith("@media") || selector.startsWith("@supports") || selector.startsWith("@container")) {
-      output += `${selector}{${scopeCssBlock(body, scope)}}`;
-    } else if (selector.startsWith("@")) {
-      output += `${selector}{${body}}`;
-    } else {
-      output += `${scopeSelectorList(selector, scope)}{${body}}`;
-    }
-    index = close + 1;
-  }
-  return output;
-}
-
-function matchingCssBrace(css, openIndex) {
-  let depth = 0;
-  let quote = "";
-  for (let index = openIndex; index < css.length; index += 1) {
-    const char = css[index];
-    const previous = css[index - 1];
-    if (quote) {
-      if (char === quote && previous !== "\\") {
-        quote = "";
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-  return -1;
-}
-
-function scopeSelectorList(selector, scope) {
-  return splitCssSelectors(selector)
-    .map((part) => scopeSelector(part, scope))
-    .join(", ");
-}
-
-function splitCssSelectors(selector) {
-  const parts = [];
-  let start = 0;
-  let depth = 0;
-  let quote = "";
-  for (let index = 0; index < selector.length; index += 1) {
-    const char = selector[index];
-    const previous = selector[index - 1];
-    if (quote) {
-      if (char === quote && previous !== "\\") {
-        quote = "";
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (char === "(" || char === "[") {
-      depth += 1;
-    } else if (char === ")" || char === "]") {
-      depth = Math.max(0, depth - 1);
-    } else if (char === "," && depth === 0) {
-      parts.push(selector.slice(start, index).trim());
-      start = index + 1;
-    }
-  }
-  parts.push(selector.slice(start).trim());
-  return parts.filter(Boolean);
-}
-
-function scopeSelector(selector, scope) {
-  if (selector === ":root" || selector === "html" || selector === "body") {
-    return scope;
-  }
-  if (selector.startsWith(":root ")) {
-    return `${scope}${selector.slice(5)}`;
-  }
-  if (selector.startsWith("html ") || selector.startsWith("body ")) {
-    return `${scope} ${selector.slice(5)}`;
-  }
-  const descendant = `${scope} ${selector}`;
-  if (/^[.#[:]/.test(selector)) {
-    return `${scope}${selector}, ${descendant}`;
-  }
-  return descendant;
-}
-
 function applyPreviewTheme(theme) {
   const root = playPreview;
   if (!root) {
@@ -1326,7 +1197,7 @@ function runtimeLinearRgbaCss(color) {
   return `color(srgb-linear ${color.red} ${color.green} ${color.blue} / ${color.alpha})`;
 }
 
-function ensureGameVisualsRuntime() {
+function ensureGameVisualRegistry() {
   if (!window.PuzzleVisualRegistry) {
     window.PuzzleVisualRegistry = {
       create(config = {}) {
@@ -1348,91 +1219,6 @@ function ensureGameVisualsRuntime() {
       },
     };
   }
-
-  if (window.PuzzleStudio?.registerAssetScript && window.PuzzleStudio?.disposeAssetScripts) {
-    return;
-  }
-
-  const assetScripts = [];
-  const renderCallbacks = [];
-  const disposers = [];
-
-  function ensureVisuals() {
-    if (!window.GameVisuals) {
-      window.GameVisuals = window.PuzzleVisualRegistry.create();
-    }
-    return window.GameVisuals;
-  }
-
-  function apiFor(definition = {}) {
-    return {
-      name: definition.name || "",
-      onRender(callback) {
-        if (typeof callback === "function") {
-          renderCallbacks.push(callback);
-        }
-      },
-      setBoardClass(name) {
-        ensureVisuals().boardClass = String(name || "");
-      },
-      setThemeClass(name) {
-        ensureVisuals().themeClass = String(name || "");
-      },
-      addDisposer(callback) {
-        if (typeof callback === "function") {
-          disposers.push(callback);
-        }
-      },
-      assetUrl(path) {
-        return window.PuzzleAssets?.url ? window.PuzzleAssets.url(path) : String(path || "");
-      },
-    };
-  }
-
-  window.PuzzleStudio = {
-    registerAssetScript(definition = {}) {
-      assetScripts.push(definition);
-      if (typeof definition.setup === "function") {
-        definition.setup(apiFor(definition));
-      }
-    },
-    dispatchRender(payload = {}) {
-      if (!renderCallbacks.length) {
-        return;
-      }
-      window.requestAnimationFrame(() => {
-        const event = {
-          ...payload,
-          board: payload.board || document.querySelector("#board"),
-          screenView: payload.screenView || document.querySelector("#screenView"),
-          scene: payload.scene || window.__PuzzleCurrentScene,
-          state: window.__PuzzleCurrentState,
-          assetUrl: (path) => (window.PuzzleAssets?.url ? window.PuzzleAssets.url(path) : String(path || "")),
-        };
-        for (const callback of renderCallbacks) {
-          callback(event);
-        }
-      });
-    },
-    disposeAssetScripts() {
-      while (disposers.length) {
-        const dispose = disposers.pop();
-        dispose();
-      }
-      renderCallbacks.length = 0;
-      assetScripts.length = 0;
-    },
-  };
-}
-
-function applyGameVisuals(script) {
-  ensureGameVisualsRuntime();
-  window.PuzzleStudio.disposeAssetScripts();
-  window.GameVisuals = window.PuzzleVisualRegistry.create();
-  if (!script) {
-    return;
-  }
-  Function(script)();
 }
 
 function schedulePreview() {
@@ -1490,8 +1276,6 @@ function capturePreviewBuildInput(document, presentationManifest) {
     source: entry.source,
     documents: documentsSnapshot,
     presentationManifest,
-    gameCss: effectiveGameCss(document, presentationManifest),
-    gameVisualsJs: effectiveGameVisualsJs(document, presentationManifest),
   };
 }
 
@@ -1576,8 +1360,6 @@ async function renderPreview() {
       workspaceDocuments: compilerDocumentsForSnapshot(buildInput.documents),
       puzzlePath: buildInput.puzzlePath,
       workspaceRoot: buildInput.workspaceRoot,
-      gameCss: buildInput.gameCss,
-      gameVisualsJs: buildInput.gameVisualsJs,
     }, { signal: controller.signal });
     applyCompiledPreviewBuild(compiledPreview, document, buildInput);
   } catch (error) {
@@ -1801,8 +1583,6 @@ function applyCompiledPreviewBuild(compiledPreview, document, buildInput) {
   clearSolverTask();
   previewFrameHasEditorLevelState = false;
   setPreviewFrameHtml(editorPreviewDocument(html), { markDocumentLoaded: true });
-  applyGameCss(buildInput.gameCss);
-  applyGameVisuals(buildInput.gameVisualsJs);
   if (isPaneVisible("level")) {
     if (!loadAvailableLevelPaneEntry(focusedPuzzleSourceContext(document), {
       mode: currentLevelPaneMode,
@@ -1841,8 +1621,6 @@ function invalidateCompiledPreview(document = activePreviewDocument()) {
   }
   setPreviewDocumentLoaded(false);
   setPreviewFrameHtml(emptyPreviewDocument());
-  applyGameCss("");
-  applyGameVisuals("");
   downloadButton.disabled = true;
   syncPreviewLevelActionButtons();
 }
@@ -5230,7 +5008,7 @@ function levelEditorContractState(level, slots) {
 }
 
 function applyLevelEditorContractVisuals(session, objects) {
-  ensureGameVisualsRuntime();
+  ensureGameVisualRegistry();
   const aliases = {};
   const entries = {};
   for (const object of objects) {
@@ -5242,7 +5020,6 @@ function applyLevelEditorContractVisuals(session, objects) {
     aliases[object.name] = visualName;
     entries[visualName] = payload;
   }
-  window.PuzzleStudio.disposeAssetScripts();
   window.GameVisuals = window.PuzzleVisualRegistry.create({ aliases, entries });
 }
 

@@ -116,7 +116,7 @@ if (html.includes("PuzzleEditorPreviewExportJson")) {
 }
 const workspaceDocuments = [{ path: "game.puzzle", source }];
 const workspace = new WasmWorkspaceSession(workspaceDocuments);
-const workspaceBuild = JSON.parse(workspace.compile_preview("game.puzzle", "", ""));
+const workspaceBuild = JSON.parse(workspace.compile_preview("game.puzzle"));
 if (
   !workspaceBuild.html.includes('editorPreview\\":true')
   || workspaceBuild.documentMetadata?.title !== build.documentMetadata.title
@@ -127,8 +127,6 @@ if (
 const workspaceManifest = workspace.presentation_manifest("game.puzzle");
 if (
   workspaceManifest.themeName !== "clean"
-  || !Array.isArray(workspaceManifest.cssPaths)
-  || !Array.isArray(workspaceManifest.scriptPaths)
   || !Array.isArray(workspaceManifest.filePaths)
   || !Array.isArray(workspaceManifest.visualImageAssets)
 ) {

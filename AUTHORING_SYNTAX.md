@@ -1641,17 +1641,16 @@ UI の線、選択状態、panel、popup、盤面背景は preset がこの 3 �
 
 標準 preset は `clean`、`terminal`、`paper`、`pixel`、`candy`、`blueprint`、`noir`。HTML adapter は対応する `theme-clean` / `theme-terminal` / `theme-paper` / `theme-pixel` / `theme-candy` / `theme-blueprint` / `theme-noir` CSS preset を同梱し、そこで各 theme の見た目の identity を定義する。
 
-外部 CSS / JS は `assets` block で明示する。puzzle と同じ folder からの相対 path だけを書ける。
+外部画像や音声などの静的 file は `assets` block で明示する。puzzle と同じ folder からの相対 path だけを書ける。
 
 ```txt
 assets {
-css "game.css"
-script "visuals.js"
-file "visuals/player.png"
+"visuals/player.png"
+"audio/push.wav"
 }
 ```
 
-`css` は HTML adapter が stylesheet として読み込む。`script` は rendered scene snapshot から追加表示を作るための補助 JS で、puzzle state、transition、undo stack、level index を直接変更してはならない。`file` は script や visual から `api.assetUrl("visuals/player.png")` / `source: "visuals/player.png"` として参照する静的 asset を standalone HTML export に埋め込む。script が盤面に追従する場合は `window.PuzzleStudio.registerAssetScript({ setup(api) { api.onRender(...) } })` を使う。
+宣言された file は typed visual / audio contract から参照され、standalone HTML export に埋め込まれる。見た目と挙動は `theme`、`visuals`、`sounds`、scene/component contract で記述する。
 
 scene では、scene が focus されたタイミングを `on_scene_start` lifecycle block として扱える。BGM の開始/停止など、puzzle 初期化ではなく presentation に属する処理に使う。`on_level_start` は puzzle lifecycle block なので scene には置けない。
 

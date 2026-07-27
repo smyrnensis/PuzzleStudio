@@ -140,7 +140,6 @@ pub struct LoadedGridGame<const D: usize, Size: GridSize<D>> {
     #[serde(default)]
     pub model_operation_sounds: Vec<ModelOperationSoundDef>,
     pub theme: ThemeDef,
-    pub assets: AssetsDef,
     pub visuals: VisualsDef,
     pub render: PuzzleRenderDef,
     pub screen: PuzzleScreenDef,
@@ -336,20 +335,7 @@ pub enum TriggerAnimationKind {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AssetsDef {
-    pub entries: Vec<AssetDef>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AssetDef {
-    pub kind: AssetKind,
-    pub path: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AssetKind {
-    Css,
-    Script,
-    File,
+    pub files: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

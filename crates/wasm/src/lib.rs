@@ -18,8 +18,6 @@ export interface WorkspaceSourceDocument {
 
 export interface WorkspacePresentationManifest {
     readonly themeName: string | null;
-    readonly cssPaths: string[];
-    readonly scriptPaths: string[];
     readonly filePaths: string[];
     readonly visualImageAssets: ReadonlyArray<{
         readonly id: string;
@@ -105,33 +103,20 @@ impl WasmWorkspaceSession {
             .map(WorkspacePresentationManifestJs::from)
     }
 
-    pub fn compile_preview(
-        &self,
-        entry_path: &str,
-        game_css: &str,
-        game_visuals_js: &str,
-    ) -> Result<String, JsValue> {
+    pub fn compile_preview(&self, entry_path: &str) -> Result<String, JsValue> {
         let document = self
             .analysis
             .compile_game(entry_path)
             .map_err(|error| diagnostic_report_js_value(&error))?;
         let entry_source = workspace_entry_source(entry_path, &self.documents)
             .map_err(|error| JsValue::from_str(&error))?;
-        html_play::export_editor_preview_build_from_document(
-            &document,
-            entry_source,
-            entry_path,
-            game_css,
-            game_visuals_js,
-        )
-        .map_err(|error| diagnostic_report_js_value(&error))
+        html_play::export_editor_preview_build_from_document(&document, entry_source, entry_path)
+            .map_err(|error| diagnostic_report_js_value(&error))
     }
 
     pub fn export_html(
         &self,
         entry_path: &str,
-        game_css: &str,
-        game_visuals_js: &str,
         player_runtime_module_js: &str,
         player_runtime_wasm_base64: &str,
     ) -> Result<String, JsValue> {
@@ -145,8 +130,6 @@ impl WasmWorkspaceSession {
             &document,
             entry_source,
             entry_path,
-            game_css,
-            game_visuals_js,
             player_runtime_module_js,
             player_runtime_wasm_base64,
         )
@@ -1262,12 +1245,7 @@ pub fn active_source_analysis_level_editor_visual_json(
 }
 
 #[wasm_bindgen]
-pub fn compile_preview(
-    source: &str,
-    puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
-) -> Result<String, JsValue> {
+pub fn compile_preview(source: &str, puzzle_path: &str) -> Result<String, JsValue> {
     let path = if puzzle_path.trim().is_empty() {
         "game.puzzle"
     } else {
@@ -1275,14 +1253,8 @@ pub fn compile_preview(
     };
     let document = puzzle_lang::parse_game_for_path(source, path)
         .map_err(|error| diagnostic_report_js_value(&error))?;
-    html_play::export_editor_preview_build_from_document(
-        &document,
-        source,
-        path,
-        game_css,
-        game_visuals_js,
-    )
-    .map_err(|error| diagnostic_report_js_value(&error))
+    html_play::export_editor_preview_build_from_document(&document, source, path)
+        .map_err(|error| diagnostic_report_js_value(&error))
 }
 
 fn workspace_entry_source<'a>(
@@ -1303,8 +1275,6 @@ fn workspace_entry_source<'a>(
 pub fn export_html(
     source: &str,
     puzzle_path: &str,
-    game_css: &str,
-    game_visuals_js: &str,
     player_runtime_module_js: &str,
     player_runtime_wasm_base64: &str,
 ) -> Result<String, JsValue> {
@@ -1316,18 +1286,10 @@ pub fn export_html(
     html_play::export_html_from_source_with_embedded_wasm(
         source,
         path,
-        game_css,
-        game_visuals_js,
         player_runtime_module_js,
         player_runtime_wasm_base64,
     )
     .map_err(|error| diagnostic_report_js_value(&error))
-}
-
-#[wasm_bindgen]
-pub fn generate_visuals_js(source: &str, base_visuals_js: &str) -> Result<String, JsValue> {
-    html_play::export_visuals_js_from_source(source, base_visuals_js)
-        .map_err(|error| JsValue::from_str(&error))
 }
 
 #[wasm_bindgen]
@@ -1541,7 +1503,7 @@ level "start"
 }
 "##;
 
-        let build = compile_preview(source, "game.puzzle", "", "").expect("compile preview");
+        let build = compile_preview(source, "game.puzzle").expect("compile preview");
         let build: serde_json::Value = serde_json::from_str(&build).unwrap();
         let html = build["html"].as_str().unwrap();
 

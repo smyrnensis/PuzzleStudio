@@ -18,14 +18,12 @@ async function downloadHtml() {
   setEditorStatus(`Exporting ${filename}`, "");
   let html = "";
   try {
-    const presentationManifest = await ensurePreviewDocumentsLoaded(document);
+    await ensurePreviewDocumentsLoaded(document);
     html = await window.PuzzleStudioHost.exportStandaloneHtml({
       source,
       workspaceDocuments: workspaceCompilerDocuments(document),
       puzzlePath: document.puzzlePath,
       workspaceRoot: document.workspaceRoot || "",
-      gameCss: effectiveGameCss(document, presentationManifest),
-      gameVisualsJs: effectiveGameVisualsJs(document, presentationManifest),
     });
   } catch (error) {
     appendCompileDiagnostics(error, { source: "compiler", document, sourceText: source });
@@ -494,7 +492,6 @@ function readFileAsDataUrl(file) {
 }
 
 function importWorkspaceFile(fileNameValue, fileData, targetFolder = activeFolder()) {
-  const current = documents[currentDocumentIndex] || {};
   const parts = String(fileNameValue || "imported.file").split(/[\\/]/).filter(Boolean);
   const name = sanitizeFileName(parts.pop() || "imported.file");
   let folder = targetFolder || fileTree;
@@ -504,7 +501,6 @@ function importWorkspaceFile(fileNameValue, fileData, targetFolder = activeFolde
   const file = makeFile(uniqueChildName(folder, name), fileData.source || "", {
     parentPath: folderPath(folder),
     workspaceRoot: workspaceRootForFolder(folder),
-    gameCss: current.gameCss || editorSeed?.gameCss || "",
   });
   file.encoding = fileData.encoding || "text";
   file.mimeType = fileData.mimeType || mimeTypeForPath(name);
@@ -512,7 +508,6 @@ function importWorkspaceFile(fileNameValue, fileData, targetFolder = activeFolde
   file.dataUrl = fileData.dataUrl || "";
   if (!isPuzzleDocument(file)) {
     file.previewHtml = "";
-    file.gameCss = "";
   }
   folder.children.push(file);
   selectedFolderId = folder.id;
@@ -669,11 +664,9 @@ async function addPuzzleScriptImportFile() {
     });
   }
 
-  const current = documents[currentDocumentIndex] || {};
   const file = makeFile(fileNameValue, output, {
     parentPath,
     workspaceRoot: workspaceRootForFolder(targetFolder),
-    gameCss: current.gameCss || editorSeed?.gameCss || "",
   });
   targetFolder.children.push(file);
   activeFileId = file.id;

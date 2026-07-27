@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use puzzle_assets::VisualImageAssetManifestEntry;
 
-use crate::{AssetKind, DiagnosticReport, LoadedDocumentModel, VisualKind};
+use crate::{DiagnosticReport, LoadedDocumentModel, VisualKind};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -520,8 +520,6 @@ fn collect_reachable(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkspacePresentationManifest {
     pub theme_name: Option<String>,
-    pub css_paths: Vec<String>,
-    pub script_paths: Vec<String>,
     pub file_paths: Vec<String>,
     pub visual_image_assets: Vec<VisualImageAssetManifestEntry>,
 }
@@ -553,16 +551,7 @@ impl WorkspaceAnalysis {
 pub fn workspace_presentation_manifest_from_document(
     document: &crate::LoadedDocument,
 ) -> WorkspacePresentationManifest {
-    let mut css_paths = Vec::new();
-    let mut script_paths = Vec::new();
-    let mut file_paths = Vec::new();
-    for asset in &document.assets.entries {
-        match asset.kind {
-            AssetKind::Css => css_paths.push(asset.path.clone()),
-            AssetKind::Script => script_paths.push(asset.path.clone()),
-            AssetKind::File => file_paths.push(asset.path.clone()),
-        }
-    }
+    let file_paths = document.assets.files.clone();
 
     let mut visual_image_assets = Vec::new();
     for model in &document.models {
@@ -585,8 +574,6 @@ pub fn workspace_presentation_manifest_from_document(
 
     WorkspacePresentationManifest {
         theme_name: document.theme.name.clone(),
-        css_paths,
-        script_paths,
         file_paths,
         visual_image_assets,
     }

@@ -96,8 +96,7 @@ struct ServerState {
     runtime: puzzle_game_runtime::RuntimeSession,
     #[cfg(not(target_arch = "wasm32"))]
     visual_images: DecodedVisualImageCatalog,
-    game_css: String,
-    game_visuals_js: String,
+    asset_resolver_js: String,
     solver: SolverConfig,
     #[cfg(feature = "solver")]
     solver_service: puzzle_solver_runtime::SolverService,
@@ -118,8 +117,6 @@ struct EditorPreviewState {
     runtime: puzzle_game_runtime::RuntimeSession,
     source: String,
     puzzle_path: String,
-    game_css: String,
-    game_visuals_js: String,
 }
 
 impl EditorPreviewState {
@@ -128,8 +125,6 @@ impl EditorPreviewState {
         source: String,
         puzzle_path: String,
         visual_images: EncodedVisualImageBundle,
-        game_css: String,
-        game_visuals_js: String,
     ) -> Result<Self, String> {
         let mut runtime = puzzle_game_runtime::RuntimeSession::from_document(document.clone())?;
         runtime.set_progress_persistence_enabled(false);
@@ -143,8 +138,6 @@ impl EditorPreviewState {
             runtime,
             source,
             puzzle_path,
-            game_css,
-            game_visuals_js,
         })
     }
 }
@@ -155,8 +148,7 @@ impl ServerState {
         _loaded: LoadedGame,
         #[cfg(not(target_arch = "wasm32"))]
         visual_images: DecodedVisualImageCatalog,
-        game_css: String,
-        game_visuals_js: String,
+        asset_resolver_js: String,
         solver: SolverConfig,
     ) -> Self {
         let mut runtime = puzzle_game_runtime::RuntimeSession::from_document(document.clone())
@@ -174,8 +166,7 @@ impl ServerState {
             runtime,
             #[cfg(not(target_arch = "wasm32"))]
             visual_images,
-            game_css,
-            game_visuals_js,
+            asset_resolver_js,
             solver,
             #[cfg(feature = "solver")]
             solver_service,

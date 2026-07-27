@@ -224,8 +224,6 @@
       const session = await workspaceSessionFor(payload.workspaceDocuments);
       const build = JSON.parse(session.compile_preview(
         asString(payload.puzzlePath),
-        asString(payload.gameCss),
-        asString(payload.gameVisualsJs),
       ) || "{}");
       if (!build || typeof build !== "object" || typeof build.html !== "string"
         || !build.documentMetadata || typeof build.documentMetadata !== "object"
@@ -250,8 +248,6 @@
       const runtimeAssets = await window.PuzzleStudioRuntime.playerRuntimeAssets();
       return session.export_html(
         asString(payload.puzzlePath),
-        asString(payload.gameCss),
-        asString(payload.gameVisualsJs),
         asString(runtimeAssets.moduleSource),
         asString(runtimeAssets.wasmBase64),
       );

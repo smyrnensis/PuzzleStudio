@@ -14,8 +14,6 @@ use std::sync::Arc;
 #[cfg(feature = "embedded-assets")]
 use puzzle_lang::Diagnostic;
 use puzzle_lang::DiagnosticReport;
-#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-use puzzle_lang::{AssetKind, AssetsDef};
 
 #[cfg(feature = "embedded-assets")]
 const EDITOR_HTML: &str = include_str!("../static/editor.html");
@@ -167,7 +165,6 @@ const RENDERER_CSS: &str = include_str!("../../html_play/static/renderer.css");
 #[cfg(all(test, feature = "embedded-assets"))]
 const EDITOR_STATIC_RENDERER_CSS: &str = include_str!("../static/renderer.css");
 #[cfg(feature = "embedded-assets")]
-const VISUALS_JS: &str = include_str!("../../html_play/static/visuals.js");
 #[cfg(feature = "embedded-assets")]
 const RENDERER_JS: &str = include_str!("../../html_play/static/renderer.js");
 #[cfg(feature = "embedded-assets")]
@@ -350,9 +347,6 @@ impl EditorService {
                 puzzle_path: PAGES_EXAMPLE_PUZZLE_PATH.to_string(),
                 workspace_root: String::new(),
                 source: source.clone(),
-                game_css: String::new(),
-                #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-                base_game_visuals_js: String::new(),
                 folders: vec!["starter".to_string()],
                 documents: PAGES_STARTER_DOCUMENTS
                     .iter()
@@ -365,7 +359,6 @@ impl EditorService {
                         content_loaded: true,
                         preview_html: String::new(),
                         preview_error: String::new(),
-                        game_css: String::new(),
                         imported_by: Vec::new(),
                     })
                     .collect(),
@@ -399,9 +392,6 @@ impl EditorService {
                 puzzle_path: String::new(),
                 workspace_root: workspace_root.display().to_string(),
                 source: String::new(),
-                game_css: String::new(),
-                #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-                base_game_visuals_js: String::new(),
                 folders: load_workspace_folders(&workspace_root)?,
                 documents: load_editor_documents(&workspace_root, &workspace_root)?,
             },
@@ -426,17 +416,11 @@ impl EditorService {
             )));
         }
         let source = fs::read_to_string(&puzzle_path)?;
-        #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-        let base_game_visuals_js =
-            load_base_game_visuals_js(&puzzle_path, &workspace_root, &AssetsDef::default(), &[])?;
         Ok(Self {
             state: EditorState {
                 puzzle_path: puzzle_path.display().to_string(),
                 workspace_root: workspace_root.display().to_string(),
                 source,
-                game_css: load_game_css(&puzzle_path, &workspace_root)?,
-                #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-                base_game_visuals_js,
                 folders: load_workspace_folders(&workspace_root)?,
                 documents: load_editor_documents(&puzzle_path, &workspace_root)?,
             },
@@ -481,24 +465,10 @@ impl EditorService {
         )
         .map_err(AppError::Config)?;
         let document = workspace.compile().map_err(AppError::Diagnostics)?;
-        let manifest = puzzle_lang::workspace_presentation_manifest_from_document(&document);
-        let visual_image_paths = manifest
-            .visual_image_assets
-            .iter()
-            .map(|asset| asset.path.clone())
-            .collect::<Vec<_>>();
-        let game_visuals_js = load_base_game_visuals_js(
-            &preview_path,
-            &workspace_root,
-            &document.assets,
-            &visual_image_paths,
-        )?;
         html_play::export_editor_preview_build_from_document(
             &document,
             workspace.entry_source(),
             &preview_path.display().to_string(),
-            &request.game_css,
-            &game_visuals_js,
         )
         .map_err(AppError::Diagnostics)
     }
@@ -558,9 +528,6 @@ pub struct EditorState {
     puzzle_path: String,
     workspace_root: String,
     source: String,
-    game_css: String,
-    #[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-    base_game_visuals_js: String,
     folders: Vec<String>,
     documents: Vec<EditorDocument>,
 }
@@ -575,7 +542,6 @@ pub struct EditorDocument {
     content_loaded: bool,
     preview_html: String,
     preview_error: String,
-    game_css: String,
     imported_by: Vec<String>,
 }
 
@@ -588,195 +554,6 @@ struct WorkspacePuzzleDocument {
 #[derive(Default)]
 struct WorkspaceImportGraph {
     imported_by: HashMap<PathBuf, Vec<PathBuf>>,
-}
-
-fn load_game_css(puzzle_path: &Path, workspace_root: &Path) -> Result<String, AppError> {
-    let css_path = puzzle_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("game.css");
-    if css_path.exists() {
-        let css = read_workspace_text_file(&css_path, workspace_root)?;
-        inline_css_urls(
-            &css,
-            css_path.parent().unwrap_or_else(|| Path::new(".")),
-            workspace_root,
-        )
-    } else {
-        Ok(String::new())
-    }
-}
-
-#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-fn load_base_game_visuals_js(
-    puzzle_path: &Path,
-    workspace_root: &Path,
-    assets: &AssetsDef,
-    image_paths: &[String],
-) -> Result<String, AppError> {
-    let mut scripts = vec![asset_resolver_js(workspace_root, assets, image_paths)?];
-    #[cfg(feature = "embedded-assets")]
-    scripts.push(VISUALS_JS.to_string());
-    let visuals_path = puzzle_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("visuals.js");
-    if visuals_path.exists() {
-        scripts.push(read_workspace_text_file(&visuals_path, workspace_root)?);
-    }
-    Ok(scripts.join("\n"))
-}
-
-fn inline_css_urls(css: &str, base_dir: &Path, workspace_root: &Path) -> Result<String, AppError> {
-    let mut out = String::new();
-    let mut rest = css;
-    while let Some(start) = rest.find("url(") {
-        let (before, after_start) = rest.split_at(start);
-        out.push_str(before);
-        let Some(end) = after_start.find(')') else {
-            out.push_str(after_start);
-            return Ok(out);
-        };
-        let raw = after_start[4..end].trim().trim_matches(['"', '\'']);
-        if raw.starts_with("data:")
-            || raw.starts_with("http:")
-            || raw.starts_with("https:")
-            || raw.starts_with('#')
-        {
-            out.push_str(&after_start[..=end]);
-        } else {
-            let asset_path = base_dir.join(raw);
-            if asset_path.exists() {
-                let mime_type = mime_type(&asset_path);
-                match read_workspace_bytes(&asset_path, workspace_root) {
-                    Ok(bytes) => {
-                        let encoded = base64_encode(&bytes);
-                        out.push_str(&format!("url(\"data:{mime_type};base64,{encoded}\")"));
-                    }
-                    Err(_) => out.push_str(&after_start[..=end]),
-                }
-            } else {
-                out.push_str(&after_start[..=end]);
-            }
-        }
-        rest = &after_start[end + 1..];
-    }
-    out.push_str(rest);
-    Ok(out)
-}
-
-#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-fn asset_resolver_js(
-    workspace_root: &Path,
-    assets: &AssetsDef,
-    image_paths: &[String],
-) -> Result<String, AppError> {
-    let mut files = String::new();
-    files.push('{');
-    let mut first = true;
-    let mut paths = assets
-        .entries
-        .iter()
-        .filter(|asset| asset.kind == AssetKind::File)
-        .map(|asset| asset.path.clone())
-        .collect::<Vec<_>>();
-    for image_path in image_paths {
-        if !paths.iter().any(|path| path == image_path) {
-            paths.push(image_path.clone());
-        }
-    }
-    for asset_path in paths {
-        let path = resolve_asset_path(workspace_root, &asset_path)?;
-        push_asset_resolver_entry(
-            workspace_root,
-            &path,
-            workspace_root,
-            &mut files,
-            &mut first,
-        )?;
-    }
-    files.push('}');
-    Ok(format!(
-        "window.PuzzleAssets = {{ files: {files}, url(path) {{ const key = String(path || '').replaceAll('\\\\\\\\', '/'); if (Object.prototype.hasOwnProperty.call(this.files, key)) return this.files[key]; if (/^(?:data:|https?:|#)/.test(key)) return key; throw new Error(`Puzzle asset is not embedded: ${{key}}. Declare it with file \\\"${{key}}\\\" in assets.`); }} }};"
-    ))
-}
-
-#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-fn resolve_asset_path(base_dir: &Path, asset_path: &str) -> Result<PathBuf, AppError> {
-    let path = Path::new(asset_path);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err(AppError::Config(format!(
-            "asset path must be workspace-relative: {asset_path}"
-        )));
-    }
-    let resolved = base_dir.join(path);
-    if !resolved.exists() {
-        return Err(AppError::Config(format!(
-            "asset file not found: {}",
-            resolved.display()
-        )));
-    }
-    Ok(resolved)
-}
-
-#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-fn push_asset_resolver_entry(
-    root: &Path,
-    path: &Path,
-    workspace_root: &Path,
-    files: &mut String,
-    first: &mut bool,
-) -> Result<(), AppError> {
-    let relative = path.strip_prefix(root).map_err(|_| {
-        AppError::Config(format!(
-            "asset file is outside workspace: {}",
-            path.display()
-        ))
-    })?;
-    let name = relative.to_str().ok_or_else(|| {
-        AppError::Config(format!(
-            "asset file path is not valid UTF-8: {}",
-            path.display()
-        ))
-    })?;
-    if !*first {
-        files.push(',');
-    }
-    *first = false;
-    push_json_string(files, &name.replace('\\', "/"));
-    files.push(':');
-    let url = if is_text_file(path) {
-        format!(
-            "data:{};charset=utf-8,{}",
-            mime_type(path),
-            percent_encode(&read_workspace_text_file(path, workspace_root)?)
-        )
-    } else {
-        format!(
-            "data:{};base64,{}",
-            mime_type(path),
-            base64_encode(&read_workspace_bytes(path, workspace_root)?)
-        )
-    };
-    push_json_string(files, &url);
-    Ok(())
-}
-
-#[cfg(any(feature = "native-preview", feature = "embedded-assets"))]
-fn percent_encode(value: &str) -> String {
-    let mut out = String::new();
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
 }
 
 fn load_editor_documents(
@@ -818,7 +595,6 @@ fn load_editor_documents(
                 content_loaded: false,
                 preview_html: String::new(),
                 preview_error: String::new(),
-                game_css: String::new(),
                 imported_by: import_graph
                     .imported_by
                     .get(&canonical_path)
@@ -835,7 +611,6 @@ fn load_editor_documents(
                 content_loaded: false,
                 preview_html: String::new(),
                 preview_error: String::new(),
-                game_css: String::new(),
                 imported_by: Vec::new(),
             });
         } else {
@@ -849,7 +624,6 @@ fn load_editor_documents(
                 content_loaded: false,
                 preview_html: String::new(),
                 preview_error: String::new(),
-                game_css: String::new(),
                 imported_by: Vec::new(),
             });
         }
@@ -1227,7 +1001,6 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         ("GET", "/favicon.svg") => http_ok("image/svg+xml", FAVICON_SVG),
         ("GET", "/editor.css") => http_ok("text/css; charset=utf-8", EDITOR_CSS),
         ("GET", "/renderer.css") => http_ok("text/css; charset=utf-8", RENDERER_CSS),
-        ("GET", "/game.css") => http_ok("text/css; charset=utf-8", &service.state().game_css),
         ("GET", "/editor_boot.js") => http_ok("text/javascript; charset=utf-8", EDITOR_BOOT_JS),
         ("GET", "/editor_icons.js") => http_ok("text/javascript; charset=utf-8", EDITOR_ICONS_JS),
         ("GET", "/editor_codemirror.js") => {
@@ -1295,10 +1068,6 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
         ("GET", "/editor_authoring_renderer.js") => http_ok(
             "text/javascript; charset=utf-8",
             EDITOR_AUTHORING_RENDERER_JS,
-        ),
-        ("GET", "/game.visuals.js") => http_ok(
-            "text/javascript; charset=utf-8",
-            &service.state().base_game_visuals_js,
         ),
         ("GET", "/api/source") => match service.source_json() {
             Ok(source) => http_ok("application/json; charset=utf-8", &source),
@@ -1387,19 +1156,13 @@ fn route(request: &HttpRequest, service: &EditorService) -> Vec<u8> {
 pub struct PreviewRequest {
     pub source: String,
     pub puzzle_path: String,
-    pub game_css: String,
 }
 
 impl PreviewRequest {
-    pub fn new(
-        source: impl Into<String>,
-        puzzle_path: impl Into<String>,
-        game_css: impl Into<String>,
-    ) -> Self {
+    pub fn new(source: impl Into<String>, puzzle_path: impl Into<String>) -> Self {
         Self {
             source: source.into(),
             puzzle_path: puzzle_path.into(),
-            game_css: game_css.into(),
         }
     }
 
@@ -1409,14 +1172,11 @@ impl PreviewRequest {
                 source: json_string_field(body, "source").unwrap_or_default(),
                 puzzle_path: json_string_field(body, "puzzlePath")
                     .unwrap_or_else(|| state.puzzle_path.clone()),
-                game_css: json_string_field(body, "gameCss")
-                    .unwrap_or_else(|| state.game_css.clone()),
             };
         }
         Self {
             source: body.to_string(),
             puzzle_path: state.puzzle_path.clone(),
-            game_css: state.game_css.clone(),
         }
     }
 }
@@ -1617,11 +1377,6 @@ fn load_workspace_document(
         .unwrap_or_default();
     if is_text_file(&canonical_requested) {
         let source = read_workspace_text_file(&canonical_requested, &workspace_root)?;
-        let game_css = if puzzle_lang::is_puzzle_source_path(&canonical_requested) {
-            load_game_css(&canonical_requested, &workspace_root)?
-        } else {
-            String::new()
-        };
         return Ok(EditorDocument {
             puzzle_path: canonical_requested.display().to_string(),
             encoding: "text".to_string(),
@@ -1631,7 +1386,6 @@ fn load_workspace_document(
             content_loaded: true,
             preview_html: String::new(),
             preview_error: String::new(),
-            game_css,
             imported_by,
         });
     }
@@ -1646,7 +1400,6 @@ fn load_workspace_document(
         content_loaded: true,
         preview_html: String::new(),
         preview_error: String::new(),
-        game_css: String::new(),
         imported_by,
     })
 }
@@ -2561,8 +2314,6 @@ fn source_json_for_payload(state: &EditorState, include_content: bool) -> Result
     out.push(',');
     push_json_pair(&mut out, "source", &source);
     out.push(',');
-    push_json_pair(&mut out, "gameCss", &state.game_css);
-    out.push(',');
     push_editor_folders_json(&mut out, state);
     out.push(',');
     push_editor_documents_json(&mut out, state, include_content)?;
@@ -2593,8 +2344,6 @@ fn editor_seed_json(out: &mut String, state: &EditorState) {
     push_json_pair(out, "source", &state.source);
     out.push(',');
     push_json_pair(out, "previewHtml", "");
-    out.push(',');
-    push_json_pair(out, "gameCss", &state.game_css);
     out.push(',');
     push_editor_folders_json(out, state);
     out.push(',');
@@ -2685,16 +2434,6 @@ fn push_editor_document_json(
     push_json_pair(out, "previewHtml", &document.preview_html);
     out.push(',');
     push_json_pair(out, "previewError", &document.preview_error);
-    out.push(',');
-    push_json_pair(
-        out,
-        "gameCss",
-        if include_content {
-            &document.game_css
-        } else {
-            ""
-        },
-    );
     out.push(',');
     push_json_string_array(out, "importedBy", &document.imported_by);
     out.push('}');
@@ -3221,7 +2960,6 @@ step board
             .compile_preview(&PreviewRequest::new(
                 PAGES_EXAMPLE_PUZZLE_SOURCE,
                 example_path.display().to_string(),
-                String::new(),
             ))
             .expect("managed Pages example should compile");
         let build: Value = serde_json::from_str(&build).expect("typed preview build");
@@ -3245,7 +2983,6 @@ step board
                 .compile_preview(&PreviewRequest::new(
                     *source,
                     example_path.display().to_string(),
-                    String::new(),
                 ))
                 .unwrap_or_else(|error| panic!("{path} should compile: {error}"));
         }
@@ -3262,14 +2999,6 @@ step board
             ),
         );
         workspace.write("games/editor_fixture/notes.md", "# Notes\n");
-        workspace.write(
-            "games/editor_fixture/visuals.js",
-            "window.GameVisuals = {};\n",
-        );
-        workspace.write(
-            "games/editor_fixture/game.css",
-            ".board { background-image: url(\"tile.svg\"); }\n",
-        );
         workspace.write(
             "games/editor_fixture/tile.svg",
             r#"<svg xmlns="http://www.w3.org/2000/svg"></svg>"#,
@@ -3297,23 +3026,9 @@ step board
             &state.documents,
             "games/editor_fixture/fragments/extra.puzzle"
         ));
-        assert!(
-            state.game_css.contains("data:image/svg+xml"),
-            "editor preview CSS should inline local url() assets"
-        );
-        assert!(
-            !state.base_game_visuals_js.contains("tile.svg"),
-            "opening the editor must not compile preview-owned assets"
-        );
-        assert!(
-            !state.base_game_visuals_js.contains("notes.md"),
-            "preview asset resolver must not expose undeclared workspace files"
-        );
         let source_json = service.source_json().expect("source json");
-        assert!(
-            !source_json.contains("gameVisualsJs"),
-            "visual scripts are service-owned assets, not document JSON state"
-        );
+        assert!(!source_json.contains("gameCss"));
+        assert!(!source_json.contains("gameVisualsJs"));
     }
 
     #[test]
@@ -3330,7 +3045,6 @@ step board
             .compile_preview(&PreviewRequest::new(
                 fs::read_to_string(&game_path).expect("read broken import source"),
                 game_path.display().to_string(),
-                String::new(),
             ))
             .expect_err("broken preview import must fail while compiling preview");
         let message = error.to_string();
@@ -3360,7 +3074,6 @@ step board
                 .compile_preview(&PreviewRequest::new(
                     "title = \"Broken\"\n",
                     game_path.display().to_string(),
-                    String::new(),
                 ))
                 .is_err()
         );
@@ -3435,10 +3148,6 @@ step board
                 "games/editor_fixture/node_modules/library/readme.md"
             ),
             "dependency files must not become editable workspace documents"
-        );
-        assert!(
-            !state.base_game_visuals_js.contains("generated.js"),
-            "preview asset resolver must not embed generated dependency/build files"
         );
     }
 
@@ -3645,7 +3354,7 @@ step board
     }
 
     #[test]
-    fn compile_preview_uses_the_request_source_and_editor_assets() {
+    fn compile_preview_uses_the_request_source_without_adjacent_css() {
         let workspace = TestWorkspace::new();
         let game_path = workspace.write(
             "games/editor_fixture/game.puzzle",
@@ -3661,7 +3370,6 @@ step board
             .compile_preview(&PreviewRequest::new(
                 editor_fixture_source("Preview After"),
                 game_path.display().to_string(),
-                service.state().game_css.clone(),
             ))
             .expect("compile preview");
         let build: Value = serde_json::from_str(&build).expect("typed preview build");
@@ -3669,10 +3377,7 @@ step board
 
         assert!(html.contains("<!doctype html>"));
         assert!(html.contains("Preview After"));
-        assert!(
-            html.contains("#123456"),
-            "request CSS should flow into the generated preview"
-        );
+        assert!(!html.contains("#123456"));
         assert!(
             html.contains("window.PuzzleRuntimeExportJson = "),
             "editor preview HTML must expose the source-free runtime export"
@@ -3704,7 +3409,6 @@ step board
             .compile_preview(&PreviewRequest::new(
                 source,
                 game_path.display().to_string(),
-                service.state().game_css.clone(),
             ))
             .expect("compile preview with top-level sounds");
         let build: Value = serde_json::from_str(&build).expect("typed preview build");
@@ -3728,7 +3432,6 @@ step board
             .compile_preview(&PreviewRequest::new(
                 themed_source,
                 game_path.display().to_string(),
-                service.state().game_css.clone(),
             ))
             .expect("compile themed preview");
         let build: Value = serde_json::from_str(&build).expect("typed preview build");
@@ -3774,7 +3477,6 @@ level "start"
             .compile_preview(&PreviewRequest::new(
                 source,
                 game_path.display().to_string(),
-                service.state().game_css.clone(),
             ))
             .expect("compile preview");
         let build: Value = serde_json::from_str(&build).expect("typed preview build");
@@ -3825,7 +3527,6 @@ B
             .compile_preview(&PreviewRequest::new(
                 source,
                 game_path.display().to_string(),
-                service.state().game_css.clone(),
             ))
             .expect("compile tagged visual preview");
         let build: Value = serde_json::from_str(&build).expect("typed preview build");
@@ -3869,7 +3570,6 @@ level "first"
             .compile_preview(&PreviewRequest::new(
                 source.to_string(),
                 game_path.display().to_string(),
-                String::new(),
             ))
             .expect_err("invalid source should fail preview compile");
 
@@ -3943,7 +3643,6 @@ P.
             .compile_preview(&PreviewRequest::new(
                 source.to_string(),
                 game_path.display().to_string(),
-                String::new(),
             ))
             .expect_err("invalid source should fail preview compile");
 
@@ -4022,7 +3721,6 @@ P
             .compile_preview(&PreviewRequest::new(
                 source.to_string(),
                 game_path.display().to_string(),
-                String::new(),
             ))
             .expect_err("invalid source should fail preview compile");
 
@@ -4089,7 +3787,6 @@ P
             .compile_preview(&PreviewRequest::new(
                 source.to_string(),
                 game_path.display().to_string(),
-                String::new(),
             ))
             .expect_err("invalid source should fail preview compile");
 
@@ -4200,7 +3897,6 @@ process.stdout.write(JSON.stringify({ selected, ambiguous, unknownError }));
             .compile_preview(&PreviewRequest::new(
                 source,
                 game_path.display().to_string(),
-                String::new(),
             ))
             .expect("compile puzzle3 preview");
         let build: Value = serde_json::from_str(&build).expect("typed preview build");
@@ -4276,7 +3972,6 @@ levels demo of push3 {
             .compile_preview(&PreviewRequest::new(
                 source,
                 game_path.display().to_string(),
-                String::new(),
             ))
             .expect("compile puzzle3 input preview");
 
@@ -4409,8 +4104,8 @@ levels demo of push3 {
             .next()
             .expect("preview compile failure branch end");
         assert!(!compile_failure.contains("invalidateCompiledPreview"));
-        assert!(EDITOR_JS.contains(r#"applyGameCss("");"#));
-        assert!(EDITOR_JS.contains(r#"applyGameVisuals("");"#));
+        assert!(!EDITOR_JS.contains("applyGameCss"));
+        assert!(!EDITOR_JS.contains("applyGameVisuals"));
         assert!(EDITOR_JS.contains(r#"setStatus("Compile error", "is-error");"#));
         assert!(!EDITOR_JS.contains("function preserveCompiledPreviewAfterCompileError(document)"));
         assert!(!EDITOR_JS.contains("Keeping last successful preview"));
@@ -8245,15 +7940,11 @@ move
     }
 
     #[test]
-    fn editor_workspace_includes_named_theme_css_in_effective_game_css() {
-        assert!(EDITOR_WORKSPACE_JS.contains(
-            "for (const themeDocument of effectiveThemeCssDocuments(document, manifest.themeName || \"\"))"
-        ));
-        assert!(
-            EDITOR_WORKSPACE_JS
-                .contains("parts.push(rewriteCssAssetUrls(\n      themeDocument.source || \"\",")
-        );
-        assert!(!EDITOR_WORKSPACE_JS.contains("activeTheme = trimmed.endsWith(\"{\");"));
+    fn editor_workspace_does_not_interpret_authored_css_or_javascript_assets() {
+        assert!(!EDITOR_WORKSPACE_JS.contains("effectiveGameCss"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("effectiveGameVisualsJs"));
+        assert!(!EDITOR_WORKSPACE_JS.contains("assetResolverScript"));
+        assert!(!EDITOR_JS.contains("registerAssetScript"));
     }
 
     #[test]
@@ -8347,16 +8038,6 @@ move
         assert!(EDITOR_SOURCE_JS.contains(
             "return loadSurfaceEntriesForSource(expectedSource, { reportUnavailable: true });"
         ));
-    }
-
-    #[test]
-    fn document_reload_uses_the_compiled_visual_contract_without_parsing_html() {
-        assert!(
-            EDITOR_WORKSPACE_JS
-                .contains("applyGameVisuals(displayedPreviewBuild?.gameVisualsJs || \"\");")
-        );
-        assert!(!EDITOR_JS.contains("function compiledPreviewGameVisualsJs("));
-        assert!(!EDITOR_WORKSPACE_JS.contains("compiledPreviewGameVisualsJs("));
     }
 
     #[test]
@@ -9236,7 +8917,6 @@ process.stdout.write(JSON.stringify({ ready, stale, previewOnly }));
             .compile_preview(&PreviewRequest::new(
                 editor_fixture_source("Project B changed"),
                 outside_path.display().to_string(),
-                String::new(),
             ))
             .expect_err("preview paths outside the opened project must be rejected")
             .to_string();

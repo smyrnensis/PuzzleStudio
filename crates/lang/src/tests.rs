@@ -15,8 +15,6 @@ const title = workspace_manifest
 theme = "pixel"
 
 assets {
-"game.css"
-"visuals.js"
 "audio/click.wav"
 }
 
@@ -54,8 +52,6 @@ B
         .presentation_manifest("game.puzzle")
         .expect("workspace presentation manifest");
     assert_eq!(manifest.theme_name.as_deref(), Some("pixel"));
-    assert_eq!(manifest.css_paths, ["game.css"]);
-    assert_eq!(manifest.script_paths, ["visuals.js"]);
     assert_eq!(manifest.file_paths, ["audio/click.wav"]);
     assert_eq!(
         manifest.visual_image_assets,
@@ -6267,8 +6263,6 @@ fn parses_declared_assets() {
 const title = assets_test
 
 assets {
-"game.css"
-"visuals.js"
 "visuals/player.png"
 }
 
@@ -6289,15 +6283,45 @@ P
 }
 }
 "#;
-    let loaded = parse_game(source).unwrap();
+    let document = parse_game_for_path(source, "assets_test.puzzle").unwrap();
 
-    assert_eq!(loaded.assets.entries.len(), 3);
-    assert_eq!(loaded.assets.entries[0].kind, AssetKind::Css);
-    assert_eq!(loaded.assets.entries[0].path, "game.css");
-    assert_eq!(loaded.assets.entries[1].kind, AssetKind::Script);
-    assert_eq!(loaded.assets.entries[1].path, "visuals.js");
-    assert_eq!(loaded.assets.entries[2].kind, AssetKind::File);
-    assert_eq!(loaded.assets.entries[2].path, "visuals/player.png");
+    assert_eq!(document.assets.files, ["visuals/player.png"]);
+}
+
+#[test]
+fn assets_reject_authored_css_and_javascript() {
+    for path in ["game.css", "visuals.js", "visuals.mjs"] {
+        let source = format!(
+            r#"
+assets {{
+"{path}"
+}}
+
+puzzle sokoban {{
+layers {{
+solid = Player
+}}
+rules {{
+}}
+levels {{
+legend {{
+P = Player
+}}
+level "one"
+P
+}}
+}}
+"#
+        );
+        let error = parse_game(&source).unwrap_err().to_string();
+        assert!(
+            error.contains(&format!(
+                "assets does not support authored .{} CSS/JavaScript assets",
+                path.rsplit_once('.').unwrap().1
+            )),
+            "{path}: {error}"
+        );
+    }
 }
 
 #[test]
@@ -19467,7 +19491,7 @@ preset = "clean"
   accent_color = #ff0000
 }
 assets {
-  "game.css"
+  "audio/click.wav"
 }
 
 puzzle push3 {
@@ -19539,7 +19563,7 @@ scene level_select {
     assert_eq!(document.default_wait_ms, 100);
     assert_eq!(document.sounds.sfx[0].name, "push");
     assert_eq!(document.theme.name.as_deref(), Some("clean"));
-    assert_eq!(document.assets.entries[0].path, "game.css");
+    assert_eq!(document.assets.files[0], "audio/click.wav");
     assert!(matches!(
         document.scenes.as_slice(),
         [push3, title, level_select]

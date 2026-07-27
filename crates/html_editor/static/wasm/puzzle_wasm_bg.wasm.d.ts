@@ -19,11 +19,10 @@ export const active_source_analysis_resolve_source_target: (a: number, b: number
 export const active_source_analysis_sound_request: (a: number, b: number, c: number) => [number, number, number, number];
 export const active_source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];
 export const apply_source_analysis_edit: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
-export const compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+export const compile_preview: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const editor_audio_random_music_preset: (a: number, b: number) => [number, number, number];
 export const editor_audio_random_sfx_preset: (a: number, b: number, c: number, d: number) => [number, number, number];
-export const export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
-export const generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+export const export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
 export const wasmeditoraudio_audio_feedback_event: (a: number, b: number) => [number, number, number, number];
 export const wasmeditoraudio_configure: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number];
@@ -48,8 +47,8 @@ export const wasmsolverservice_pin_artifact: (a: number, b: number, c: number, d
 export const wasmsolverservice_prepare_source: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const wasmsolverservice_prepare_workspace: (a: number, b: number, c: number, d: any, e: number) => [number, number, number];
 export const wasmsolverservice_start: (a: number, b: number, c: number, d: any, e: number) => [number, number, number];
-export const wasmworkspacesession_compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
-export const wasmworkspacesession_export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
+export const wasmworkspacesession_compile_preview: (a: number, b: number, c: number) => [number, number, number, number];
+export const wasmworkspacesession_export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const wasmworkspacesession_index_json: (a: number) => [number, number, number, number];
 export const wasmworkspacesession_new: (a: any) => [number, number, number];
 export const wasmworkspacesession_presentation_manifest: (a: number, b: number, c: number) => [number, number, number];

@@ -31,13 +31,11 @@ use puzzle_core::{
     ObjectId, Offset, PatchOp, Pattern, RuleFiring, State, TransitionCommand,
 };
 pub use puzzle_game_runtime::RuntimeSession;
+use puzzle_lang::DiagnosticReport;
 #[cfg(test)]
 use puzzle_lang::SceneComponent;
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::resolve_game_entry;
-use puzzle_lang::{AssetKind, DiagnosticReport};
-#[cfg(not(target_arch = "wasm32"))]
-use puzzle_lang::{AssetsDef, VisualKind};
 use puzzle_lang::{
     GoalCondition, GoalExpr, GoalValue, Level, LoadedDocumentModel, LoadedGame, RuleAnimation,
     RuleAnimationTrigger, SceneValue, parse_game2d as parse_game,
@@ -58,7 +56,6 @@ use puzzle_runtime_contract::{
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const APP_CSS: &str = include_str!("../static/app.css");
 const RENDERER_CSS: &str = include_str!("../static/renderer.css");
-const VISUALS_JS: &str = include_str!("../static/visuals.js");
 const APP_JS: &str = include_str!("../static/app.js");
 const RENDERER_JS: &str = include_str!("../static/renderer.js");
 const VISUAL_TWEEN_CORE_JS: &str = include_str!("../static/visual_tween_core.js");
@@ -115,10 +112,30 @@ levels default of board {
             document,
             loaded,
             DecodedVisualImageCatalog::default(),
-            String::new(),
-            String::new(),
+            "window.PuzzleAssets = { files: {} };".to_string(),
             SolverConfig::default(),
         )));
+        let assets = route(
+            &HttpRequest {
+                method: "GET".to_string(),
+                path: "/assets.js".to_string(),
+                body: Vec::new(),
+            },
+            Arc::clone(&state),
+        );
+        assert!(assets.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(assets.contains("window.PuzzleAssets = { files: {} };"));
+        for removed_path in ["/game.css", "/game.visuals.js"] {
+            let response = route(
+                &HttpRequest {
+                    method: "GET".to_string(),
+                    path: removed_path.to_string(),
+                    body: Vec::new(),
+                },
+                Arc::clone(&state),
+            );
+            assert!(response.starts_with("HTTP/1.1 404 Not Found\r\n"));
+        }
         let request = json!({
             "renderScene": {
                 "clips": [],
@@ -247,8 +264,6 @@ levels default of board {{
             source.to_string(),
             puzzle_path.to_string(),
             EncodedVisualImageBundle::default(),
-            String::new(),
-            String::new(),
         )
         .expect("test editor preview document must construct its runtime")
     }
@@ -531,13 +546,9 @@ level "one" {
 "#;
         std::fs::write(&puzzle_path, source).expect("write puzzle fixture");
 
-        let html = export_html_from_source(
-            source,
-            puzzle_path.to_str().expect("fixture path is UTF-8"),
-            "",
-            "",
-        )
-        .expect("export visual bundle");
+        let html =
+            export_html_from_source(source, puzzle_path.to_str().expect("fixture path is UTF-8"))
+                .expect("export visual bundle");
         let export = embedded_puzzle_runtime_export_json(&html);
         let assets = export["visualImages"]["assets"]
             .as_array()
@@ -571,14 +582,10 @@ level "one" {
 
         std::fs::write(dir.join("visuals/tile.png"), b"not a PNG")
             .expect("replace visual fixture with invalid bytes");
-        let error = export_html_from_source(
-            source,
-            puzzle_path.to_str().expect("fixture path is UTF-8"),
-            "",
-            "",
-        )
-        .expect_err("invalid visual bytes must reject export")
-        .to_string();
+        let error =
+            export_html_from_source(source, puzzle_path.to_str().expect("fixture path is UTF-8"))
+                .expect_err("invalid visual bytes must reject export")
+                .to_string();
         assert!(error.contains("failed to decode visual image `visuals/tile.png`"));
 
         std::fs::remove_dir_all(dir).expect("remove visual fixture directory");
@@ -1498,7 +1505,7 @@ scene playing {
 }
 "#;
 
-        let html = export_html_from_source(source, "games/sfx_volume.puzzle", "", "")
+        let html = export_html_from_source(source, "games/sfx_volume.puzzle")
             .expect("export should succeed");
 
         let runtime_export = embedded_puzzle_runtime_export_json(&html);
@@ -2160,14 +2167,9 @@ scene mixed_play {
                 )
         ));
 
-        let build = export_editor_preview_build_from_document(
-            &document,
-            source,
-            "games/mixed/game.puzzle",
-            "",
-            "",
-        )
-        .expect("mixed document editor preview must compile");
+        let build =
+            export_editor_preview_build_from_document(&document, source, "games/mixed/game.puzzle")
+                .expect("mixed document editor preview must compile");
         let build: Value = serde_json::from_str(&build).unwrap();
         assert_eq!(build["models"]["flat"]["kind"], "puzzle2d");
         assert_eq!(build["models"]["cube"]["kind"], "puzzle3d");
@@ -2229,8 +2231,6 @@ scene selecting {
             &document,
             source,
             "games/two-worlds/game.puzzle",
-            "",
-            "",
         )
         .expect("multi-2D editor preview must compile");
         let build: Value = serde_json::from_str(&build).unwrap();
@@ -2652,7 +2652,7 @@ scene playing {
 }
 "#;
 
-        let html = export_html_from_source(source, "games/wasm_export/game.puzzle", "", "")
+        let html = export_html_from_source(source, "games/wasm_export/game.puzzle")
             .expect("export should succeed");
 
         assert_official_export_uses_bevy_launcher(&html);
@@ -2830,7 +2830,7 @@ scene playing {
 }
 "#;
 
-        let html = export_editor_preview_html_from_source(source, "game.puzzle", "", "")
+        let html = export_editor_preview_html_from_source(source, "game.puzzle")
             .expect("editor preview should serialize scene input effects");
         let runtime_export = embedded_puzzle_runtime_export_json(&html);
 
@@ -2872,8 +2872,6 @@ scene playing {
         let html = export_html_from_source_with_embedded_wasm(
             source,
             "game.puzzle",
-            "",
-            "",
             "export const runtimeMarker = 1;",
             "AA==",
         )
@@ -2927,8 +2925,6 @@ scene playing {
             &document,
             source,
             "games/editor_preview/game.puzzle",
-            "",
-            "",
         )
         .expect("editor preview build should succeed");
         let build: Value = serde_json::from_str(&build).unwrap();
@@ -3743,7 +3739,7 @@ rules {
 }
 }
 "##;
-        let html = export_html_from_source(source, "games/theme_startup/game.puzzle", "", "")
+        let html = export_html_from_source(source, "games/theme_startup/game.puzzle")
             .expect("export themed document");
 
         assert!(html.contains("<body>"));
@@ -3766,13 +3762,8 @@ rules {
     #[test]
     fn standalone_export_supports_single_puzzle3_document() {
         let source = include_str!("../../lang/tests/fixtures/spec_3d_full.puzzle");
-        let html = export_html_from_source(
-            source,
-            "games/spec_3d.puzzle",
-            "body { --accent: #123456; }",
-            "",
-        )
-        .expect("release export should use source-free 3D runtime");
+        let html = export_html_from_source(source, "games/spec_3d.puzzle")
+            .expect("release export should use source-free 3D runtime");
 
         assert_official_export_uses_bevy_launcher(&html);
         assert!(!html.contains("runtimeContractVersion"));
@@ -3788,13 +3779,8 @@ rules {
         assert!(!html.contains("puzzle_wasm_game_bg.wasm"));
         assert!(!html.contains("\\npuzzle3 microban3d"));
 
-        let preview_html = export_editor_preview_html_from_source(
-            source,
-            "games/spec_3d.puzzle",
-            "body { --accent: #123456; }",
-            "",
-        )
-        .expect("editor preview should embed preview runtime assets");
+        let preview_html = export_editor_preview_html_from_source(source, "games/spec_3d.puzzle")
+            .expect("editor preview should embed preview runtime assets");
 
         assert!(preview_html.contains("window.Puzzle3DFrameFixtures"));
         assert!(!preview_html.contains("window.Puzzle3DFixture"));
@@ -3863,7 +3849,7 @@ scene playing {
 }
 "#;
 
-        let html = export_html_from_source(source, "games/mixed_export.puzzle", "", "")
+        let html = export_html_from_source(source, "games/mixed_export.puzzle")
             .expect("mixed standalone export should be owned by the Bevy launcher");
 
         assert_official_export_uses_bevy_launcher(&html);
@@ -3930,7 +3916,7 @@ levels default of cube {
   }
 }
 "#;
-        let html = export_html_from_source(source, "games/local_frame.puzzle", "", "")
+        let html = export_html_from_source(source, "games/local_frame.puzzle")
             .expect("local_frame should compile into the standalone session model");
 
         assert!(!html.contains("runtimeContract"));
@@ -4242,7 +4228,7 @@ levels default of cube {
   }
 }
 "#;
-        let html = export_html_from_source(source, "games/tiny.puzzle", "", "")
+        let html = export_html_from_source(source, "games/tiny.puzzle")
             .expect("release puzzle3 document should use source-free runtime");
 
         assert_official_export_uses_bevy_launcher(&html);
@@ -4291,7 +4277,7 @@ levels default of cube {
   }
 }
 "##;
-        let html = export_editor_preview_html_from_source(source, "games/themed_3d.puzzle", "", "")
+        let html = export_editor_preview_html_from_source(source, "games/themed_3d.puzzle")
             .expect("editor preview should keep its component document");
         let boot = embedded_puzzle_boot_json(&html);
         let fixtures = embedded_puzzle3_frame_fixtures_json(&html);
@@ -4353,7 +4339,6 @@ PBG
             document,
             loaded,
             DecodedVisualImageCatalog::default(),
-            String::new(),
             String::new(),
             SolverConfig::default(),
         );

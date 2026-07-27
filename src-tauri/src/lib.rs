@@ -802,7 +802,6 @@ fn empty_source_value() -> serde_json::Value {
         "puzzlePath": "",
         "workspaceRoot": "",
         "source": "",
-        "gameCss": "",
         "documents": [],
         "empty": true
     })

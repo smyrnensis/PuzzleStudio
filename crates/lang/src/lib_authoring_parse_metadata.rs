@@ -108,20 +108,25 @@ fn parse_assets_block(
         let path = authoring_grammar::authoring_capture_first(&row.captures, "path")
             .ok_or_else(|| parse_error(&row.source_line, "assets entry must include a path"))?;
         let path = parse_asset_path(path, &row.source_line)?;
-        assets.entries.push(AssetDef {
-            kind: infer_asset_kind(&path),
-            path,
-        });
+        reject_executable_asset_path(&path, &row.source_line)?;
+        assets.files.push(path);
     }
     Ok(next_i)
 }
 
-fn infer_asset_kind(path: &str) -> AssetKind {
-    match path.rsplit_once('.').map(|(_, extension)| extension) {
-        Some("css") => AssetKind::Css,
-        Some("js") => AssetKind::Script,
-        _ => AssetKind::File,
+fn reject_executable_asset_path(path: &str, line: &str) -> Result<(), DiagnosticReport> {
+    let extension = path
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase());
+    if let Some(extension @ ("css" | "js" | "mjs")) = extension.as_deref() {
+        return Err(parse_error(
+            line,
+            &format!(
+                "assets does not support authored .{extension} CSS/JavaScript assets"
+            ),
+        ));
     }
+    Ok(())
 }
 
 fn parse_asset_path(token: &str, line: &str) -> Result<String, DiagnosticReport> {

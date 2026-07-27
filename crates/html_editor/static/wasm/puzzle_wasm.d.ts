@@ -8,8 +8,6 @@ export interface WorkspaceSourceDocument {
 
 export interface WorkspacePresentationManifest {
     readonly themeName: string | null;
-    readonly cssPaths: string[];
-    readonly scriptPaths: string[];
     readonly filePaths: string[];
     readonly visualImageAssets: ReadonlyArray<{
         readonly id: string;
@@ -75,8 +73,8 @@ export class WasmSolverService {
 export class WasmWorkspaceSession {
     free(): void;
     [Symbol.dispose](): void;
-    compile_preview(entry_path: string, game_css: string, game_visuals_js: string): string;
-    export_html(entry_path: string, game_css: string, game_visuals_js: string, player_runtime_module_js: string, player_runtime_wasm_base64: string): string;
+    compile_preview(entry_path: string): string;
+    export_html(entry_path: string, player_runtime_module_js: string, player_runtime_wasm_base64: string): string;
     index_json(): string;
     constructor(documents: ReadonlyArray<WorkspaceSourceDocument>);
     presentation_manifest(entry_path: string): WorkspacePresentationManifest;
@@ -126,7 +124,7 @@ export function active_source_analysis_suggest_source_completions(revision: numb
 
 export function apply_source_analysis_edit(revision: number, start_utf16: number, end_utf16: number, insert: string): string;
 
-export function compile_preview(source: string, puzzle_path: string, game_css: string, game_visuals_js: string): string;
+export function compile_preview(source: string, puzzle_path: string): string;
 
 export function editor_audio_random_music_preset(seed: string): any;
 
@@ -134,9 +132,7 @@ export function editor_audio_random_sfx_preset(seed: string, type_target: string
 
 export function editor_audio_sfx_types(): Array<any>;
 
-export function export_html(source: string, puzzle_path: string, game_css: string, game_visuals_js: string, player_runtime_module_js: string, player_runtime_wasm_base64: string): string;
-
-export function generate_visuals_js(source: string, base_visuals_js: string): string;
+export function export_html(source: string, puzzle_path: string, player_runtime_module_js: string, player_runtime_wasm_base64: string): string;
 
 export function translate_puzzlescript(source: string): string;
 
@@ -162,11 +158,10 @@ export interface InitOutput {
     readonly active_source_analysis_sound_request: (a: number, b: number, c: number) => [number, number, number, number];
     readonly active_source_analysis_suggest_source_completions: (a: number, b: number) => [number, number, number, number];
     readonly apply_source_analysis_edit: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
-    readonly compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
+    readonly compile_preview: (a: number, b: number, c: number, d: number) => [number, number, number, number];
     readonly editor_audio_random_music_preset: (a: number, b: number) => [number, number, number];
     readonly editor_audio_random_sfx_preset: (a: number, b: number, c: number, d: number) => [number, number, number];
-    readonly export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => [number, number, number, number];
-    readonly generate_visuals_js: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+    readonly export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
     readonly translate_puzzlescript: (a: number, b: number) => [number, number, number, number];
     readonly wasmeditoraudio_audio_feedback_event: (a: number, b: number) => [number, number, number, number];
     readonly wasmeditoraudio_configure: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => [number, number];
@@ -191,8 +186,8 @@ export interface InitOutput {
     readonly wasmsolverservice_prepare_source: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly wasmsolverservice_prepare_workspace: (a: number, b: number, c: number, d: any, e: number) => [number, number, number];
     readonly wasmsolverservice_start: (a: number, b: number, c: number, d: any, e: number) => [number, number, number];
-    readonly wasmworkspacesession_compile_preview: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
-    readonly wasmworkspacesession_export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number, number];
+    readonly wasmworkspacesession_compile_preview: (a: number, b: number, c: number) => [number, number, number, number];
+    readonly wasmworkspacesession_export_html: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
     readonly wasmworkspacesession_index_json: (a: number) => [number, number, number, number];
     readonly wasmworkspacesession_new: (a: any) => [number, number, number];
     readonly wasmworkspacesession_presentation_manifest: (a: number, b: number, c: number) => [number, number, number];
