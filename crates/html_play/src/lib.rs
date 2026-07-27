@@ -2678,6 +2678,10 @@ scene playing {
 
         assert!(runtime_export["runtimeLoadedDocument"].is_object());
         assert!(
+            !html.contains("/assets.js"),
+            "editor preview HTML must not request the removed live-server asset resolver"
+        );
+        assert!(
             html.contains(r#"\"kind\":\"input\",\"name\":\"continue_game\""#),
             "runtime bundle should encode the authored input command as a named payload"
         );
