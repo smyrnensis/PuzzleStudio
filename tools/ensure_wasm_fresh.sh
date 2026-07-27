@@ -252,20 +252,6 @@ while IFS= read -r source; do
   wasm_player_rust_sources+=("$source")
 done < <(workspace_dependency_sources puzzle-wasm-player)
 
-html_play_preview_sources=(
-  crates/html_play/static/index.html
-  crates/html_play/static/app.css
-  crates/html_play/static/renderer.css
-  crates/html_play/static/app.js
-  crates/html_play/static/renderer.js
-  crates/html_play/static/standalone.js
-  crates/html_play/static/puzzle3.css
-  crates/html_play/static/puzzle3_visual_core.js
-  crates/html_play/static/puzzle3_three_renderer.js
-  crates/html_play/static/puzzle3_component.js
-  crates/html_play/static/vendor/three/three.module.min.js
-)
-
 ensure_target_current \
   puzzle_wasm \
   "$wasm_profile" \
@@ -275,7 +261,6 @@ ensure_target_current \
   -- \
   "${workspace_sources[@]}" \
   tools/build_wasm_editor.sh \
-  "${html_play_preview_sources[@]}" \
   "${wasm_editor_rust_sources[@]}"
 
 ensure_target_current \

@@ -289,14 +289,6 @@ fn escape_script_json(value: &str) -> String {
     escaped
 }
 
-fn escape_script(value: &str) -> String {
-    value.replace("</script", "<\\/script")
-}
-
-fn escape_style(value: &str) -> String {
-    value.replace("</style", "<\\/style")
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn http_ok(content_type: &str, body: &str) -> String {
     http_response(200, "OK", content_type, body)

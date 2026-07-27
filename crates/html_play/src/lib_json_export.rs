@@ -96,14 +96,6 @@ fn editor_preview_build_json(html: &str, state: &EditorPreviewState) -> String {
     .expect("typed editor preview build must serialize")
 }
 
-fn push_export_boot_data(out: &mut String, editor_preview: bool) {
-    out.push('{');
-    push_json_pair(out, "engineVersion", env!("CARGO_PKG_VERSION"));
-    out.push(',');
-    push_json_bool(out, "editorPreview", editor_preview);
-    out.push('}');
-}
-
 fn push_runtime_inputs(out: &mut String, state: &EditorPreviewState) {
     push_runtime_snapshot_field(out, state, "inputs");
 }
