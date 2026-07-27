@@ -21,66 +21,25 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<(), AppError> {
     let workspace = puzzle_workspace::FileWorkspace::load(&config.puzzle_path, root)
         .map_err(AppError::Config)?;
     let document = workspace.compile().map_err(AppError::Lang)?;
-    if !config.serve || document_uses_puzzle3_renderer(&document) {
-        let output_path = config.output_path();
-        let puzzle_path = config.puzzle_path.display().to_string();
-        let html =
-            export_bevy_document_html(&document, &puzzle_path, StandaloneRuntimeWasm::HostDefault)
-                .map_err(AppError::Config)?;
-        if let Some(screenshot) = &config.screenshot {
-            capture_html_screenshot(&html, &screenshot.output_path, screenshot)?;
-            println!("screenshot {}", screenshot.output_path.display());
-            return Ok(());
-        }
-        if !config.serve {
-            fs::write(&output_path, html)?;
-            println!("exported {}", output_path.display());
-            return Ok(());
-        }
+    let output_path = config.output_path();
+    let puzzle_path = config.puzzle_path.display().to_string();
+    let html = export_bevy_document_html(
+        &document,
+        &puzzle_path,
+        StandaloneRuntimeWasm::HostDefault,
+    )
+    .map_err(AppError::Config)?;
+    if let Some(screenshot) = &config.screenshot {
+        capture_html_screenshot(&html, &screenshot.output_path, screenshot)?;
+        println!("screenshot {}", screenshot.output_path.display());
+        return Ok(());
+    }
+    if config.serve {
         return serve_static_html(html, &config.puzzle_path, config.port);
     }
-
-    let loaded = loaded_document_scene_host_loaded_game(&document).map_err(AppError::Config)?;
-    print_warnings(&loaded);
-    let asset_resolver_js = load_game_asset_resolver_js(&config.puzzle_path, &document)?;
-    let visual_images = load_visual_image_bundle_for_export(
-        &document,
-        &config.puzzle_path.display().to_string(),
-    )
-    .map_err(AppError::Lang)
-    .and_then(|bundle| {
-        puzzle_assets::decode_visual_image_bundle(&bundle)
-            .map_err(|error| AppError::Config(error.to_string()))
-    })?;
-
-    let state = Arc::new(Mutex::new(ServerState::new(
-        document,
-        loaded,
-        visual_images,
-        asset_resolver_js,
-        config.solver,
-    )));
-    let (listener, port) = bind_listener(config.port)?;
-
-    println!("html-play serving http://127.0.0.1:{port}");
-    println!("puzzle: {}", config.puzzle_path.display());
-    print_wasm_freshness_status();
-
-    for stream in listener.incoming() {
-        let stream = stream?;
-        let state = Arc::clone(&state);
-        if let Err(error) = handle_connection(stream, state) {
-            eprintln!("request error: {error}");
-        }
-    }
-
+    fs::write(&output_path, html)?;
+    println!("exported {}", output_path.display());
     Ok(())
-}
-
-fn print_warnings(loaded: &LoadedGame) {
-    for warning in &loaded.warnings {
-        eprintln!("warning: {warning}");
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -108,26 +67,6 @@ fn print_wasm_freshness_status() {
             Path::new("Cargo.lock"),
         ],
         "tools/build_wasm_player.sh",
-    );
-    print_wasm_artifact_status(
-        "puzzle_wasm_game",
-        &[
-            Path::new("crates/html_play/static/wasm_game/puzzle_wasm_game.js"),
-            Path::new("crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm"),
-        ],
-        &[
-            Path::new("crates/wasm_game/src"),
-            Path::new("crates/wasm_game/Cargo.toml"),
-            Path::new("crates/html_play/src"),
-            Path::new("crates/core/src"),
-            Path::new("crates/lang/src"),
-            Path::new("crates/play/src"),
-            Path::new("crates/runtime_contract/src"),
-            Path::new("crates/scene/src"),
-            Path::new("crates/kernel/src"),
-            Path::new("Cargo.lock"),
-        ],
-        "tools/build_wasm_game.sh",
     );
 }
 

@@ -16,21 +16,6 @@ fn bind_listener(preferred_port: u16) -> io::Result<(TcpListener, u16)> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn handle_connection(
-    mut stream: TcpStream,
-    state: Arc<Mutex<ServerState>>,
-) -> Result<(), AppError> {
-    let Some(request) = read_request(&mut stream)? else {
-        return Ok(());
-    };
-
-    let response = route(&request, state);
-    stream.write_all(response.as_bytes())?;
-    stream.flush()?;
-    Ok(())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 fn serve_static_html(html: String, puzzle_path: &Path, port: u16) -> Result<(), AppError> {
     let html = Arc::new(html);
     let (listener, port) = bind_listener(port)?;
@@ -75,15 +60,12 @@ fn route_static_html(request: &HttpRequest, html: &str) -> String {
 struct HttpRequest {
     method: String,
     path: String,
-    body: Vec<u8>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, AppError> {
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 8192];
-    let mut header_end = None;
-    let mut content_length = 0;
 
     loop {
         let bytes_read = stream.read(&mut buffer)?;
@@ -94,22 +76,12 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, AppError>
             break;
         }
         bytes.extend_from_slice(&buffer[..bytes_read]);
-
-        if header_end.is_none() {
-            if let Some(end) = find_header_end(&bytes) {
-                header_end = Some(end);
-                content_length = parse_content_length(&bytes[..end]);
-            }
-        }
-
-        if let Some(end) = header_end {
-            if bytes.len() >= end + 4 + content_length {
-                break;
-            }
+        if find_header_end(&bytes).is_some() {
+            break;
         }
     }
 
-    let Some(end) = header_end else {
+    let Some(end) = find_header_end(&bytes) else {
         return Err(AppError::Config("invalid HTTP request".to_string()));
     };
     let header = String::from_utf8_lossy(&bytes[..end]);
@@ -120,159 +92,12 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, AppError>
         path.truncate(query_index);
     }
 
-    let body_start = end + 4;
-    let body_end = body_start + content_length;
-    let body = bytes
-        .get(body_start..body_end)
-        .ok_or_else(|| AppError::Config("incomplete HTTP request body".to_string()))?
-        .to_vec();
-
-    Ok(Some(HttpRequest { method, path, body }))
+    Ok(Some(HttpRequest { method, path }))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
     bytes.windows(4).position(|window| window == b"\r\n\r\n")
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn parse_content_length(header: &[u8]) -> usize {
-    String::from_utf8_lossy(header)
-        .lines()
-        .find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse().ok())
-                .flatten()
-        })
-        .unwrap_or(0)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn route(request: &HttpRequest, state: Arc<Mutex<ServerState>>) -> String {
-    let method = request.method.as_str();
-    let path = request.path.as_str();
-
-    match (method, path) {
-        ("GET", "/") | ("GET", "/index.html") => http_ok("text/html; charset=utf-8", INDEX_HTML),
-        ("GET", "/app.css") => http_ok("text/css; charset=utf-8", APP_CSS),
-        ("GET", "/renderer.css") => http_ok("text/css; charset=utf-8", RENDERER_CSS),
-        ("GET", "/assets.js") => {
-            let state = state.lock().expect("server state poisoned");
-            http_ok("text/javascript; charset=utf-8", &state.asset_resolver_js)
-        }
-        ("GET", "/app.js") => http_ok("text/javascript; charset=utf-8", APP_JS),
-        ("GET", "/visual_tween_core.js") => {
-            http_ok("text/javascript; charset=utf-8", VISUAL_TWEEN_CORE_JS)
-        }
-        ("GET", "/renderer.js") => http_ok("text/javascript; charset=utf-8", RENDERER_JS),
-        #[cfg(feature = "solver")]
-        ("POST", "/api/solve") => {
-            let mut state = state.lock().expect("server state poisoned");
-            match state.solve_json() {
-                Ok(body) => http_ok("application/json; charset=utf-8", &body),
-                Err(error) => http_error(400, &error.to_string()),
-            }
-        }
-        ("POST", "/api/action") => {
-            let action = match serde_json::from_slice::<puzzle_runtime_contract::SessionAction>(
-                &request.body,
-            ) {
-                Ok(action) => action,
-                Err(error) => return http_error(400, &format!("invalid session action: {error}")),
-            };
-            handle_session_action(state, action)
-        }
-        ("POST", "/api/render-moment") => {
-            let state = state.lock().expect("server state poisoned");
-            match state.resolve_render_moment_json(&request.body) {
-                Ok(body) => http_ok("application/json; charset=utf-8", &body),
-                Err(error) => http_error(400, &error),
-            }
-        }
-        ("GET", "/api/state") => {
-            let state = state.lock().expect("server state poisoned");
-            match state.snapshot_json() {
-                Ok((body, rejected_audio)) => {
-                    report_live_server_audio_rejection(rejected_audio);
-                    http_ok("application/json; charset=utf-8", &body)
-                }
-                Err(error) => http_error(500, &error),
-            }
-        }
-        _ => http_error(404, "not found"),
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn handle_session_action(
-    state: Arc<Mutex<ServerState>>,
-    action: puzzle_runtime_contract::SessionAction,
-) -> String {
-    let mut state = state.lock().expect("server state poisoned");
-    match state.runtime.dispatch_development_typed(action) {
-        Ok(snapshot) => match live_server_snapshot_json(snapshot) {
-            Ok((body, rejected_audio)) => {
-                report_live_server_audio_rejection(rejected_audio);
-                http_ok("application/json; charset=utf-8", &body)
-            }
-            Err(error) => http_error(500, &error),
-        },
-        Err(error) => http_error(400, &error),
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn live_server_snapshot_json(
-    snapshot: puzzle_session_contract::RuntimeDevelopmentSessionSnapshot,
-) -> Result<(String, usize), String> {
-    let (snapshot, rejected_audio) = project_live_server_presentation(snapshot);
-    puzzle_presentation_json::to_string(&snapshot)
-        .map(|body| (body, rejected_audio))
-        .map_err(|error| format!("snapshot JSON could not be serialized: {error}"))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn report_live_server_audio_rejection(rejected_audio: usize) {
-    if rejected_audio > 0 {
-        eprintln!(
-            "audio consumer: live server has no browser audio device; rejected {rejected_audio} typed audio presentation event(s)"
-        );
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn project_live_server_presentation(
-    mut snapshot: puzzle_session_contract::RuntimeDevelopmentSessionSnapshot,
-) -> (
-    puzzle_session_contract::RuntimeDevelopmentSessionSnapshot,
-    usize,
-) {
-    let (events, rejected_audio) =
-        project_live_server_events(std::mem::take(&mut snapshot.player.presentation_events));
-    snapshot.player.presentation_events = events;
-    (snapshot, rejected_audio)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn project_live_server_events(
-    events: Vec<puzzle_runtime_contract::RuntimePresentationEvent>,
-) -> (
-    Vec<puzzle_runtime_contract::RuntimePresentationEvent>,
-    usize,
-) {
-    let original_len = events.len();
-    let events = events
-        .into_iter()
-        .filter(|event| {
-            !matches!(
-                event,
-                puzzle_runtime_contract::RuntimePresentationEvent::Audio { .. }
-            )
-        })
-        .collect::<Vec<_>>();
-    let rejected_audio = original_len - events.len();
-    (events, rejected_audio)
 }
 
 fn push_puzzle_screen(out: &mut String, loaded: &LoadedGame) {
