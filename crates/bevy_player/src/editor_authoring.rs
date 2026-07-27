@@ -103,6 +103,10 @@ impl EditorAuthoringConfiguration {
         }
     }
 
+    pub(crate) fn accepts_model_input(&self) -> bool {
+        self.surface.interaction == EditorAuthoringInteraction::Play
+    }
+
     pub(crate) fn validate_for_solver_state(
         &self,
         state: &SolverStateSnapshot,

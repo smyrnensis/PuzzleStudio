@@ -6,7 +6,8 @@ if (typeof window.PuzzleSourceEditorBundle?.createSourceEditor !== "function") {
 const sourceEditor = window.PuzzleSourceEditorBundle.createSourceEditor(sourceEditorMount);
 const sourceLineNumbers = document.querySelector("#sourceLineNumbers");
 const sourceHighlight = document.querySelector("#sourceHighlight");
-let previewFrame = document.querySelector("#previewFrame");
+let editorRuntimeFrame = document.querySelector("#editorRuntimeFrame");
+let previewFrame = editorRuntimeFrame;
 const playPreview = document.querySelector("#playPreview");
 const previewFrameWrap = document.querySelector("#previewFrameWrap");
 const previewViewport = document.querySelector("#previewViewport");
@@ -129,12 +130,10 @@ const level3dOriginZScrub = document.querySelector("#level3dOriginZScrub");
 const level3dPalette = document.querySelector("#level3dPalette");
 const level3dStageViewButton = document.querySelector("#level3dStageViewButton");
 const level3dLayerViewButton = document.querySelector("#level3dLayerViewButton");
-let level3dRuntimeFrame = document.querySelector("#level3dRuntimeFrame");
-const level3dStageCanvas = document.querySelector("#level3dStageCanvas");
+let level3dRuntimeFrame = null;
+const level3dStageCanvas = null;
 const level3dLayerPalette = document.querySelector("#level3dLayerPalette");
 const level3dLayerBoard = document.querySelector("#level3dLayerBoard");
-const level3dLayerFrame = document.querySelector("#level3dLayerFrame");
-const level3dLayerOverlay = document.querySelector("#level3dLayerOverlay");
 const level3dLayerInput = document.querySelector("#level3dLayerInput");
 const level3dLayerTotal = document.querySelector("#level3dLayerTotal");
 const level3dLayerSizeLabel = document.querySelector("#level3dLayerSizeLabel");
@@ -151,6 +150,7 @@ const updateLevel3dButton = document.querySelector("#updateLevel3dButton");
 const level3dActionStatus = document.querySelector("#level3dActionStatus");
 const solverBoardViewport = document.querySelector("#solverBoardViewport");
 const solverBoard = document.querySelector("#solverBoard");
+const editorRuntimeSurface = document.querySelector("#editorRuntimeSurface");
 const levelSolveStatus = document.querySelector("#levelSolveStatus");
 const levelSolutionControls = document.querySelector("#levelSolutionControls");
 const solutionSeekInput = document.querySelector("#solutionSeekInput");
@@ -297,10 +297,6 @@ function installSelectAllOnFocus(input) {
 }
 const editorSeed = window.PuzzleEditorSeed || null;
 const levelThemeRoot = levelBoard?.closest(".level-board-wrap") || levelBoard;
-const solverThemeRoot = solverBoard?.closest(".solver-board-wrap") || solverBoard;
 const levelRenderer = window.PuzzleAuthoringRenderer
   ? new window.PuzzleAuthoringRenderer(levelBoard, { themeRoot: levelThemeRoot })
-  : null;
-const solverRenderer = window.PuzzleRenderer
-  ? new window.PuzzleRenderer(solverBoard, { renderMode: "canvas", themeRoot: solverThemeRoot })
   : null;

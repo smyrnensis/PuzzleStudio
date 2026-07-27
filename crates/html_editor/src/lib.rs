@@ -3877,11 +3877,14 @@ process.stdout.write(JSON.stringify({ selected, ambiguous, unknownError }));
     #[test]
     fn preview_state_is_bound_to_the_active_iframe_generation() {
         assert!(EDITOR_JS.contains("editorRuntimeControllerByWindow.get(event.source)"));
-        assert!(EDITOR_JS.contains("if (!controller || event.origin !== window.location.origin)"));
+        assert!(EDITOR_JS.contains(
+            "editorRuntimeControllerByWindow.set(nextFrame.contentWindow, { controller, loadId })"
+        ));
+        assert!(EDITOR_JS.contains("runtimeSource.loadId !== runtimeSource.controller.loadId"));
         assert!(EDITOR_JS.contains(
             "if (controller.role !== \"preview\" || (context && context.controller !== controller))"
         ));
-        assert!(EDITOR_JS.contains("editorRuntimeControllerByWindow.delete(previousFrame.contentWindow)"));
+        assert!(EDITOR_JS.contains("function retireEditorRuntimeFrame(frame)"));
         assert!(EDITOR_JS.contains("setPreviewViewportAspect(event.data.aspectRatio);"));
         assert!(EDITOR_JS.contains("const displayCells = cloneJson(event.data.levelCells);"));
         assert!(!EDITOR_JS.contains("sceneCellsToSlots(event.data.scene, [])"));
@@ -3893,7 +3896,9 @@ process.stdout.write(JSON.stringify({ selected, ambiguous, unknownError }));
         assert!(EDITOR_JS.contains("type: \"PuzzleStudioEditorPreviewCommand\""));
         assert!(EDITOR_JS.contains("const command = editorPreviewCommand(kind, payload);"));
         assert!(EDITOR_JS.contains("commandJson: JSON.stringify(command)"));
-        assert!(EDITOR_JS.contains("return { type: \"hydrateState\", commandId, ...payload };"));
+        assert!(
+            EDITOR_JS.contains("return { type: \"hydrateModelState\", commandId, ...payload };")
+        );
         assert!(EDITOR_JS.contains("return { type: \"syntheticKey\", commandId, ...payload };"));
         assert!(EDITOR_JS.contains("return { type: \"requestSnapshot\", commandId };"));
         assert!(EDITOR_JS.contains("trace: previewDebugEnabled"));
@@ -4919,11 +4924,11 @@ levels demo of push3 {
             .find("function loadLevelSourceEntry(source, entry, options = {})")
             .expect("level source loader");
         let level_source_loader_end = EDITOR_JS[level_source_loader..]
-            .find("function levelEditorSourceExportData(source)")
+            .find("function levelEditorSourceExportData(source, modelName)")
             .map(|index| level_source_loader + index)
             .expect("level source loader end");
         let level_source_loader = &EDITOR_JS[level_source_loader..level_source_loader_end];
-        assert!(level_source_loader.contains("levelEditorSourceExportData(source)"));
+        assert!(level_source_loader.contains("levelEditorSourceExportData(source, modelName)"));
         assert!(!level_source_loader.contains("PuzzleStudioHost.preview"));
         assert!(!level_source_loader.contains("renderPreview"));
         assert!(
@@ -4934,7 +4939,7 @@ levels demo of push3 {
         assert!(EDITOR_JS.contains(
             "function activePreviewModeAcceptsLevelState() {\n  return currentPreviewMode === \"edit\" && levelPlaytestActive;\n}"
         ));
-        assert!(EDITOR_JS.contains("function levelEditorSourceExportData(source)"));
+        assert!(EDITOR_JS.contains("function levelEditorSourceExportData(source, modelName)"));
         assert!(EDITOR_RUNTIME_JS.contains("levelEditorSourceSession(source)"));
         assert!(EDITOR_RUNTIME_JS.contains("\"levelEditorBundle\""));
         assert!(EDITOR_RUNTIME_JS.contains("manifest() {\n          return bundle.manifest;"));
@@ -5570,7 +5575,7 @@ process.stdout.write(JSON.stringify({
         assert!(EDITOR_JS.contains("function solverRuntimeDisplayState()"));
         assert!(EDITOR_JS.contains("function queueSolverRuntimeState(display)"));
         assert!(EDITOR_JS.contains("surfaceId: \"solver-observation\""));
-        assert!(EDITOR_JS.contains("kind: \"hydrateState\""));
+        assert!(EDITOR_JS.contains("kind: \"hydrateModelState\""));
         assert!(EDITOR_JS.contains("activeController.pending = { commandId, key };"));
         assert!(EDITOR_JS.contains("commandId !== commandController.pending?.commandId"));
         assert!(!EDITOR_JS.contains("function previewStateMatchesSolverTask("));
@@ -6347,9 +6352,12 @@ move
         ));
         assert!(EDITOR_LEVEL3D_JS.contains("kind: \"hydrateDraft\""));
         assert!(EDITOR_LEVEL3D_JS.contains("kind: \"grid3d\""));
-        assert!(EDITOR_LEVEL3D_JS.contains(
-            "const objectIds = Array.isArray(entry?.objectIds) ? [...entry.objectIds] : [];"
-        ));
+        assert!(EDITOR_LEVEL3D_JS.contains("if (!entry || !Array.isArray(entry.objectIds))"));
+        assert!(
+            EDITOR_LEVEL3D_JS
+                .contains("has no typed legend identity for ${JSON.stringify(row[x])}")
+        );
+        assert!(EDITOR_LEVEL3D_JS.contains("const objectIds = [...entry.objectIds];"));
         assert!(!EDITOR_LEVEL3D_JS.contains("objectIdsByName"));
         assert!(!EDITOR_LEVEL3D_JS.contains("PuzzleStudioPreviewSurfaceUpdate"));
         assert!(!EDITOR_LEVEL3D_JS.contains("PuzzleStudioRenderPuzzle3ModelComponent"));
@@ -9153,9 +9161,11 @@ process.stdout.write(JSON.stringify({ ready, stale, previewOnly }));
     #[test]
     fn editor_solver_uses_the_bevy_host_hydration_contract() {
         assert!(EDITOR_HTML.contains(r#"id="editorRuntimeFrame""#));
-        assert!(EDITOR_JS.contains("function ensureEditorRuntimeController(host, surfaceId, role)"));
+        assert!(
+            EDITOR_JS.contains("function ensureEditorRuntimeController(host, surfaceId, role)")
+        );
         assert!(EDITOR_JS.contains("surfaceId: \"solver-observation\""));
-        assert!(EDITOR_JS.contains("kind: \"hydrateState\""));
+        assert!(EDITOR_JS.contains("kind: \"hydrateModelState\""));
         assert!(EDITOR_JS.contains("state: solverObservationPreview.state"));
         assert!(EDITOR_JS.contains("state: step.state"));
         assert!(!EDITOR_JS.contains("levelSolutionPreview?.kind !== \"puzzle3d\""));
@@ -9297,9 +9307,7 @@ process.stdout.write(JSON.stringify({ ready, stale, previewOnly }));
         assert!(EDITOR_LEVEL3D_JS.contains(
             "return { yawDegrees: 0, pitchDegrees: 90, rollDegrees: 0, zoom: 1, projection: \"orthographic\" };"
         ));
-        assert!(EDITOR_LEVEL3D_JS.contains(
-            "const camera = layer\n    ? level3dLayerCamera()"
-        ));
+        assert!(EDITOR_LEVEL3D_JS.contains("const camera = layer\n    ? level3dLayerCamera()"));
         assert!(EDITOR_LEVEL3D_JS.contains("sliceZ: layer ? currentLevel3dLayerZ() : null"));
     }
 

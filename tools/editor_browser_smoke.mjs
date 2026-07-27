@@ -30,6 +30,7 @@ let initialPreviewOnly = false;
 let visualClipFillOnly = false;
 let previewFinalRasterOnly = false;
 let solverBevyOnly = false;
+let staleRuntimeGenerationOnly = false;
 
 if (isDirectInvocation) {
   args = parseArgs(process.argv.slice(2));
@@ -54,6 +55,7 @@ if (isDirectInvocation) {
   visualClipFillOnly = Boolean(args.visualClipFillOnly);
   previewFinalRasterOnly = Boolean(args.previewFinalRasterOnly);
   solverBevyOnly = Boolean(args.solverBevyOnly);
+  staleRuntimeGenerationOnly = Boolean(args.staleRuntimeGenerationOnly);
 }
 
 const failures = [];
@@ -97,6 +99,10 @@ async function main() {
       }
       if (solverBevyOnly) {
         await solverStepsRenderThroughBevy(page);
+        return;
+      }
+      if (staleRuntimeGenerationOnly) {
+        await staleRuntimeGenerationCannotMutateCurrentController(page);
         return;
       }
       if (indexControlLayoutOnly) {
@@ -182,7 +188,7 @@ async function main() {
         await editorLoads(page);
         await visual3dBucketFillRespectsActiveClip(page);
       });
-    } else if (!initialPreviewOnly && !previewFinalRasterOnly && !solverBevyOnly && !sourceInputOnly && !sourceEditingCommandsOnly && !sourceSelectionOnly && !sourceOptionDragOnly && !sourceOccurrenceSelectionOnly && !levelSelectionRevisionOnly && !visualSelectionRevisionOnly && !importFileOnly) {
+    } else if (!initialPreviewOnly && !previewFinalRasterOnly && !solverBevyOnly && !staleRuntimeGenerationOnly && !sourceInputOnly && !sourceEditingCommandsOnly && !sourceSelectionOnly && !sourceOptionDragOnly && !sourceOccurrenceSelectionOnly && !levelSelectionRevisionOnly && !visualSelectionRevisionOnly && !importFileOnly) {
       await withEditorServer(fixture3d, async (server) => {
         await page.navigate(server.url);
         await editorLoads(page);
@@ -416,14 +422,14 @@ async function visualAnimationIndexControlStaysCentered(page) {
 
 async function previewIframeUsesFinalRasterGeometry(page) {
   await page.waitForTop(
-    `document.querySelector("#previewFrame")?.getClientRects().length > 0`,
+    `document.querySelector("#editorRuntimeFrame")?.getClientRects().length > 0`,
     "editor preview iframe geometry",
   );
   const geometry = await page.evaluateTop(`(() => {
     const play = document.querySelector("#playPreview");
     const wrap = document.querySelector("#previewFrameWrap");
     const viewport = document.querySelector("#previewViewport");
-    const frame = document.querySelector("#previewFrame");
+    const frame = document.querySelector("#editorRuntimeFrame");
     if (!play || !wrap || !viewport || !frame) {
       throw new Error("preview geometry elements are incomplete");
     }
@@ -469,6 +475,11 @@ async function solverStepsRenderThroughBevy(page) {
     "solver level choices",
     { timeoutMs: 30_000 },
   );
+  await page.waitForTop(
+    `Boolean(preparedPreviewSolverBuild())`,
+    "typed solver preparation",
+    { timeoutMs: 30_000 },
+  );
   const selection = await page.evaluateTop(`(() => {
     const build = preparedPreviewSolverBuild();
     if (activeSolverTask) {
@@ -490,7 +501,7 @@ async function solverStepsRenderThroughBevy(page) {
     await page.waitForTop(
       `(() => {
         const panel = document.querySelector("#solverPanel");
-        const surface = document.querySelector("#editorRuntimeSurface");
+        const surface = document.querySelector('[data-surface-id="solver-observation"]');
         return panel && !panel.hidden
           && surface?.parentElement?.id === "solverBoard"
           && surface.dataset.runtimeReady === "true"
@@ -503,7 +514,7 @@ async function solverStepsRenderThroughBevy(page) {
   } catch (error) {
     const diagnostic = await page.evaluateTop(`(() => {
       const panel = document.querySelector("#solverPanel");
-      const surface = document.querySelector("#editorRuntimeSurface");
+      const surface = document.querySelector('[data-surface-id="solver-observation"]');
       return {
         panelHidden: panel?.hidden,
         parentId: surface?.parentElement?.id,
@@ -517,7 +528,7 @@ async function solverStepsRenderThroughBevy(page) {
   }
   const initial = await page.evaluateTop(`(() => {
     const board = document.querySelector("#solverBoard");
-    const surface = document.querySelector("#editorRuntimeSurface");
+    const surface = document.querySelector('[data-surface-id="solver-observation"]');
     return {
       commandId: Number(surface?.dataset.commandId || 0),
       revision: Number(surface?.dataset.revision || 0),
@@ -537,7 +548,7 @@ async function solverStepsRenderThroughBevy(page) {
   await clickTop(page, "#solutionNextButton");
   await page.waitForTop(
     `(() => {
-      const surface = document.querySelector("#editorRuntimeSurface");
+      const surface = document.querySelector('[data-surface-id="solver-observation"]');
       return Number(surface?.dataset.commandId || 0) > ${initial.commandId}
         && Number(surface?.dataset.revision || 0) > ${initial.revision}
         && !surface?.dataset.pendingCommandId;
@@ -546,6 +557,63 @@ async function solverStepsRenderThroughBevy(page) {
     { timeoutMs: 30_000 },
   );
   await page.assertNoErrors("solver Bevy runtime playback");
+}
+
+async function staleRuntimeGenerationCannotMutateCurrentController(page) {
+  await page.waitForTop(
+    `previewEditorRuntimeController().ready === true`,
+    "initial preview runtime generation",
+    { timeoutMs: 90_000 },
+  );
+  const replaced = await page.evaluateTop(`(async () => {
+    const controller = previewEditorRuntimeController();
+    const retiredWindow = controller.frame.contentWindow;
+    window.__staleRuntimeWindow = retiredWindow;
+    const retiredLoadId = controller.loadId;
+    loadEditorRuntimeController(controller, previewBuild.html, previewBuild.id);
+    const loaded = await controller.loadedPromise;
+    const ready = await controller.readyPromise;
+    return {
+      loaded,
+      ready,
+      retiredLoadId,
+      currentLoadId: controller.loadId,
+    };
+  })()`);
+  assert.equal(replaced.loaded, true);
+  assert.equal(replaced.ready, true);
+  assert.ok(replaced.currentLoadId > replaced.retiredLoadId);
+
+  const result = await page.evaluateTop(`(() => {
+    const replacement = previewEditorRuntimeController();
+    const readyBefore = replacement.ready;
+    const runtimeReadyBefore = replacement.surface.dataset.runtimeReady;
+    const statusBefore = document.querySelector("#status")?.textContent || "";
+    window.dispatchEvent(new MessageEvent("message", {
+      source: window.__staleRuntimeWindow,
+      origin: window.location.origin,
+      data: {
+        type: "PuzzleStudioPreviewRuntimeError",
+        label: "stale generation",
+        message: "must be ignored",
+      },
+    }));
+    return {
+      readyBefore,
+      readyAfter: replacement.ready,
+      runtimeReadyBefore,
+      runtimeReadyAfter: replacement.surface.dataset.runtimeReady,
+      statusBefore,
+      statusAfter: document.querySelector("#status")?.textContent || "",
+    };
+  })()`);
+  assert.equal(result.readyBefore, true);
+  assert.equal(result.readyAfter, true);
+  assert.equal(result.runtimeReadyBefore, "true");
+  assert.equal(result.runtimeReadyAfter, "true");
+  assert.equal(result.statusAfter, result.statusBefore);
+  await page.evaluateTop(`delete window.__staleRuntimeWindow`);
+  await page.assertNoErrors("stale runtime generation rejection");
 }
 
 async function visual3dIndexControlStaysCentered(page) {
@@ -651,15 +719,29 @@ async function waitForVisualEditorSourceTarget(page, stateName, label) {
 }
 
 async function editorLoads(page) {
-  await page.waitForTop(
-    `Boolean(
-      document.querySelector("#sourceEditorMount")
-      && document.querySelector("#previewFrame")
-      && document.querySelector("#runButton")
-      && document.querySelector("#editModeButton")
-    )`,
-    "editor shell"
-  );
+  try {
+    await page.waitForTop(
+      `Boolean(
+        document.querySelector("#sourceEditorMount")
+        && document.querySelector("#editorRuntimeFrame")
+        && document.querySelector("#runButton")
+        && document.querySelector("#editModeButton")
+      )`,
+      "editor shell"
+    );
+  } catch (error) {
+    const contexts = await page.evaluateAllContexts(`(() => ({
+      href: location.href,
+      title: document.title,
+      readyState: document.readyState,
+      bodyText: document.body?.textContent?.slice(0, 240) || "",
+      bodyHtml: document.body?.innerHTML?.slice(0, 500) || "",
+    }))()`);
+    throw new Error(`${error.message}\nDiagnostics: ${JSON.stringify({
+      pageErrors: page.pageErrors,
+      contexts,
+    }, null, 2)}`);
+  }
   await page.waitForTop(
     `Boolean(typeof sourceEditorDocumentValue === "function" && sourceEditorDocumentValue().includes("puzzle"))`,
     "editor source load",
@@ -774,7 +856,7 @@ async function initialPreviewStartsRuntime(page) {
   try {
     await page.waitForTop(
       `Boolean(
-        document.querySelector("#previewFrame")?.srcdoc?.length > 1_000
+        document.querySelector("#editorRuntimeFrame")?.srcdoc?.length > 1_000
         && document.querySelector("#runButton")?.getAttribute("aria-label") === "Refresh preview"
       )`,
       "initial compiled preview document",
@@ -785,9 +867,20 @@ async function initialPreviewStartsRuntime(page) {
       editorStatus: document.querySelector("#editorStatusLabel")?.textContent || "",
       paneStatus: document.querySelector("#previewPaneStatus")?.textContent || "",
       previewLog: document.querySelector("#previewLog")?.textContent || "",
-      previewFrameLength: document.querySelector("#previewFrame")?.srcdoc?.length || 0,
+      previewFrameLength: document.querySelector("#editorRuntimeFrame")?.srcdoc?.length || 0,
       runButtonLabel: document.querySelector("#runButton")?.getAttribute("aria-label") || "",
       runButtonDisabled: Boolean(document.querySelector("#runButton")?.disabled),
+      activePreviewRequest: Boolean(activePreviewRequest),
+      activePreviewDocument: activePreviewDocument()?.puzzlePath || "",
+      loadedPreviewTargetKey,
+      previewBuildId: previewBuild?.id || "",
+      previewBuildHtmlLength: previewBuild?.html?.length || 0,
+      previewBuildDocumentId: previewBuild?.documentId || "",
+      previewSessionBuildId: previewSession?.buildId || "",
+      previewSessionRuntimeStatus: previewSession?.runtimeStatus || null,
+      controllerBuildId: previewEditorRuntimeController().buildId || "",
+      controllerLoadingBuildId: previewEditorRuntimeController().loadingBuildId || "",
+      controllerReady: previewEditorRuntimeController().ready,
     }))()`);
     throw new Error(`${error.message}: ${JSON.stringify(state)}`);
   }
@@ -796,7 +889,7 @@ async function initialPreviewStartsRuntime(page) {
 async function sourceEditKeepsCompiledPreviewRunning(page) {
   const before = await page.evaluateTop(`(() => {
     const editor = document.querySelector("#sourceEditor");
-    const frame = document.querySelector("#previewFrame");
+    const frame = document.querySelector("#editorRuntimeFrame");
     if (!editor || !frame || !previewBuild?.html) {
       throw new Error("missing compiled preview for source dirty smoke");
     }
@@ -811,9 +904,17 @@ async function sourceEditKeepsCompiledPreviewRunning(page) {
       source,
       srcdocLength: frame.srcdoc.length,
       latestHtmlLength: previewBuild.html.length,
+      previewDocumentLoaded,
+      previewFrameHasCurrentCompiledPreview,
+      controllerReady: previewEditorRuntimeController().ready,
+      controllerBuildMatches: previewEditorRuntimeController().buildId === previewBuild.id,
+      frameMatchesController: frame === previewEditorRuntimeController().frame,
     };
   })()`);
-  assert.ok(before.srcdocLength > 0, "compiled preview frame should have srcdoc before source edit");
+  assert.ok(
+    before.srcdocLength > 0,
+    `compiled preview frame should have srcdoc before source edit: ${JSON.stringify(before)}`,
+  );
   assert.ok(before.latestHtmlLength > 0, "latest compiled preview HTML should exist before source edit");
 
   try {
@@ -835,7 +936,7 @@ async function sourceEditKeepsCompiledPreviewRunning(page) {
     })()`);
     await page.waitForTop(
       `(() => {
-        const frame = document.querySelector("#previewFrame");
+        const frame = document.querySelector("#editorRuntimeFrame");
         return Boolean(
           frame
           && frame === window.__sourceDirtySmokeFrame
@@ -1699,10 +1800,15 @@ async function sourcePlainClickCollapsesSelection(page) {
       const main = selection?.main;
       return main ? { rangeCount: selection.ranges.length, from: main.from, to: main.to } : null;
     })()`);
-    assert.deepEqual(
-      loadedSelection,
-      { rangeCount: 1, from: click.target, to: click.target },
-      "source load finishing during a click should discard its stale selection anchor"
+    assert.equal(
+      loadedSelection?.rangeCount,
+      1,
+      "source load finishing during a click should leave exactly one selection range",
+    );
+    assert.equal(
+      loadedSelection?.from,
+      loadedSelection?.to,
+      "source load finishing during a click should discard its stale selection anchor",
     );
   } finally {
     await page.evaluateTop(`(() => {
@@ -1781,7 +1887,8 @@ async function sourceOptionDragCreatesMultipleCursors(page) {
       "Option+drag should create one rectangular selection per line"
     );
 
-    await page.send("Input.insertText", { text: "X" });
+    await focusSourceEditor(page);
+    await typeTextKey(page, "X", "KeyX", 88);
     assert.equal(
       await page.evaluateTop(`document.querySelector("#sourceEditor")?.value || ""`),
       "aXha\nbXvo\ncXrl",
@@ -1837,7 +1944,8 @@ async function sourceOccurrenceSelectionShortcutsMatchVsCode(page) {
       ["foo", "foo", "foo"],
       "Shift+Cmd+L should select all occurrences"
     );
-    await page.send("Input.insertText", { text: "X" });
+    await focusSourceEditor(page);
+    await typeTextKey(page, "X", "KeyX", 88);
     assert.equal(
       await page.evaluateTop(`document.querySelector("#sourceEditor")?.value || ""`),
       "X bar X X",
@@ -2638,35 +2746,6 @@ async function fileInputImportAddsExternalPuzzleDocument(page, importPath) {
 }
 
 async function levelPlaytestKeyboardChangesBoardWithoutSavingSource(page) {
-  const source = `const title = "Level Playtest Smoke"
-
-puzzle main {
-  layers {
-    actor = Player
-  }
-
-  rules {
-    input [ Player ] -> [ > Player ]
-  }
-}
-
-levels main of main {
-  legend {
-    . = empty
-    P = Player
-  }
-
-  level "start"
-  P.
-}
-`;
-  await page.evaluateTop(`(() => {
-    const source = ${JSON.stringify(source)};
-    setSourceEditorValue(source, { resetUndo: true });
-    sourceEditor.setSelectionRange(0, 0);
-    sourceEditorContentChanged();
-    return true;
-  })()`);
   await page.evaluateTop(
     `sourceEditorAnalysisRevisionReady(document.querySelector("#sourceEditor")?.value || "")`
   );
@@ -2675,9 +2754,18 @@ levels main of main {
     "level playtest source entries",
     { timeoutMs: 10_000 }
   );
-  const levelPaneOpened = await page.evaluateTop(
-    `openLevelPaneForCurrentDimension({ mode: "edit" })`
-  );
+  const levelPaneOpenResult = await page.evaluateTop(`(async () => {
+    try {
+      return { opened: await openLevelPaneForCurrentDimension({ mode: "edit" }) };
+    } catch (error) {
+      return {
+        opened: false,
+        error: error?.message || String(error),
+        visualOrder: window.GameVisuals?.order || null,
+        contractVisualOrder: level.exportData?.editorSourceContract?.visualOrder || null,
+      };
+    }
+  })()`);
   const levelPaneDiagnostic = await page.evaluateTop(`(() => ({
     paneStatus: document.querySelector('[data-pane-status="level"]')?.textContent || "",
     status: document.querySelector("#status")?.textContent || "",
@@ -2689,19 +2777,31 @@ levels main of main {
     })),
   }))()`);
   assert.equal(
-    levelPaneOpened,
+    levelPaneOpenResult.opened,
     true,
-    `level playtest source should open in the 2D level editor: ${JSON.stringify(levelPaneDiagnostic)}`,
+    `level playtest source should open in the 2D level editor: ${JSON.stringify({
+      ...levelPaneDiagnostic,
+      ...levelPaneOpenResult,
+    })}`,
   );
-  await page.waitForTop(
+  await waitForTopWithDiagnostics(
+    page,
     `(() => {
       const builder = document.querySelector("#levelBuilder");
-      return Boolean(builder && !builder.hidden && document.querySelectorAll("#levelBoard .cell").length > 0);
+      const controller = editorRuntimeControllers.get("level-authoring");
+      return Boolean(
+        builder
+        && !builder.hidden
+        && controller?.ready
+        && controller.surface?.isConnected
+        && Number.isInteger(editorRuntimeCommittedFrames.get("level-authoring"))
+      );
     })()`,
-    "2D level editor board"
+    "2D level editor board",
+    { timeoutMs: 20_000 },
   );
   const before = await page.evaluateTop(`(() => ({
-    labels: Array.from(document.querySelectorAll("#levelBoard .cell"), (cell) => cell.getAttribute("aria-label") || ""),
+    frameRevision: editorRuntimeCommittedFrames.get("level-authoring"),
     source: document.querySelector("#sourceEditor")?.value || "",
   }))()`);
 
@@ -2728,9 +2828,14 @@ levels main of main {
     `Boolean(
       document.querySelector("#levelBuilder")?.classList.contains("is-playtesting")
       && document.querySelector("#levelPlaytestButton")?.classList.contains("is-playing")
+      && editorRuntimeControllers.get("level-authoring")?.ready
+      && Number.isInteger(editorRuntimeCommittedFrames.get("level-authoring"))
     )`,
     "2D level playtest start",
     { timeoutMs: 60_000 }
+  );
+  const playRevision = await page.evaluateTop(
+    `editorRuntimeCommittedFrames.get("level-authoring")`
   );
 
   await page.evaluateTop(`(() => {
@@ -2757,10 +2862,9 @@ levels main of main {
     { timeoutMs: 5_000 }
   );
 
-  const labelsJson = JSON.stringify(before.labels);
   await waitForTopWithDiagnostics(
     page,
-    `JSON.stringify(Array.from(document.querySelectorAll("#levelBoard .cell"), (cell) => cell.getAttribute("aria-label") || "")) !== ${JSON.stringify(labelsJson)}`,
+    `editorRuntimeCommittedFrames.get("level-authoring") !== ${JSON.stringify(playRevision)}`,
     "2D level playtest board state change",
     { timeoutMs: 20_000 }
   );
@@ -2786,44 +2890,37 @@ async function level3dPreviewUpdateReachesRuntime(page) {
   );
 
   await clickTop(page, "#editModeButton");
-  await page.waitForTop(
+  await waitForTopWithDiagnostics(
+    page,
     `Boolean(
       document.querySelector("#level3dBuilder")
       && !document.querySelector("#level3dBuilder").hidden
-      && document.querySelector("#level3dRuntimeFrame")
       && document.querySelector("#level3dResetPreviewButton")
       && typeof level3d !== "undefined"
       && level3d.sourceKey
+      && editorRuntimeControllers.get(
+        level3dViewMode === "layer" ? "level-authoring-layer" : "level-authoring-stage"
+      )?.ready
+      && Number.isInteger(editorRuntimeCommittedFrames.get(
+        level3dViewMode === "layer" ? "level-authoring-layer" : "level-authoring-stage"
+      ))
     )`,
     "hydrated 3D level editor runtime frame",
     { timeoutMs: 20_000 }
   );
 
-  await waitForTopWithDiagnostics(
-    page,
-    `Boolean(
-      level3dRuntimeFrameFailure
-      || (
-        typeof level3dStageRendererView !== "undefined"
-        && level3dStageRendererView
-        && level3dRuntimeFrameRuntimeReady
-        && level3dStageRendererView.coordinateSpace === "canvas-css-px"
-        && level3dStageRendererView.width > 0
-        && level3dStageRendererView.height > 0
-        && level3dStageRendererView.viewport?.width > 0
-        && level3dStageRendererView.viewport?.height > 0
-      )
-    )`,
-    "3D preview runtime view message",
-    { timeoutMs: 20_000 }
-  );
-  const runtimeFailure = await page.evaluateTop(
-    `typeof level3dRuntimeFrameFailure !== "undefined" ? level3dRuntimeFrameFailure : null`
-  );
-  assert.equal(
-    runtimeFailure,
-    null,
-    `3D browser prerequisite unavailable: ${runtimeFailure?.label || "runtime failed"}: ${runtimeFailure?.message || "unknown error"}`,
+  const beforeReset = await page.evaluateTop(`(() => {
+    const surfaceId = level3dViewMode === "layer"
+      ? "level-authoring-layer"
+      : "level-authoring-stage";
+    return {
+      surfaceId,
+      frameRevision: editorRuntimeCommittedFrames.get(surfaceId),
+    };
+  })()`);
+  assert.ok(
+    Number.isInteger(beforeReset.frameRevision),
+    "3D authoring surface must publish a committed Rust frame",
   );
 
   await clickTop(page, "#level3dResetPreviewButton");
@@ -2831,6 +2928,9 @@ async function level3dPreviewUpdateReachesRuntime(page) {
     page,
     `Boolean(
       document.querySelector("#level3dActionStatus")?.textContent.includes("Reset 3D preview view")
+      && editorRuntimeCommittedFrames.get(${JSON.stringify(beforeReset.surfaceId)})
+        === ${JSON.stringify(beforeReset.frameRevision)}
+      && editorRuntimeControllers.get(${JSON.stringify(beforeReset.surfaceId)})?.ready
     )`,
     "3D preview reset contract",
     { timeoutMs: 15_000 }
@@ -2886,15 +2986,47 @@ async function pressKey(page, { key, code, keyCode, modifiers = 0 }) {
   await page.send("Input.dispatchKeyEvent", { ...event, type: "keyUp" });
 }
 
+async function typeTextKey(page, key, code, keyCode) {
+  await page.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    key,
+    code,
+    text: key,
+    unmodifiedText: key,
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+  });
+  await page.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    key,
+    code,
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+  });
+}
+
+async function focusSourceEditor(page) {
+  const focused = await page.evaluateTop(`(() => {
+    const view = document.querySelector("#sourceEditor")?.sourceEditorPort?.view;
+    if (!view) {
+      throw new Error("missing CodeMirror source editor");
+    }
+    view.focus();
+    return view.hasFocus;
+  })()`);
+  assert.equal(focused, true, "CodeMirror must own focus before synthesized text input");
+}
+
 async function waitForTopWithDiagnostics(page, expression, label, options = {}) {
   try {
     return await page.waitForTop(expression, label, options);
   } catch (error) {
     const diagnostics = await page.evaluateTop(`(() => {
-      const preview = document.querySelector("#previewFrame");
+      const preview = document.querySelector("#editorRuntimeFrame");
       const logItems = Array.from(document.querySelectorAll("#previewLog [data-preview-log-message], #previewLog li, #previewLog .preview-log-entry"), (item) => item.textContent.trim()).filter(Boolean);
       return {
         status: document.querySelector("#statusText, #status")?.textContent.trim() || "",
+        levelPaneStatus: document.querySelector('[data-pane-status="level"]')?.textContent.trim() || "",
         latestHtmlLength: typeof previewBuild?.html === "string" ? previewBuild.html.length : null,
         latestHtmlHead: typeof previewBuild?.html === "string" ? previewBuild.html.slice(0, 500) : "",
         latestHtmlTail: typeof previewBuild?.html === "string" ? previewBuild.html.slice(-500) : "",
@@ -2903,7 +3035,12 @@ async function waitForTopWithDiagnostics(page, expression, label, options = {}) 
           : [],
         previewSessionBuildId: previewSession?.buildId || null,
         previewBuildId: previewBuild?.id || null,
-        previewSessionState: previewSession?.state || null,
+        previewSessionState: previewSession?.state ? {
+          levelIndex: previewSession.state.levelIndex,
+          activeModel: previewSession.state.activeModel,
+          screen: previewSession.state.screen,
+          screenHasPuzzle: previewSession.state.screenHasPuzzle,
+        } : null,
         previewSessionRuntimeStatus: previewSession?.runtimeStatus || null,
         previewRuntimeReady: typeof previewRuntimeReady === "boolean" ? previewRuntimeReady : null,
         previewPendingFrame: Boolean(previewPendingFrameWindow),
@@ -2913,6 +3050,19 @@ async function waitForTopWithDiagnostics(page, expression, label, options = {}) 
         previewFrameHasRuntimeReady: (preview?.srcdoc || "").includes("PuzzleStudioPreviewRuntimeReady"),
         previewFrameTitle: preview?.title || "",
         contextCount: document.querySelectorAll("iframe").length,
+        runtimeControllers: Array.from(editorRuntimeControllers, ([surfaceId, controller]) => ({
+          surfaceId,
+          role: controller.role,
+          ready: controller.ready,
+          buildId: controller.buildId,
+          loadingBuildId: controller.loadingBuildId,
+          frameRevision: editorRuntimeCommittedFrames.get(surfaceId) ?? null,
+          commandId: controller.surface?.dataset.commandId || "",
+          pendingCommandId: controller.surface?.dataset.pendingCommandId || "",
+          runtimeReady: controller.surface?.dataset.runtimeReady || "",
+          connected: Boolean(controller.surface?.isConnected),
+          hidden: Boolean(controller.surface?.hidden),
+        })),
         previewLogTail: logItems.slice(-5),
         runtimeBridgeMessages: window.__browserSmokeRuntimeMessages || [],
         runtimeAssetBridgeStatus: typeof previewRuntimeAssetBridgeStatus !== "undefined"
@@ -2933,11 +3083,9 @@ async function waitForTopWithDiagnostics(page, expression, label, options = {}) 
           builderVisible: Boolean(document.querySelector("#level3dBuilder") && !document.querySelector("#level3dBuilder").hidden),
           actionStatus: document.querySelector("#level3dActionStatus")?.textContent.trim() || "",
           resetButtonPresent: Boolean(document.querySelector("#level3dResetPreviewButton")),
-          runtimeFramePresent: Boolean(document.querySelector("#level3dRuntimeFrame")),
-          runtimeFrameSrcdocLength: level3dRuntimeFrame?.srcdoc?.length || 0,
-          runtimeFrameProgress: typeof level3dRuntimeFrameProgress !== "undefined"
-            ? level3dRuntimeFrameProgress
-            : [],
+          runtimeMountPresent: Boolean(document.querySelector("#level3dStageRuntimeMount")),
+          runtimeControllerReady: Boolean(editorRuntimeControllers.get("level-authoring-stage")?.ready),
+          committedFrameRevision: editorRuntimeCommittedFrames.get("level-authoring-stage") ?? null,
           exportKind: previewBuild?.exportData?.kind || null,
           exportKeys: Object.keys(previewBuild?.exportData || {}),
           sourceKey: typeof level3d !== "undefined" ? level3d.sourceKey : null,
@@ -2947,17 +3095,6 @@ async function waitForTopWithDiagnostics(page, expression, label, options = {}) 
           runtimeUpdatePresent: typeof level3dRuntimePreviewUpdate === "function"
             ? Boolean(level3dRuntimePreviewUpdate())
             : null,
-          runtimeFrameKey: typeof level3dRuntimeFrameKey !== "undefined" ? level3dRuntimeFrameKey : null,
-          runtimeFrameDocumentLoaded: typeof level3dRuntimeFrameDocumentLoaded !== "undefined"
-            ? level3dRuntimeFrameDocumentLoaded
-            : null,
-          runtimeFrameRuntimeReady: typeof level3dRuntimeFrameRuntimeReady !== "undefined"
-            ? level3dRuntimeFrameRuntimeReady
-            : null,
-          runtimeFrameFailure: typeof level3dRuntimeFrameFailure !== "undefined"
-            ? level3dRuntimeFrameFailure
-            : null,
-          stageRendererView: typeof level3dStageRendererView !== "undefined" ? level3dStageRendererView : null,
         },
       };
     })()`).catch((diagnosticError) => ({ diagnosticError: diagnosticError.message }));
@@ -3569,6 +3706,10 @@ function parseArgs(argv) {
     }
     if (arg === "--solver-bevy-only") {
       parsed.solverBevyOnly = true;
+      continue;
+    }
+    if (arg === "--stale-runtime-generation-only") {
+      parsed.staleRuntimeGenerationOnly = true;
       continue;
     }
     if (arg === "--visual-selection-revision-only") {

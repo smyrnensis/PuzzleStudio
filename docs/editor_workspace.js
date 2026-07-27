@@ -2276,6 +2276,11 @@ function loadEmbeddedDocument(index) {
   const previewDocument = activePreviewDocument();
   const previewTargetKey = recordLoadedPreviewTarget(previewDocument);
   loadedSourceDocumentId = document.id;
+  const previewBuildMatchesTarget = Boolean(
+    previewBuild
+    && previewDocument
+    && previewBuild.documentId === previewDocument.id
+  );
   runButton.disabled = !previewDocument;
   const activeSourceChanged = Boolean(previousActiveFileId && document.id !== previousActiveFileId);
   const previewTargetUnchanged = previewDocument
@@ -2293,7 +2298,7 @@ function loadEmbeddedDocument(index) {
     invalidateCompiledPreview(previewDocument);
   }
   const previewTargetRequiresCompile = previewDocument
-    && !displayedPreviewBuild
+    && !previewBuildMatchesTarget
     && (!previousPreviewKey || previewTargetChanged);
   if (previewTargetRequiresCompile) {
     const expectedPreviewKey = documentIdentityKey(previewDocument);
@@ -2326,7 +2331,7 @@ function loadEmbeddedDocument(index) {
     void syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true, loadFirst: false })
       .catch((error) => setEditorStatus(userFacingRuntimeError(error), "is-error"));
   }
-  syncPreviewViewportAspect();
+  setPreviewViewportAspect(null);
   runButton.disabled = !previewDocument;
   setActiveLevelIndex(0);
   resetPreviewLog(previewDocument ? "Run preview to compile." : "No game entry for preview.");

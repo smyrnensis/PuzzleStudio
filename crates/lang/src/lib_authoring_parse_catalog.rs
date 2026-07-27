@@ -678,6 +678,7 @@ fn parser_surface_catalog_from_source_scan(
                                 &resource.levels,
                                 &resource.legends,
                                 dimension,
+                                None,
                                 &catalog,
                                 &mut integrated.recognition,
                             );
@@ -1037,6 +1038,7 @@ fn project_model_semantics(
         &model.body.levels.levels,
         &model.body.levels.legends,
         model.dimension,
+        Some(&model.name),
         catalog,
         recognition,
     );
@@ -1078,6 +1080,7 @@ fn project_level_products(
     levels: &[crate::level::LevelBlock],
     shared_legends: &[crate::level::LevelLegendSyntax],
     dimension: crate::ModelDimension,
+    model_name: Option<&str>,
     catalog: &Catalog,
     recognition: &mut crate::surface::ParserRecognition,
 ) {
@@ -1116,7 +1119,9 @@ fn project_level_products(
                 name: level.source_name.clone(),
                 dimension,
                 pack: level.pack.clone(),
-                puzzle: level.puzzle.clone(),
+                puzzle: model_name
+                    .map(str::to_owned)
+                    .or_else(|| level.puzzle.clone()),
                 level_index,
                 rows: level.lines.iter().map(|line| line.text.clone()).collect(),
                 shared_legends: shared_legends

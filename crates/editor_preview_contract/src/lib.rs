@@ -1,5 +1,5 @@
 use puzzle_authoring::{EditorDraftPosition2d, EditorDraftPosition3d, EditorDraftState};
-use puzzle_runtime_contract::RuntimePuzzle3CameraProjection;
+use puzzle_runtime_contract::{RuntimePuzzle3CameraProjection, RuntimeStateSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -11,11 +11,13 @@ use serde_json::{Map, Value};
     deny_unknown_fields
 )]
 pub enum EditorPreviewControlRequest {
-    HydrateState {
+    HydrateModelState {
         command_id: u32,
-        state: Value,
+        model: String,
+        state: RuntimeStateSnapshot,
         level_index: u32,
         materialize_level_start: bool,
+        presentation: EditorAuthoringPresentation,
     },
     HydrateDraft {
         command_id: u32,
@@ -51,7 +53,7 @@ pub enum EditorPreviewControlRequest {
 impl EditorPreviewControlRequest {
     pub fn command_id(&self) -> u32 {
         match self {
-            Self::HydrateState { command_id, .. }
+            Self::HydrateModelState { command_id, .. }
             | Self::HydrateDraft { command_id, .. }
             | Self::EditorPointer { command_id, .. }
             | Self::SyntheticKey { command_id, .. }
@@ -62,23 +64,48 @@ impl EditorPreviewControlRequest {
 
 impl EditorPreviewControlRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
-        let Self::HydrateDraft {
-            draft,
-            presentation,
-            ..
-        } = self
-        else {
-            return Ok(());
+        let (model, state_kind, renderer) = match self {
+            Self::HydrateModelState {
+                model,
+                state,
+                presentation,
+                ..
+            } => (
+                model,
+                match state {
+                    RuntimeStateSnapshot::TwoD(_) => "grid2d",
+                    RuntimeStateSnapshot::ThreeD(_) => "grid3d",
+                },
+                &presentation.renderer,
+            ),
+            Self::HydrateDraft {
+                model,
+                draft,
+                presentation,
+                ..
+            } => (
+                model,
+                match draft {
+                    EditorDraftState::Grid2d(_) => "grid2d",
+                    EditorDraftState::Grid3d(_) => "grid3d",
+                },
+                &presentation.renderer,
+            ),
+            _ => return Ok(()),
         };
-        match (draft, &presentation.renderer) {
-            (EditorDraftState::Grid2d(_), EditorRendererStrategy::Grid2d)
-            | (EditorDraftState::Grid3d(_), EditorRendererStrategy::Grid3d { .. }) => Ok(()),
-            (EditorDraftState::Grid2d(_), EditorRendererStrategy::Grid3d { .. }) => Err(
-                "editor draft renderer mismatch: grid2d draft requires the grid2d renderer strategy",
-            ),
-            (EditorDraftState::Grid3d(_), EditorRendererStrategy::Grid2d) => Err(
-                "editor draft renderer mismatch: grid3d draft requires the grid3d renderer strategy",
-            ),
+        if model.trim().is_empty() {
+            return Err("editor model identity must not be empty");
+        }
+        match (state_kind, renderer) {
+            ("grid2d", EditorRendererStrategy::Grid2d)
+            | ("grid3d", EditorRendererStrategy::Grid3d { .. }) => Ok(()),
+            ("grid2d", EditorRendererStrategy::Grid3d { .. }) => {
+                Err("editor renderer mismatch: grid2d state requires the grid2d renderer strategy")
+            }
+            ("grid3d", EditorRendererStrategy::Grid2d) => {
+                Err("editor renderer mismatch: grid3d state requires the grid3d renderer strategy")
+            }
+            _ => unreachable!("editor state kind is exhaustive"),
         }
     }
 }
@@ -417,9 +444,37 @@ mod tests {
         .unwrap();
         assert_eq!(
             request.validate(),
-            Err(
-                "editor draft renderer mismatch: grid2d draft requires the grid2d renderer strategy"
-            )
+            Err("editor renderer mismatch: grid2d state requires the grid2d renderer strategy")
+        );
+    }
+
+    #[test]
+    fn hydrate_draft_requires_a_model_identity() {
+        let request = serde_json::from_value::<EditorPreviewControlRequest>(serde_json::json!({
+            "type": "hydrateDraft",
+            "commandId": 8,
+            "model": " ",
+            "levelIndex": 0,
+            "draft": {
+                "kind": "grid2d",
+                "level": {
+                    "size": {"width": 1, "height": 1},
+                    "cells": []
+                }
+            },
+            "presentation": {
+                "surface": {
+                    "surfaceId": "stage",
+                    "interaction": {"kind": "observe"}
+                },
+                "renderer": {"kind": "grid2d"}
+            }
+        }))
+        .expect("the wire shape should deserialize before semantic validation");
+
+        assert_eq!(
+            request.validate(),
+            Err("editor model identity must not be empty")
         );
     }
 

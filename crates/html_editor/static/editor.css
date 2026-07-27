@@ -4078,6 +4078,13 @@ button.icon-button.preview-debug-toggle-button[aria-pressed="true"] {
   background: var(--preview-game-bg, var(--visual3d-preview-bg));
 }
 
+.level3d-stage-runtime-mount {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 .level3d-runtime-wrap .level-size {
   z-index: 3;
 }

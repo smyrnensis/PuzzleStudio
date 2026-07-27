@@ -456,17 +456,29 @@ enum QueuedTurnItem {
 enum InputExecutionMode {
     Player,
     PlayerTrace,
+    TargetedModel,
+    TargetedModelTrace,
     Headless,
     HeadlessTrace,
 }
 
 impl InputExecutionMode {
     fn materializes_presentation(self) -> bool {
-        matches!(self, Self::Player | Self::PlayerTrace)
+        matches!(
+            self,
+            Self::Player | Self::PlayerTrace | Self::TargetedModel | Self::TargetedModelTrace
+        )
     }
 
     fn collects_trace(self) -> bool {
-        matches!(self, Self::PlayerTrace | Self::HeadlessTrace)
+        matches!(
+            self,
+            Self::PlayerTrace | Self::TargetedModelTrace | Self::HeadlessTrace
+        )
+    }
+
+    fn targets_model_directly(self) -> bool {
+        matches!(self, Self::TargetedModel | Self::TargetedModelTrace)
     }
 }
 
@@ -1549,6 +1561,34 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         self.apply_input_with_mode(game, input, InputExecutionMode::PlayerTrace)
     }
 
+    pub fn apply_targeted_model_input(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        input: InputId,
+    ) -> Result<(), GridTransitionError<D>> {
+        if self.is_waiting() {
+            return Err(GridTransitionError::<D>::InvalidCommand(
+                "cannot apply input while a turn is waiting".to_string(),
+            ));
+        }
+        self.last_level_completion = None;
+        self.apply_input_with_mode(game, input, InputExecutionMode::TargetedModel)
+    }
+
+    pub fn apply_targeted_model_traced_input(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        input: InputId,
+    ) -> Result<(), GridTransitionError<D>> {
+        if self.is_waiting() {
+            return Err(GridTransitionError::<D>::InvalidCommand(
+                "cannot apply input while a turn is waiting".to_string(),
+            ));
+        }
+        self.last_level_completion = None;
+        self.apply_input_with_mode(game, input, InputExecutionMode::TargetedModelTrace)
+    }
+
     pub fn is_waiting(&self) -> bool {
         self.pending_input.is_some() || self.surface.active_modal_component().is_some()
     }
@@ -1637,7 +1677,9 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         self.current_input = game.input_labels.get(&input).cloned();
         let undo_base_len = self.history.undo_len();
         let owns_turn_sfx = self.begin_turn_sfx_dedup();
-        if !self.current_scene_accepts_model_input(game) {
+        if !self.input_execution_mode.targets_model_directly()
+            && !self.current_scene_accepts_model_input(game)
+        {
             let result = self.apply_focused_scene_input_transition(game, undo_base_len);
             self.current_input = previous_input;
             self.end_turn_sfx_dedup(owns_turn_sfx);
@@ -1695,12 +1737,15 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         previous_input: Option<String>,
         owns_turn_sfx: bool,
     ) -> Result<(), GridTransitionError<D>> {
-        let target = game
-            .scenes
-            .iter()
-            .find(|scene| scene.name == self.surface.focused_component)
-            .and_then(|scene| scene.puzzle_rule.as_ref())
-            .map(|rule| rule.target.clone());
+        let target = (!self.input_execution_mode.targets_model_directly())
+            .then(|| {
+                game.scenes
+                    .iter()
+                    .find(|scene| scene.name == self.surface.focused_component)
+                    .and_then(|scene| scene.puzzle_rule.as_ref())
+                    .map(|rule| rule.target.clone())
+            })
+            .flatten();
         let world = if let Some(target) = target.as_deref() {
             let Some((scene_name, puzzle_name)) = self.resolve_puzzle_target(game, target) else {
                 return Err(invalid_puzzle_target_error(target));
@@ -1983,7 +2028,11 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             .collect::<Vec<_>>();
         let force_clear = !win_targets.is_empty() && self.can_force_clear_state(game, &self.state);
         let forced_win_targets: &[Option<String>] = if force_clear { &win_targets } else { &[] };
-        pending.condition_effect = self.condition_transition_effect(game, forced_win_targets)?;
+        pending.condition_effect = if pending.mode.targets_model_directly() {
+            None
+        } else {
+            self.condition_transition_effect(game, forced_win_targets)?
+        };
         let clears = force_clear || self.can_clear_state(game, &self.state);
         if clears
             && self.last_level_completion.is_none()
@@ -2307,7 +2356,11 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             .collect::<Vec<_>>();
         let force_clear = !win_targets.is_empty() && self.can_force_clear_state(game, &self.state);
         let forced_win_targets: &[Option<String>] = if force_clear { &win_targets } else { &[] };
-        let condition_effect = self.condition_transition_effect(game, forced_win_targets)?;
+        let condition_effect = if self.input_execution_mode.targets_model_directly() {
+            None
+        } else {
+            self.condition_transition_effect(game, forced_win_targets)?
+        };
         if (force_clear || self.can_clear_state(game, &self.state))
             && self.last_level_completion.is_none()
             && let Some(level_index) = self.active_level_index
@@ -11827,6 +11880,51 @@ step board
         assert_eq!(session.surface_state().focused_component(), "playing");
         assert!(session.accepts_model_input(&loaded));
         assert_eq!(session.active_level_index(), Some(0));
+    }
+
+    #[test]
+    fn targeted_model_input_bypasses_scene_input_routing_and_keeps_player_presentation() {
+        let loaded = parse_game(
+            r#"
+const title = targeted_model_input
+puzzle default {
+layers { actor = Player }
+empty .
+input right
+rules {
+input right [ Player | no Player ] -> [ | Player ]
+}
+levels {
+legend {
+. = empty
+P = Player
+}
+level "start" { P. }
+}
+}
+scene title {
+layout { text "Title" }
+rules {
+if input == right -> goto playing
+}
+}
+scene playing {
+layout { puzzle board = default }
+rules { step board }
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+        session.apply_command(&loaded, "goto title").unwrap();
+
+        session
+            .apply_targeted_model_input(&loaded, input_named(&loaded, "right"))
+            .unwrap();
+
+        assert_eq!(session.surface_state().focused_component(), "title");
+        assert_eq!(session.state().slots()[0], ObjectId(0));
+        assert_ne!(session.state().slots()[1], ObjectId(0));
     }
 
     #[test]
