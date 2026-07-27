@@ -541,17 +541,9 @@ impl PuzzleBevyPlayerHost {
             )
         })?;
         let frame_revision = frame.revision;
-        let hit = match gesture {
-            EditorPointerGesture::Move | EditorPointerGesture::Press => frame
-                .hit(surface_id, committed_frame_revision, point_css)
-                .map_err(BevyPlayerError::EditorAuthoring)?,
-            EditorPointerGesture::Leave => {
-                frame
-                    .validate_identity(surface_id, committed_frame_revision)
-                    .map_err(BevyPlayerError::EditorAuthoring)?;
-                None
-            }
-        };
+        let hit = frame
+            .hit_for_gesture(surface_id, committed_frame_revision, point_css, gesture)
+            .map_err(BevyPlayerError::EditorAuthoring)?;
         let configuration = self.editor_authoring.as_mut().ok_or_else(|| {
             BevyPlayerError::EditorAuthoring(
                 "editor pointer requires an authoring configuration".to_string(),

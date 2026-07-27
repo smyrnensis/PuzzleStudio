@@ -62,6 +62,7 @@ pub struct SourceLevelLegendEntry {
     pub symbol: String,
     pub selectors: Vec<String>,
     pub objects: Option<Vec<String>>,
+    pub object_ids: Option<Vec<u16>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -311,6 +312,12 @@ fn push_source_level_legends_json(out: &mut String, legends: &[SourceLevelLegend
             push_json_string_array(out, "objects", objects);
         } else {
             out.push_str("\"objects\":null");
+        }
+        out.push_str(",\"objectIds\":");
+        if let Some(object_ids) = &legend.object_ids {
+            push_json_u16_array_value(out, object_ids);
+        } else {
+            out.push_str("null");
         }
         out.push('}');
     }
@@ -581,6 +588,7 @@ fn resolve_level_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
                     symbol: legend.symbol.to_string(),
                     selectors: legend.selectors.clone(),
                     objects: legend.objects.clone(),
+                    object_ids: legend.object_ids.clone(),
                 })
                 .collect::<Vec<_>>();
             let mut legend = product
@@ -590,6 +598,7 @@ fn resolve_level_entries(context: &SurfaceDocument) -> Vec<SourceTarget> {
                     symbol: legend.symbol.to_string(),
                     selectors: legend.selectors.clone(),
                     objects: legend.objects.clone(),
+                    object_ids: legend.object_ids.clone(),
                 })
                 .collect::<Vec<_>>();
             for local in &local_legends {
@@ -1240,6 +1249,17 @@ fn push_json_string_array_value(out: &mut String, values: &[String]) {
     out.push(']');
 }
 
+fn push_json_u16_array_value(out: &mut String, values: &[u16]) {
+    out.push('[');
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&value.to_string());
+    }
+    out.push(']');
+}
+
 fn push_json_string_matrix_value(out: &mut String, values: &[Vec<String>]) {
     out.push('[');
     for (index, row) in values.iter().enumerate() {
@@ -1410,6 +1430,12 @@ A
             source_level.legend[1].objects.as_ref(),
             Some(&vec!["Cube".to_string()])
         );
+        let cube_object_ids = source_level.legend[1]
+            .object_ids
+            .as_ref()
+            .expect("resolved legend object IDs");
+        assert_eq!(cube_object_ids.len(), 1);
+        assert_ne!(cube_object_ids[0], 0);
         assert_eq!(source_level.local_legends, [source_level.legend[1].clone()]);
         let json: serde_json::Value =
             serde_json::from_str(&source_entries_json(source)).expect("source entries JSON");
@@ -1425,6 +1451,10 @@ A
         assert_eq!(
             json_level3d["sourceLevel"]["localLegends"][0]["selectors"][0],
             "Solid"
+        );
+        assert_eq!(
+            json_level3d["sourceLevel"]["localLegends"][0]["objectIds"],
+            serde_json::json!(cube_object_ids)
         );
         assert!(entries.iter().any(|entry| {
             entry.kind == SourceTargetKind::Visual

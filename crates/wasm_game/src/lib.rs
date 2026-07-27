@@ -563,7 +563,7 @@ P.
     }
 
     #[test]
-    fn draft_hydration_resolves_compiled_symbols_before_updating_the_bevy_host() {
+    fn draft_hydration_resolves_compiled_object_identities_before_updating_the_bevy_host() {
         let mut host =
             PuzzleBevyPlayerHost::from_image_free_source(SOURCE, "editor_bevy_host.puzzle")
                 .expect("editor fixture should initialize");
@@ -582,7 +582,7 @@ P.
                         },
                         cells: vec![puzzle_authoring::EditorDraftCell2d {
                             position: puzzle_authoring::EditorDraftPosition2d { x: 2, y: 0 },
-                            symbol: "P".to_string(),
+                            object_ids: vec![1],
                         }],
                     },
                 ),

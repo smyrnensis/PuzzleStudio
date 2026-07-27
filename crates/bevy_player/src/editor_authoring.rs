@@ -504,6 +504,26 @@ impl EditorAuthoringFrame {
         }
     }
 
+    pub(crate) fn hit_for_gesture(
+        &self,
+        surface_id: &str,
+        committed_revision: u64,
+        point_css: Vec2,
+        gesture: puzzle_editor_preview_contract::EditorPointerGesture,
+    ) -> Result<Option<EditorAuthoringHitTarget>, String> {
+        match gesture {
+            puzzle_editor_preview_contract::EditorPointerGesture::Move
+            | puzzle_editor_preview_contract::EditorPointerGesture::Press
+            | puzzle_editor_preview_contract::EditorPointerGesture::Release => {
+                self.hit(surface_id, committed_revision, point_css)
+            }
+            puzzle_editor_preview_contract::EditorPointerGesture::Leave => {
+                self.validate_identity(surface_id, committed_revision)?;
+                Ok(None)
+            }
+        }
+    }
+
     fn paint_hit3d(
         origin: Vec3,
         direction: Vec3,
@@ -1127,7 +1147,7 @@ mod tests {
     use bevy::prelude::{Vec2, Vec3};
     use puzzle_editor_preview_contract::{
         EditorAuthoringHitTarget, EditorAuthoringInteraction, EditorGridAxis, EditorGridPosition,
-        EditorGridSide, EditorPaintOperation, EditorResizeMode,
+        EditorGridSide, EditorPaintOperation, EditorPointerGesture, EditorResizeMode,
     };
     use std::collections::HashSet;
 
@@ -1214,6 +1234,39 @@ mod tests {
                 .hit("stage", 9, Vec2::new(200.0, 10.0))
                 .unwrap_err()
                 .contains("outside")
+        );
+    }
+
+    #[test]
+    fn release_resolves_against_the_same_committed_frame_as_press_and_move() {
+        let frame = EditorAuthoringFrame {
+            surface_id: "stage".to_string(),
+            revision: 9,
+            css_size: Vec2::new(200.0, 100.0),
+            interaction: EditorAuthoringInteraction::Paint {
+                operation: EditorPaintOperation::Replace,
+            },
+            geometry: EditorAuthoringFrameGeometry::Grid2d {
+                origin: [0, 0],
+                size: [2, 1],
+                occupied: HashSet::from([[0, 0]]),
+            },
+        };
+        let point = Vec2::new(25.0, 50.0);
+        let expected = frame
+            .hit_for_gesture("stage", 9, point, EditorPointerGesture::Press)
+            .unwrap();
+        assert_eq!(
+            frame
+                .hit_for_gesture("stage", 9, point, EditorPointerGesture::Move)
+                .unwrap(),
+            expected
+        );
+        assert_eq!(
+            frame
+                .hit_for_gesture("stage", 9, point, EditorPointerGesture::Release)
+                .unwrap(),
+            expected
         );
     }
 

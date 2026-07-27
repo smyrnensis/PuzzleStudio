@@ -180,6 +180,7 @@ pub struct EditorGrid3dSettings {
 pub enum EditorPointerGesture {
     Move,
     Press,
+    Release,
     Leave,
 }
 
@@ -286,7 +287,7 @@ mod tests {
                     "kind":"grid3d",
                     "level":{
                         "size":{"width":1,"depth":1,"height":1},
-                        "cells":[{"position":{"x":0,"y":0,"z":0},"symbol":"P"}]
+                        "cells":[{"position":{"x":0,"y":0,"z":0},"objectIds":[1,2]}]
                     }
                 },
                 "presentation":{
@@ -332,7 +333,7 @@ mod tests {
                     "kind":"grid3d",
                     "level":{
                         "size":{"width":1,"depth":1,"height":1},
-                        "cells":[{"position":{"x":0,"y":0,"z":0},"symbol":"P"}]
+                        "cells":[{"position":{"x":0,"y":0,"z":0},"objectIds":[1,2]}]
                     }
                 },
                 "presentation":{
@@ -384,7 +385,7 @@ mod tests {
                     "kind":"grid2d",
                     "level":{
                         "size":{"width":1,"height":1},
-                        "cells":[{"position":{"x":0,"y":0},"symbol":"P"}]
+                        "cells":[{"position":{"x":0,"y":0},"objectIds":[1,2]}]
                     }
                 },
                 "presentation":{
@@ -433,7 +434,7 @@ mod tests {
                 "kind": "grid2d",
                 "level": {
                     "size": {"width": 1, "height": 1},
-                    "cells": [{"position": {"x": 0, "y": 0}, "symbol": "P"}]
+                    "cells": [{"position": {"x": 0, "y": 0}, "objectIds": [1, 2]}]
                 }
             },
             "presentation": {
@@ -453,7 +454,7 @@ mod tests {
                 "kind": "grid3d",
                 "level": {
                     "size": {"width": 1, "depth": 1, "height": 1},
-                    "cells": [{"position": {"x": 0, "y": 0, "z": 0}, "symbol": "P"}]
+                    "cells": [{"position": {"x": 0, "y": 0, "z": 0}, "objectIds": [1, 2]}]
                 }
             },
             "presentation": {
@@ -503,7 +504,7 @@ mod tests {
                     "kind":"grid2d",
                     "level":{
                         "size":{"width":1,"height":1},
-                        "cells":[{"position":{"x":0,"y":0},"symbol":"P"}],
+                        "cells":[{"position":{"x":0,"y":0},"objectIds":[1,2]}],
                         "legend":[{"symbol":"P","objects":["Other"]}]
                     }
                 },
@@ -518,5 +519,52 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field `legend`"));
+    }
+
+    #[test]
+    fn draft_wire_rejects_legacy_symbol_cells() {
+        let error = serde_json::from_value::<EditorPreviewControlRequest>(serde_json::json!({
+            "type": "hydrateDraft",
+            "commandId": 8,
+            "model": "board",
+            "levelIndex": 0,
+            "draft": {
+                "kind": "grid2d",
+                "level": {
+                    "size": {"width": 1, "height": 1},
+                    "cells": [{"position": {"x": 0, "y": 0}, "symbol": "P"}]
+                }
+            },
+            "presentation": {
+                "surface": {
+                    "surfaceId": "main",
+                    "interaction": {"kind": "paint", "operation": "replace"}
+                },
+                "renderer": {"kind": "grid2d"}
+            }
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field `symbol`"));
+    }
+
+    #[test]
+    fn pointer_release_is_a_typed_wire_gesture() {
+        let request = serde_json::from_value::<EditorPreviewControlRequest>(serde_json::json!({
+            "type": "editorPointer",
+            "commandId": 21,
+            "surfaceId": "main",
+            "committedFrameRevision": 3,
+            "xCss": 12.5,
+            "yCss": 9.0,
+            "gesture": "release"
+        }))
+        .unwrap();
+        assert!(matches!(
+            request,
+            EditorPreviewControlRequest::EditorPointer {
+                gesture: super::EditorPointerGesture::Release,
+                ..
+            }
+        ));
     }
 }

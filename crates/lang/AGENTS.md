@@ -39,6 +39,12 @@ author-chosen `title`, must not select a component kind. Scene layout syntax
 lowers allocation, ratio, cross-axis alignment, and main-axis distribution into
 the typed `puzzle-scene` contract; it must not encode CSS or adapter sizing.
 
+Editor draft hydration carries compiled object IDs, positions, and dimensions,
+not authored legend symbols. This crate validates those identities against the
+selected compiled model, rejects multiple objects competing for one layer, and
+materializes the dimension-generic runtime state. Browser code must not recover
+symbols or merge legends to prepare a draft.
+
 ## Surface/Highlighting Direction
 
 Highlighting should remain Rust-owned. Browser/editor fallbacks may escape text,

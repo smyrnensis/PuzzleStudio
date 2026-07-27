@@ -63,6 +63,7 @@ pub(crate) struct SurfaceLevelLegendProduct {
     pub(crate) symbol: char,
     pub(crate) selectors: Vec<String>,
     pub(crate) objects: Option<Vec<String>>,
+    pub(crate) object_ids: Option<Vec<u16>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

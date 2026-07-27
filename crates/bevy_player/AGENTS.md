@@ -15,6 +15,9 @@ This crate owns the native Bevy player host.
   semantics.
 - Route typed resolved frames to the active 2D or 3D backend. Missing active
   scenes and unresolved backend-neutral presentation contracts fail explicitly.
+- Editor pointer press, move, release, and leave gestures resolve only against
+  the committed typed authoring frame. Keep hit selection and highlight state
+  here rather than reconstructing renderer geometry in a browser host.
 
 ## Commands
 
