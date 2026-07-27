@@ -1,74 +1,38 @@
 /* tslint:disable */
 /* eslint-disable */
 
-export class WasmStandaloneSession {
-    free(): void;
-    [Symbol.dispose](): void;
-    apply_debug_input_name(input_name: string): string;
-    audio_feedback_event(now_seconds: number): string;
-    audio_tick(now_seconds: number): string;
-    confirm_progress_persistence_applied(request_id: number): void;
-    development_snapshot(): string;
-    dispatch(action_json: string): string;
-    static fromExport(export_json: string): WasmStandaloneSession;
-    constructor(source: string, puzzle_path: string);
-    presentation_event_consumed(now_seconds: number): string;
-    presentation_frame(now_seconds: number): string;
-    progress_save(): string;
-    progress_save_request(): string;
-    progress_storage_key(): string | undefined;
-    progress_storage_save_version(): number | undefined;
-    resolve_render_moment(render_scene_json: string, render_moment_json: string): string;
-    restore_progress_save(save_json: string): void;
-    set_audio_feedback_wakeup(callback: Function): void;
-    set_audio_visible(visible: boolean, now_seconds: number): string;
-    set_current_state(state_json: string, level_index: number, materialize_level_start: boolean): void;
-    set_progress_persistence_enabled(enabled: boolean): void;
-    unlock_audio(now_seconds: number): Promise<string>;
-    visual_image_count(): number;
-}
+export function dispatchEditorPreviewCommand(request_json: string): void;
+
+export function startEditorPreview(export_json: string, canvas_selector: string): void;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
-    readonly __wbg_wasmstandalonesession_free: (a: number, b: number) => void;
-    readonly wasmstandalonesession_apply_debug_input_name: (a: number, b: number, c: number) => [number, number, number, number];
-    readonly wasmstandalonesession_audio_feedback_event: (a: number, b: number) => [number, number];
-    readonly wasmstandalonesession_confirm_progress_persistence_applied: (a: number, b: number) => [number, number];
-    readonly wasmstandalonesession_development_snapshot: (a: number) => [number, number, number, number];
-    readonly wasmstandalonesession_dispatch: (a: number, b: number, c: number) => [number, number, number, number];
-    readonly wasmstandalonesession_fromExport: (a: number, b: number) => [number, number, number];
-    readonly wasmstandalonesession_new: (a: number, b: number, c: number, d: number) => [number, number, number];
-    readonly wasmstandalonesession_presentation_event_consumed: (a: number, b: number) => [number, number, number, number];
-    readonly wasmstandalonesession_presentation_frame: (a: number, b: number) => [number, number];
-    readonly wasmstandalonesession_progress_save: (a: number) => [number, number];
-    readonly wasmstandalonesession_progress_save_request: (a: number) => [number, number];
-    readonly wasmstandalonesession_progress_storage_key: (a: number) => [number, number];
-    readonly wasmstandalonesession_progress_storage_save_version: (a: number) => number;
-    readonly wasmstandalonesession_resolve_render_moment: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
-    readonly wasmstandalonesession_restore_progress_save: (a: number, b: number, c: number) => [number, number];
-    readonly wasmstandalonesession_set_audio_feedback_wakeup: (a: number, b: any) => void;
-    readonly wasmstandalonesession_set_audio_visible: (a: number, b: number, c: number) => [number, number];
-    readonly wasmstandalonesession_set_current_state: (a: number, b: number, c: number, d: number, e: number) => [number, number];
-    readonly wasmstandalonesession_set_progress_persistence_enabled: (a: number, b: number) => void;
-    readonly wasmstandalonesession_unlock_audio: (a: number, b: number) => any;
-    readonly wasmstandalonesession_visual_image_count: (a: number) => number;
-    readonly wasmstandalonesession_audio_tick: (a: number, b: number) => [number, number];
-    readonly wasm_bindgen__convert__closures_____invoke__h01a4c02d46983c91: (a: number, b: number, c: any) => [number, number];
-    readonly wasm_bindgen__convert__closures_____invoke__hc88b208178540d95: (a: number, b: number, c: any, d: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__hd3d2a799abd5a540_2: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen__convert__closures_____invoke__h0e52773364796bcc: (a: number, b: number) => void;
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
-    readonly __wbindgen_exn_store: (a: number) => void;
-    readonly __externref_table_alloc: () => number;
-    readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_destroy_closure: (a: number, b: number) => void;
-    readonly __externref_table_dealloc: (a: number) => void;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __wbindgen_start: () => void;
+    readonly dispatchEditorPreviewCommand: (a: number, b: number, c: number) => void;
+    readonly startEditorPreview: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly __wasm_bindgen_func_elem_170410: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_13507: (a: number, b: number, c: number, d: number) => void;
+    readonly __wasm_bindgen_func_elem_13505: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_158191: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_13505_4: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_11134: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_13505_6: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_13505_7: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_13505_8: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_11134_9: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_13505_10: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_13505_11: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_13505_12: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_13506: (a: number, b: number, c: number) => void;
+    readonly __wasm_bindgen_func_elem_11133: (a: number, b: number) => void;
+    readonly __wasm_bindgen_func_elem_13504: (a: number, b: number) => void;
+    readonly __wbindgen_export: (a: number, b: number) => number;
+    readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_export3: (a: number) => void;
+    readonly __wbindgen_export4: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_export5: (a: number, b: number) => void;
+    readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;

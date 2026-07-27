@@ -1,617 +1,587 @@
-use std::collections::VecDeque;
-#[cfg(target_arch = "wasm32")]
-use std::{cell::RefCell, rc::Rc};
+//! Editor-only browser host for the canonical Bevy player.
+//!
+//! This artifact intentionally does not expose a parallel session or renderer.
+//! Editor controls enter through a request queue; the Bevy app applies them to
+//! `PuzzleBevyPlayerHost`, and the normal player systems render the resulting
+//! typed player snapshot.
 
-use puzzle_runtime_contract::{RuntimePresentationEvent, SessionAction};
+#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+
+use bevy::prelude::{NonSendMut, Res, Time};
+use puzzle_bevy_player::PuzzleBevyPlayerHost;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+
+#[cfg(target_arch = "wasm32")]
+use bevy::{
+    app::{App, Update},
+    prelude::{DefaultPlugins, PluginGroup},
+    window::{Window, WindowPlugin},
+};
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen]
-pub struct WasmStandaloneSession {
-    inner: puzzle_game_runtime::RuntimeSession,
-    visual_images: std::sync::Arc<puzzle_assets::DecodedVisualImageCatalog>,
-    progress_storage: Option<puzzle_runtime_contract::StandaloneProgressStorage>,
-    presentation_timeline: HostPresentationTimeline,
-    #[cfg(target_arch = "wasm32")]
-    audio_runtime: puzzle_audio::AudioRuntime,
-    #[cfg(target_arch = "wasm32")]
-    audio_backend: Rc<RefCell<puzzle_web_audio::BrowserAudioBackend>>,
-    #[cfg(target_arch = "wasm32")]
-    pending_audio_diagnostics: Rc<RefCell<Vec<String>>>,
-    #[cfg(target_arch = "wasm32")]
-    audio_feedback_wakeup: Rc<RefCell<Option<js_sys::Function>>>,
-}
-
-#[wasm_bindgen]
-impl WasmStandaloneSession {
-    #[wasm_bindgen(constructor)]
-    pub fn new(source: &str, puzzle_path: &str) -> Result<WasmStandaloneSession, JsValue> {
-        Self::from_runtime(
-            puzzle_game_runtime::RuntimeSession::from_source(source, puzzle_path)
-                .map_err(|error| JsValue::from_str(&error))?,
-        )
-    }
-
-    #[wasm_bindgen(js_name = fromExport)]
-    pub fn from_export(export_json: &str) -> Result<WasmStandaloneSession, JsValue> {
-        let (runtime, visual_images, progress_storage) =
-            puzzle_player_bootstrap::decode_standalone_player_export(export_json)
-                .map_err(|error| JsValue::from_str(&error.to_string()))?
-                .into_parts();
-        Self::from_runtime_parts(runtime, visual_images, Some(progress_storage))
-    }
-
-    pub fn development_snapshot(&self) -> Result<String, JsValue> {
-        puzzle_presentation_json::to_string(&self.inner.development_snapshot()).map_err(|error| {
-            JsValue::from_str(&format!(
-                "development snapshot JSON could not be serialized: {error}"
-            ))
-        })
-    }
-
-    pub fn dispatch(&mut self, action_json: &str) -> Result<String, JsValue> {
-        let action = serde_json::from_str::<SessionAction>(action_json)
-            .map_err(|error| JsValue::from_str(&format!("invalid session action: {error}")))?;
-        let mut snapshot = self
-            .inner
-            .dispatch_development_typed(action)
-            .map_err(|error| JsValue::from_str(&error))?;
-        self.project_snapshot_presentation(&mut snapshot.player);
-        puzzle_presentation_json::to_string(&snapshot).map_err(|error| {
-            JsValue::from_str(&format!(
-                "development snapshot JSON could not be serialized: {error}"
-            ))
-        })
-    }
-
-    pub fn apply_debug_input_name(&mut self, input_name: &str) -> Result<String, JsValue> {
-        let mut dispatch = self
-            .inner
-            .apply_debug_input_name(input_name)
-            .map_err(|error| JsValue::from_str(&error))?;
-        self.project_snapshot_presentation(&mut dispatch.snapshot);
-        let snapshot = puzzle_presentation_json::to_value(
-            &self.development_snapshot_with_player(dispatch.snapshot),
-        )
-        .map_err(|error| {
-            JsValue::from_str(&format!(
-                "debug development snapshot JSON could not be serialized: {error}"
-            ))
-        })?;
-        Ok(serde_json::json!({
-            "snapshot": snapshot,
-            "debug": dispatch.debug,
-        })
-        .to_string())
-    }
-
-    pub fn set_current_state(
-        &mut self,
-        state_json: &str,
+#[derive(Debug, Deserialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+enum EditorPreviewControlRequest {
+    HydrateState {
+        command_id: u32,
+        state: Value,
         level_index: u32,
         materialize_level_start: bool,
-    ) -> Result<(), JsValue> {
-        let level_index = usize::try_from(level_index)
-            .map_err(|_| JsValue::from_str("level index is out of range"))?;
-        self.inner
-            .set_current_state_json(state_json, level_index, materialize_level_start)
-            .map_err(|error| JsValue::from_str(&error))
-    }
+    },
+    SyntheticKey {
+        command_id: u32,
+        key: String,
+        code: String,
+        repeat: bool,
+        alt_key: bool,
+        ctrl_key: bool,
+        meta_key: bool,
+        shift_key: bool,
+        trace: bool,
+    },
+    RequestSnapshot {
+        command_id: u32,
+    },
+}
 
-    pub fn resolve_render_moment(
-        &self,
-        render_scene_json: &str,
-        render_moment_json: &str,
-    ) -> Result<String, JsValue> {
-        let scene = serde_json::from_str::<puzzle_runtime_contract::RuntimeResolvedRenderScene>(
-            render_scene_json,
-        )
-        .map_err(|error| JsValue::from_str(&format!("invalid resolved render scene: {error}")))?;
-        let moment = serde_json::from_str::<puzzle_runtime_contract::RuntimeResolvedRenderMoment>(
-            render_moment_json,
-        )
-        .map_err(|error| JsValue::from_str(&format!("invalid resolved render moment: {error}")))?;
-        let frame =
-            puzzle_presentation::resolve_render_moment(&scene, &self.visual_images, &moment)
-                .map_err(|error| {
-                    JsValue::from_str(&format!("render moment resolution failed: {error:?}"))
-                })?;
-        serde_json::to_string(&frame).map_err(|error| {
-            JsValue::from_str(&format!("render frame serialization failed: {error}"))
-        })
-    }
-
-    pub fn progress_save(&self) -> String {
-        self.inner.progress_save_json()
-    }
-
-    pub fn restore_progress_save(&mut self, save_json: &str) -> Result<(), JsValue> {
-        self.inner
-            .restore_progress_save_json(save_json)
-            .map_err(|error| JsValue::from_str(&error))
-    }
-
-    pub fn set_progress_persistence_enabled(&mut self, enabled: bool) {
-        self.inner.set_progress_persistence_enabled(enabled);
-    }
-
-    pub fn progress_storage_key(&self) -> Option<String> {
-        self.progress_storage
-            .as_ref()
-            .map(|storage| storage.key.clone())
-    }
-
-    pub fn progress_storage_save_version(&self) -> Option<u32> {
-        self.progress_storage
-            .as_ref()
-            .map(|storage| storage.save_version)
-    }
-
-    pub fn visual_image_count(&self) -> u32 {
-        u32::try_from(self.visual_images.iter().count())
-            .expect("standalone visual image count must fit the browser contract")
-    }
-
-    pub fn presentation_event_consumed(&mut self, now_seconds: f64) -> Result<String, JsValue> {
-        let audio_commands = self
-            .presentation_timeline
-            .consume_presented_event()
-            .map_err(|error| JsValue::from_str(&error))?;
-        self.consume_audio_commands(audio_commands, now_seconds);
-        Ok(self.take_pending_audio_diagnostics())
-    }
-
-    pub fn presentation_frame(&mut self, now_seconds: f64) -> String {
-        let audio_commands = self.presentation_timeline.begin_presented_frame();
-        self.consume_audio_commands(audio_commands, now_seconds);
-        self.take_pending_audio_diagnostics()
-    }
-
-    pub fn progress_save_request(&self) -> String {
-        serde_json::to_string(&self.inner.progress_save_request())
-            .expect("progress save request JSON should serialize")
-    }
-
-    pub fn confirm_progress_persistence_applied(&mut self, request_id: u32) -> Result<(), JsValue> {
-        self.inner
-            .confirm_progress_persistence_applied(request_id)
-            .map_err(|error| JsValue::from_str(&error))
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub async fn unlock_audio(&mut self, now_seconds: f64) -> Result<String, JsValue> {
-        let unlock_start = { self.audio_backend.borrow_mut().begin_unlock() };
-        let unlock = match unlock_start {
-            Ok(unlock) => unlock,
-            Err(error) => {
-                let commands = self
-                    .audio_runtime
-                    .report_device_failure(error.to_string(), audio_frame(now_seconds));
-                self.consume_audio_device_commands(commands, audio_frame(now_seconds));
-                return Ok(self.take_pending_audio_diagnostics());
-            }
-        };
-        let capability = match unlock {
-            puzzle_web_audio::BrowserAudioUnlockStart::Started(task) => {
-                let completion = task.await;
-                let unlock_result = self.audio_backend.borrow_mut().finish_unlock(completion);
-                match unlock_result {
-                    Ok(capability) => capability,
-                    Err(error) => {
-                        let commands = self
-                            .audio_runtime
-                            .report_device_failure(error.to_string(), audio_frame(now_seconds));
-                        self.consume_audio_device_commands(commands, audio_frame(now_seconds));
-                        return Ok(self.take_pending_audio_diagnostics());
-                    }
-                }
-            }
-            puzzle_web_audio::BrowserAudioUnlockStart::InFlight => {
-                self.audio_backend.borrow().capability()
-            }
-            puzzle_web_audio::BrowserAudioUnlockStart::Ready(capability) => capability,
-        };
-        let commands = self
-            .audio_runtime
-            .set_capability(capability, audio_frame(now_seconds));
-        self.consume_audio_device_commands(commands, audio_frame(now_seconds));
-        Ok(self.take_pending_audio_diagnostics())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn set_audio_feedback_wakeup(&self, callback: js_sys::Function) {
-        *self.audio_feedback_wakeup.borrow_mut() = Some(callback);
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn audio_feedback_event(&mut self, now_seconds: f64) -> String {
-        let commands = self.reconcile_audio_feedback(now_seconds);
-        self.consume_audio_device_commands(commands, audio_frame(now_seconds));
-        self.take_pending_audio_diagnostics()
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn audio_tick(&mut self, now_seconds: f64) -> String {
-        let commands = self.reconcile_audio_feedback(now_seconds);
-        self.consume_audio_device_commands(commands, audio_frame(now_seconds));
-        self.take_pending_audio_diagnostics()
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn set_audio_visible(&mut self, visible: bool, now_seconds: f64) -> String {
-        let capability = self.audio_backend.borrow_mut().set_visible(visible);
-        let commands = self
-            .audio_runtime
-            .set_capability(capability, audio_frame(now_seconds));
-        self.consume_audio_device_commands(commands, audio_frame(now_seconds));
-        self.take_pending_audio_diagnostics()
+impl EditorPreviewControlRequest {
+    fn command_id(&self) -> u32 {
+        match self {
+            Self::HydrateState { command_id, .. }
+            | Self::SyntheticKey { command_id, .. }
+            | Self::RequestSnapshot { command_id } => *command_id,
+        }
     }
 }
 
-impl WasmStandaloneSession {
-    fn development_snapshot_with_player(
-        &self,
-        player: puzzle_session_contract::RuntimeSessionSnapshot,
-    ) -> puzzle_session_contract::RuntimeDevelopmentSessionSnapshot {
-        self.inner.development_snapshot_from_player(player)
-    }
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum EditorPreviewObservation {
+    #[serde(rename = "PuzzleStudioPreviewRuntimeReady")]
+    RuntimeReady,
+    #[serde(rename = "PuzzleStudioPreviewState")]
+    State {
+        #[serde(rename = "commandId", skip_serializing_if = "Option::is_none")]
+        command_id: Option<u32>,
+        #[serde(flatten)]
+        state: Map<String, Value>,
+    },
+    #[serde(rename = "PuzzleStudioPreviewDebugTrace")]
+    DebugTrace {
+        #[serde(rename = "commandId")]
+        command_id: u32,
+        debug: Value,
+        snapshot: Value,
+    },
+    #[serde(rename = "PuzzleStudioPreviewRuntimeError")]
+    RuntimeError {
+        #[serde(rename = "commandId")]
+        command_id: u32,
+        label: &'static str,
+        message: String,
+    },
+}
 
-    fn project_snapshot_presentation(
-        &mut self,
-        snapshot: &mut puzzle_session_contract::RuntimeSessionSnapshot,
-    ) {
-        snapshot.presentation_events = self
-            .presentation_timeline
-            .push(std::mem::take(&mut snapshot.presentation_events));
-    }
+#[derive(Debug)]
+struct QueuedEditorPreviewObservation {
+    required_revision: Option<u64>,
+    observation: EditorPreviewObservation,
+}
 
-    fn from_runtime(inner: puzzle_game_runtime::RuntimeSession) -> Result<Self, JsValue> {
-        Self::from_runtime_parts(
-            inner,
-            std::sync::Arc::new(puzzle_assets::DecodedVisualImageCatalog::default()),
-            None,
-        )
-    }
+#[derive(Clone, Default)]
+struct EditorPreviewBridge {
+    requests: Rc<RefCell<VecDeque<EditorPreviewControlRequest>>>,
+    observations: Rc<RefCell<VecDeque<QueuedEditorPreviewObservation>>>,
+    ready_pending: Rc<RefCell<bool>>,
+}
 
-    fn from_runtime_parts(
-        inner: puzzle_game_runtime::RuntimeSession,
-        visual_images: std::sync::Arc<puzzle_assets::DecodedVisualImageCatalog>,
-        progress_storage: Option<puzzle_runtime_contract::StandaloneProgressStorage>,
-    ) -> Result<Self, JsValue> {
-        #[cfg(target_arch = "wasm32")]
-        {
-            let catalog = inner.audio_catalog();
-            let audio_backend = Rc::new(RefCell::new(puzzle_web_audio::BrowserAudioBackend::new(
-                catalog.clone(),
-            )));
-            let pending_audio_diagnostics = Rc::new(RefCell::new(Vec::new()));
-            let audio_feedback_wakeup = Rc::new(RefCell::new(None));
-            install_audio_feedback_wakeup(&audio_backend, &audio_feedback_wakeup);
-            start_music_worklet_load(
-                Rc::clone(&audio_backend),
-                Rc::clone(&pending_audio_diagnostics),
-                Rc::clone(&audio_feedback_wakeup),
+impl EditorPreviewBridge {
+    fn submit_json(&self, request_json: &str) -> Result<(), String> {
+        let request = serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid editor preview control request: {error}"))?;
+        self.requests.borrow_mut().push_back(request);
+        Ok(())
+    }
+}
+
+fn inspect_host(host: &PuzzleBevyPlayerHost) -> Result<Value, String> {
+    puzzle_presentation_json::to_editor_preview_state_value(&host.editor_development_snapshot())
+        .map_err(|error| format!("editor development snapshot serialization failed: {error}"))
+}
+
+fn editor_state_fields(state: Value) -> Result<Map<String, Value>, String> {
+    state
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "editor preview state projection must be a JSON object".to_string())
+}
+
+fn apply_editor_control(
+    host: &mut PuzzleBevyPlayerHost,
+    request: EditorPreviewControlRequest,
+    now_seconds: f64,
+) -> EditorPreviewObservation {
+    let command_id = request.command_id();
+    let result = match request {
+        EditorPreviewControlRequest::HydrateState {
+            state,
+            level_index,
+            materialize_level_start,
+            ..
+        } => usize::try_from(level_index)
+            .map_err(|_| "editor preview level index is out of range".to_string())
+            .and_then(|level_index| {
+                host.hydrate_editor_state(
+                    &state.to_string(),
+                    level_index,
+                    materialize_level_start,
+                    now_seconds,
+                )
+                .map_err(|error| error.to_string())
+            })
+            .and_then(|()| inspect_host(host))
+            .map(|snapshot| (snapshot, None)),
+        EditorPreviewControlRequest::SyntheticKey {
+            key,
+            alt_key,
+            ctrl_key,
+            meta_key,
+            code,
+            repeat,
+            shift_key,
+            trace,
+            ..
+        } => {
+            let _physical_metadata = (code, repeat, shift_key);
+            let trigger = (!alt_key && !ctrl_key && !meta_key)
+                .then(|| puzzle_bevy_player::runtime_key_trigger_for_logical_key(&key))
+                .flatten();
+            match trigger {
+                Some(trigger) => host
+                    .dispatch_editor_key(trigger, trace, now_seconds)
+                    .map_err(|error| error.to_string())
+                    .and_then(|trace| inspect_host(host).map(|snapshot| (snapshot, trace))),
+                None => inspect_host(host).map(|snapshot| (snapshot, None)),
+            }
+        }
+        EditorPreviewControlRequest::RequestSnapshot { .. } => {
+            inspect_host(host).map(|snapshot| (snapshot, None))
+        }
+    };
+
+    match result {
+        Ok((state, Some(trace))) => EditorPreviewObservation::DebugTrace {
+            command_id,
+            debug: trace,
+            snapshot: state,
+        },
+        Ok((state, None)) => match editor_state_fields(state) {
+            Ok(state) => EditorPreviewObservation::State {
+                command_id: Some(command_id),
+                state,
+            },
+            Err(message) => EditorPreviewObservation::RuntimeError {
+                command_id,
+                label: "state projection failed",
+                message,
+            },
+        },
+        Err(message) => EditorPreviewObservation::RuntimeError {
+            command_id,
+            label: "runtime failed",
+            message,
+        },
+    }
+}
+
+fn process_editor_preview_controls(
+    time: Res<Time>,
+    mut host: NonSendMut<PuzzleBevyPlayerHost>,
+    bridge: NonSendMut<EditorPreviewBridge>,
+    committed: Res<puzzle_bevy_player::PuzzleBevyPlayerObservationState>,
+) {
+    if *bridge.ready_pending.borrow() && committed.latest().is_some() {
+        *bridge.ready_pending.borrow_mut() = false;
+        let observations = match inspect_host(&host).and_then(editor_state_fields) {
+            Ok(state) => vec![
+                EditorPreviewObservation::RuntimeReady,
+                EditorPreviewObservation::State {
+                    command_id: None,
+                    state,
+                },
+            ],
+            Err(message) => vec![EditorPreviewObservation::RuntimeError {
+                command_id: 0,
+                label: "state projection failed",
+                message,
+            }],
+        };
+        bridge
+            .observations
+            .borrow_mut()
+            .extend(
+                observations
+                    .into_iter()
+                    .map(|observation| QueuedEditorPreviewObservation {
+                        required_revision: Some(host.snapshot().revision),
+                        observation,
+                    }),
             );
-            let audio_runtime =
-                puzzle_audio::AudioRuntime::new(catalog, audio_backend.borrow().capability());
-            Ok(Self {
-                inner,
-                visual_images,
-                progress_storage,
-                presentation_timeline: HostPresentationTimeline::default(),
-                audio_runtime,
-                audio_backend,
-                pending_audio_diagnostics,
-                audio_feedback_wakeup,
-            })
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            Ok(Self {
-                inner,
-                visual_images,
-                progress_storage,
-                presentation_timeline: HostPresentationTimeline::default(),
-            })
-        }
     }
-
-    #[cfg(target_arch = "wasm32")]
-    fn consume_audio_commands(
-        &mut self,
-        audio_commands: Vec<puzzle_audio::AudioCommand>,
-        now_seconds: f64,
-    ) {
-        let now_frame = audio_frame(now_seconds);
-        let mut device_commands = self.reconcile_audio_feedback(now_seconds);
-        for command in audio_commands {
-            device_commands.extend(self.audio_runtime.apply(command, now_frame));
-        }
-        self.consume_audio_device_commands(device_commands, now_frame);
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn consume_audio_commands(
-        &mut self,
-        _audio_commands: Vec<puzzle_audio::AudioCommand>,
-        _now_seconds: f64,
-    ) {
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn take_pending_audio_diagnostics(&mut self) -> String {
-        self.pending_audio_diagnostics.borrow_mut().extend(
-            self.audio_runtime
-                .take_diagnostics()
-                .into_iter()
-                .map(|diagnostic| format!("{diagnostic:?}")),
-        );
-        serde_json::to_string(&std::mem::take(
-            &mut *self.pending_audio_diagnostics.borrow_mut(),
-        ))
-        .expect("audio diagnostic strings should serialize")
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn take_pending_audio_diagnostics(&mut self) -> String {
-        "[]".to_string()
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn reconcile_audio_feedback(
-        &mut self,
-        now_seconds: f64,
-    ) -> Vec<puzzle_audio::AudioDeviceCommand> {
-        let now_frame = audio_frame(now_seconds);
-        let mut commands = Vec::new();
-        for voice in self.audio_backend.borrow_mut().take_ended_voices() {
-            self.audio_runtime.voice_ended(voice);
-        }
-        for error in self.audio_backend.borrow_mut().take_feedback_errors() {
-            if let Some(voice) = error.voice_id() {
-                self.audio_runtime
-                    .report_voice_failure(voice, error.to_string(), now_frame);
+    let requests = bridge.requests.borrow_mut().drain(..).collect::<Vec<_>>();
+    let now_seconds = time.elapsed_secs_f64();
+    let observations = requests.into_iter().map(|request| {
+        let observation = apply_editor_control(&mut host, request, now_seconds);
+        let required_revision =
+            if matches!(observation, EditorPreviewObservation::RuntimeError { .. }) {
+                None
             } else {
-                commands.extend(
-                    self.audio_runtime
-                        .report_device_failure(error.to_string(), now_frame),
-                );
-            }
-        }
-        commands.extend(
-            self.audio_runtime
-                .set_capability(self.audio_backend.borrow().capability(), now_frame),
-        );
-        commands
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn consume_audio_device_commands(
-        &mut self,
-        commands: Vec<puzzle_audio::AudioDeviceCommand>,
-        now_frame: u64,
-    ) {
-        for command in commands {
-            if let Err(error) = self.audio_backend.borrow_mut().consume(command) {
-                let message = error.to_string();
-                if let Some(voice) = audio_command_voice(command).or_else(|| error.voice_id()) {
-                    self.audio_runtime
-                        .report_voice_failure(voice, message.clone(), now_frame);
-                } else {
-                    self.audio_runtime
-                        .report_device_failure(message.clone(), now_frame);
-                }
-                self.pending_audio_diagnostics.borrow_mut().push(message);
-            }
-        }
-    }
-}
-
-#[derive(Default)]
-struct HostPresentationTimeline {
-    pending: VecDeque<RuntimePresentationEvent>,
-}
-
-impl HostPresentationTimeline {
-    fn push(&mut self, events: Vec<RuntimePresentationEvent>) -> Vec<RuntimePresentationEvent> {
-        let host_events = events
-            .iter()
-            .filter(|event| !matches!(event, RuntimePresentationEvent::Audio { .. }))
-            .cloned()
-            .collect();
-        self.pending.extend(events);
-        host_events
-    }
-
-    fn begin_presented_frame(&mut self) -> Vec<puzzle_audio::AudioCommand> {
-        self.take_ready_audio()
-    }
-
-    fn consume_presented_event(&mut self) -> Result<Vec<puzzle_audio::AudioCommand>, String> {
-        match self.pending.front() {
-            Some(RuntimePresentationEvent::Wait { .. })
-            | Some(RuntimePresentationEvent::AnimationBatch { .. }) => {
-                self.pending.pop_front();
-                Ok(self.take_ready_audio())
-            }
-            Some(RuntimePresentationEvent::Audio { .. }) => {
-                Err("audio timeline command was not consumed by its Rust owner".to_string())
-            }
-            None => {
-                Err("presentation timeline has no event awaiting browser completion".to_string())
-            }
-        }
-    }
-
-    fn take_ready_audio(&mut self) -> Vec<puzzle_audio::AudioCommand> {
-        let mut commands = Vec::new();
-        while matches!(
-            self.pending.front(),
-            Some(RuntimePresentationEvent::Audio { .. })
-        ) {
-            let Some(RuntimePresentationEvent::Audio { command }) = self.pending.pop_front() else {
-                unreachable!("timeline head was checked as audio")
+                Some(host.snapshot().revision)
             };
-            commands.push(command);
+        QueuedEditorPreviewObservation {
+            required_revision,
+            observation,
         }
-        commands
-    }
+    });
+    bridge.observations.borrow_mut().extend(observations);
+    #[cfg(target_arch = "wasm32")]
+    dispatch_committed_observations(&bridge, committed.latest().map(|value| value.revision));
 }
 
-#[cfg(target_arch = "wasm32")]
-fn install_audio_feedback_wakeup(
-    backend: &Rc<RefCell<puzzle_web_audio::BrowserAudioBackend>>,
-    callback: &Rc<RefCell<Option<js_sys::Function>>>,
-) {
-    let callback = Rc::clone(callback);
-    backend.borrow().set_feedback_wakeup(Rc::new(move || {
-        wake_audio_feedback_owner(&callback);
-    }));
-}
-
-#[cfg(target_arch = "wasm32")]
-fn start_music_worklet_load(
-    backend: Rc<RefCell<puzzle_web_audio::BrowserAudioBackend>>,
-    diagnostics: Rc<RefCell<Vec<String>>>,
-    wakeup: Rc<RefCell<Option<js_sys::Function>>>,
-) {
-    let start = backend.borrow_mut().begin_worklet_load();
-    match start {
-        Ok(puzzle_web_audio::BrowserAudioWorkletStart::Started(task)) => {
-            wasm_bindgen_futures::spawn_local(async move {
-                let completion = task.await;
-                if let Err(error) = backend.borrow_mut().finish_worklet_load(completion) {
-                    diagnostics.borrow_mut().push(error.to_string());
-                }
-                wake_audio_feedback_owner(&wakeup);
+fn take_committed_observations(
+    bridge: &EditorPreviewBridge,
+    committed_revision: Option<u64>,
+) -> Vec<EditorPreviewObservation> {
+    let mut pending = bridge.observations.borrow_mut();
+    let mut retained = VecDeque::new();
+    let mut ready = Vec::new();
+    while let Some(queued) = pending.pop_front() {
+        let committed = queued.required_revision.is_none()
+            || committed_revision.is_some_and(|revision| {
+                queued
+                    .required_revision
+                    .is_some_and(|required| revision >= required)
             });
-        }
-        Ok(
-            puzzle_web_audio::BrowserAudioWorkletStart::InFlight
-            | puzzle_web_audio::BrowserAudioWorkletStart::Ready,
-        ) => {}
-        Err(error) => {
-            diagnostics.borrow_mut().push(error.to_string());
-            wake_audio_feedback_owner(&wakeup);
+        if committed {
+            ready.push(queued.observation);
+        } else {
+            retained.push_back(queued);
         }
     }
+    *pending = retained;
+    ready
 }
 
 #[cfg(target_arch = "wasm32")]
-fn wake_audio_feedback_owner(callback: &Rc<RefCell<Option<js_sys::Function>>>) {
-    if let Some(callback) = callback.borrow().as_ref() {
-        callback
-            .call0(&JsValue::UNDEFINED)
-            .expect("registered browser audio feedback wakeup failed");
+thread_local! {
+    static ACTIVE_EDITOR_PREVIEW_BRIDGE: RefCell<Option<EditorPreviewBridge>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = startEditorPreview)]
+pub fn start_editor_preview(export_json: &str, canvas_selector: &str) -> Result<(), JsValue> {
+    validate_canvas_selector(canvas_selector).map_err(js_error)?;
+    let decoded = puzzle_player_bootstrap::decode_standalone_player_export(export_json)
+        .map_err(|error| js_error(format!("editor preview export is invalid: {error}")))?;
+    let (mut runtime, visual_images, _) = decoded.into_parts();
+    runtime.set_progress_persistence_enabled(false);
+    let host = PuzzleBevyPlayerHost::from_runtime_with_visual_images(runtime, visual_images)
+        .map_err(|error| js_error(format!("editor preview initialization failed: {error}")))?;
+    let bridge = EditorPreviewBridge::default();
+    *bridge.ready_pending.borrow_mut() = true;
+    ACTIVE_EDITOR_PREVIEW_BRIDGE.with(|active| {
+        let mut active = active.borrow_mut();
+        if active.is_some() {
+            return Err(js_error(
+                "an editor preview Bevy app is already active in this browser context",
+            ));
+        }
+        *active = Some(bridge.clone());
+        Ok(())
+    })?;
+
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "PuzzleStudio Editor Preview".to_string(),
+            canvas: Some(canvas_selector.to_string()),
+            fit_canvas_to_parent: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }));
+    puzzle_bevy_player::install_puzzle_bevy_player(&mut app, host);
+    app.insert_non_send(bridge)
+        .add_systems(Update, process_editor_preview_controls);
+    app.run();
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(js_name = dispatchEditorPreviewCommand)]
+pub fn dispatch_editor_preview_command(request_json: &str) -> Result<(), JsValue> {
+    with_active_bridge(|bridge| bridge.submit_json(request_json)).map_err(js_error)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn dispatch_committed_observations(bridge: &EditorPreviewBridge, committed_revision: Option<u64>) {
+    for observation in take_committed_observations(bridge, committed_revision) {
+        if let Err(error) = dispatch_observation_event(&observation) {
+            web_sys::console::error_1(&JsValue::from_str(&error));
+        }
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn audio_command_voice(
-    command: puzzle_audio::AudioDeviceCommand,
-) -> Option<puzzle_audio::AudioVoiceId> {
-    match command {
-        puzzle_audio::AudioDeviceCommand::StartSfx { voice, .. }
-        | puzzle_audio::AudioDeviceCommand::StartMusic { voice, .. }
-        | puzzle_audio::AudioDeviceCommand::PauseVoice { voice, .. }
-        | puzzle_audio::AudioDeviceCommand::ResumeVoice { voice, .. }
-        | puzzle_audio::AudioDeviceCommand::StopVoice { voice } => Some(voice),
-    }
+fn dispatch_observation_event(observation: &EditorPreviewObservation) -> Result<(), String> {
+    let json = serde_json::to_string(observation)
+        .map_err(|error| format!("editor preview observation serialization failed: {error}"))?;
+    let detail = js_sys::JSON::parse(&json)
+        .map_err(|error| format!("editor preview observation JSON conversion failed: {error:?}"))?;
+    let init = web_sys::CustomEventInit::new();
+    init.set_detail(&detail);
+    let event = web_sys::CustomEvent::new_with_event_init_dict(
+        "PuzzleStudioEditorPreviewObservation",
+        &init,
+    )
+    .map_err(|error| format!("editor preview observation event failed: {error:?}"))?;
+    web_sys::window()
+        .ok_or_else(|| "editor preview observation requires a browser window".to_string())?
+        .dispatch_event(&event)
+        .map_err(|error| format!("editor preview observation dispatch failed: {error:?}"))?;
+    Ok(())
 }
 
 #[cfg(target_arch = "wasm32")]
-fn audio_frame(now_seconds: f64) -> u64 {
-    (now_seconds.max(0.0) * f64::from(puzzle_audio::CANONICAL_AUDIO_SAMPLE_RATE))
-        .floor()
-        .min(u64::MAX as f64) as u64
+fn with_active_bridge(
+    operation: impl FnOnce(&EditorPreviewBridge) -> Result<(), String>,
+) -> Result<(), String> {
+    ACTIVE_EDITOR_PREVIEW_BRIDGE.with(|active| {
+        let active = active.borrow();
+        let bridge = active
+            .as_ref()
+            .ok_or_else(|| "editor preview Bevy app is not active".to_string())?;
+        operation(bridge)
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn validate_canvas_selector(canvas_selector: &str) -> Result<(), String> {
+    if canvas_selector.trim().is_empty() {
+        return Err("editor preview canvas selector must not be empty".to_string());
+    }
+    let document = web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or_else(|| "editor preview requires a browser document".to_string())?;
+    let element = document
+        .query_selector(canvas_selector)
+        .map_err(|error| format!("invalid editor preview canvas selector: {error:?}"))?
+        .ok_or_else(|| {
+            format!("editor preview canvas selector `{canvas_selector}` matched no element")
+        })?;
+    if !element.is_instance_of::<web_sys::HtmlCanvasElement>() {
+        return Err(format!(
+            "editor preview canvas selector `{canvas_selector}` must match a canvas element"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_error(message: impl Into<String>) -> JsValue {
+    JsValue::from_str(&message.into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use puzzle_audio::{AudioCommand, SfxAssetId};
-    use serde_json::json;
 
-    #[test]
-    fn editor_runtime_resolves_typed_render_moments_with_owned_assets() {
-        let source = r#"
-const title = render_moment
+    const SOURCE: &str = r#"
+const title = "Editor Bevy Host"
 
-puzzle board {
+puzzle default {
 layers {
-actor = Player
+Player
 }
-empty .
 rules {
-[ Player ] -> [ Player ]
+right [ Player | ] -> [ | Player ]
 }
+}
+
+visuals {
+Player {
+#fff
+0
+}
+}
+
 levels {
 legend {
-. = empty
 P = Player
+. = empty
 }
-level "first" {
-P
-}
-}
-}
-
-scene playing {
-layout {
-puzzle board = board
-}
-rules {
-step board
+level "one" {
+P.
 }
 }
 "#;
-        let session = WasmStandaloneSession::new(source, "render_moment.puzzle")
-            .expect("editor runtime fixture");
-        let snapshot: serde_json::Value =
-            serde_json::from_str(&session.development_snapshot().unwrap()).unwrap();
-        let render_scene = snapshot["viewportSources"][0]["state"]["renderScene"].clone();
-        assert!(render_scene.is_object());
 
-        let frame: serde_json::Value = serde_json::from_str(
-            &session
-                .resolve_render_moment(
-                    &render_scene.to_string(),
-                    &json!({
-                        "clipElapsedMs": 0,
-                        "animationElapsedMs": 0,
-                        "animations": []
-                    })
-                    .to_string(),
-                )
-                .expect("resolve typed render moment"),
-        )
-        .unwrap();
-        assert!(frame["batches"].is_array());
-        assert!(frame["decorations"].is_array());
-        assert_eq!(frame["continueAnimation"], false);
+    #[test]
+    fn traced_input_updates_the_same_snapshot_consumed_by_bevy() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(SOURCE, "editor_bevy_host.puzzle")
+                .expect("editor fixture should initialize");
+        let before_revision = host.snapshot().revision;
+
+        let observation = apply_editor_control(
+            &mut host,
+            EditorPreviewControlRequest::SyntheticKey {
+                command_id: 7,
+                key: "ArrowRight".to_string(),
+                code: "ArrowRight".to_string(),
+                repeat: false,
+                alt_key: false,
+                ctrl_key: false,
+                meta_key: false,
+                shift_key: false,
+                trace: true,
+            },
+            0.0,
+        );
+
+        let EditorPreviewObservation::DebugTrace {
+            command_id,
+            snapshot,
+            debug,
+        } = observation
+        else {
+            panic!("traced input must emit a trace observation");
+        };
+        assert_eq!(command_id, 7);
+        assert!(!debug.is_null());
+        assert_eq!(host.snapshot().revision, before_revision + 1);
+        assert_eq!(snapshot["revision"], host.snapshot().revision);
     }
 
     #[test]
-    fn editor_timeline_keeps_audio_out_of_snapshot_json() {
-        let mut timeline = HostPresentationTimeline::default();
-        let public = timeline.push(vec![
-            RuntimePresentationEvent::Audio {
-                command: AudioCommand::PlaySfx {
-                    asset: SfxAssetId(1),
-                },
-            },
-            RuntimePresentationEvent::Wait { milliseconds: 10 },
-        ]);
+    fn hydration_updates_the_snapshot_observed_by_the_same_bevy_host() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(SOURCE, "editor_bevy_host.puzzle")
+                .expect("editor fixture should initialize");
+        let before_revision = host.snapshot().revision;
 
+        let observation = apply_editor_control(
+            &mut host,
+            EditorPreviewControlRequest::HydrateState {
+                command_id: 9,
+                state: serde_json::json!({
+                    "kind": "2d",
+                    "width": 2,
+                    "height": 1,
+                    "layerCount": 1,
+                    "slots": [0, 1],
+                    "variables": [],
+                    "levelFiredRules": [],
+                }),
+                level_index: 0,
+                materialize_level_start: false,
+            },
+            0.0,
+        );
+
+        let EditorPreviewObservation::State {
+            command_id: Some(command_id),
+            state,
+        } = observation
+        else {
+            panic!("valid hydration must emit a state observation");
+        };
+        assert_eq!(command_id, 9);
+        assert_eq!(host.snapshot().revision, before_revision + 1);
+        assert_eq!(state["revision"], host.snapshot().revision);
+        assert_eq!(state["scene"]["cells"][1]["objectIds"][0], 1);
+    }
+
+    #[test]
+    fn bridge_accepts_only_the_named_editor_control_contract() {
+        let bridge = EditorPreviewBridge::default();
+        bridge
+            .submit_json(r#"{"type":"requestSnapshot","commandId":1}"#)
+            .expect("typed inspect request should be accepted");
+        let error = bridge
+            .submit_json(r#"{"type":"dispatch","commandId":2,"action":"right"}"#)
+            .expect_err("unowned dispatch shortcut must be rejected");
+        assert!(error.contains("unknown variant"));
+    }
+
+    #[test]
+    fn command_and_observation_envelopes_have_exact_browser_names() {
+        let command = serde_json::from_str::<EditorPreviewControlRequest>(
+            r#"{"type":"syntheticKey","commandId":4,"key":"ArrowRight","code":"ArrowRight","repeat":false,"altKey":false,"ctrlKey":false,"metaKey":false,"shiftKey":false,"trace":true}"#,
+        )
+        .expect("typed key command should deserialize");
+        assert!(matches!(
+            command,
+            EditorPreviewControlRequest::SyntheticKey {
+                command_id: 4,
+                key,
+                trace: true,
+                ..
+            } if key == "ArrowRight"
+        ));
+
+        let observation = EditorPreviewObservation::RuntimeReady;
         assert_eq!(
-            timeline.begin_presented_frame(),
-            vec![AudioCommand::PlaySfx {
-                asset: SfxAssetId(1)
-            }]
+            serde_json::to_value(observation).unwrap(),
+            serde_json::json!({
+                "type": "PuzzleStudioPreviewRuntimeReady",
+            })
         );
-        assert!(
-            !serde_json::to_string(&public)
-                .unwrap()
-                .contains("\"audio\"")
+
+        let observation = EditorPreviewObservation::State {
+            command_id: Some(4),
+            state: Map::from_iter([
+                ("revision".to_string(), serde_json::json!(3)),
+                ("screen".to_string(), serde_json::json!("playing")),
+            ]),
+        };
+        assert_eq!(
+            serde_json::to_value(observation).unwrap(),
+            serde_json::json!({
+                "type": "PuzzleStudioPreviewState",
+                "commandId": 4,
+                "revision": 3,
+                "screen": "playing",
+            })
         );
+    }
+
+    #[test]
+    fn observations_wait_for_the_committed_bevy_revision() {
+        let bridge = EditorPreviewBridge::default();
+        bridge
+            .observations
+            .borrow_mut()
+            .push_back(QueuedEditorPreviewObservation {
+                required_revision: Some(4),
+                observation: EditorPreviewObservation::RuntimeReady,
+            });
+
+        assert!(take_committed_observations(&bridge, Some(3)).is_empty());
+        assert_eq!(bridge.observations.borrow().len(), 1);
+        assert!(matches!(
+            take_committed_observations(&bridge, Some(4)).as_slice(),
+            [EditorPreviewObservation::RuntimeReady]
+        ));
     }
 }

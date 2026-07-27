@@ -7,8 +7,9 @@ mod tests {
     use crate::ids::{InputId, LayerId, MarkId, ObjectId, RuleId, VariableId};
     use crate::state::GridExecutionState;
     use crate::{
-        CompiledGame, RuleStep, State, transition_program_continuation_segment_trace,
-        transition_program_segment_trace, transition_state, transition_trace,
+        CompiledGame, RuleStep, State, replay_rule_firing_states,
+        transition_program_continuation_segment_trace, transition_program_segment_trace,
+        transition_state, transition_trace,
     };
     use puzzle_kernel::GridCoord;
 
@@ -409,6 +410,104 @@ mod tests {
         assert_eq!(resumed.trace.next_state.object_count(PLAYER), 0);
         assert_eq!(resumed.trace.next_state.object_count(BOX), 1);
         assert!(resumed.remaining_program.is_none());
+    }
+
+    #[test]
+    fn firing_cursor_replay_keeps_transient_marks_that_enable_later_firings() {
+        let objects = vec![
+            ObjectDef {
+                id: PLAYER,
+                layer_id: LayerId(1),
+            },
+            ObjectDef {
+                id: BOX,
+                layer_id: LayerId(1),
+            },
+        ];
+        let marks = vec![MarkDef {
+            id: MARK,
+            kind: MarkKind::Flag,
+            values: Vec::new(),
+        }];
+        let set_mark = Rule {
+            id: RuleId(40),
+            guards: Vec::new(),
+            application: RuleApplication::Once,
+            pattern: pattern(vec![cell(0, 0, vec![PLAYER], vec![])]),
+            writes: vec![WriteOp::SetMark {
+                component: 0,
+                offset: fixed(0, 0),
+                object: PLAYER,
+                mark: MARK,
+                value: None,
+            }],
+            effects: Vec::new(),
+        };
+        let mut marked_player = cell(0, 0, vec![PLAYER], vec![]);
+        marked_player.require_mark.push(MarkPattern {
+            object: PLAYER,
+            mark: MARK,
+            value: None,
+            match_value: MarkValueMatch::Exact,
+        });
+        let consume_mark = Rule {
+            id: RuleId(41),
+            guards: Vec::new(),
+            application: RuleApplication::Once,
+            pattern: pattern(vec![marked_player]),
+            writes: vec![replace(0, 0, PLAYER, BOX)],
+            effects: Vec::new(),
+        };
+        let game = CompiledGame::new_with_mark_condition_defs_and_program(
+            2,
+            objects,
+            marks,
+            Vec::new(),
+            vec![RuleStep::Rule(set_mark), RuleStep::Rule(consume_mark)],
+        );
+        let mut initial = State::empty(1, 1, game.layer_count, game.object_count()).unwrap();
+        initial.place_object(&game, 0, 0, PLAYER).unwrap();
+        let trace = transition_trace(&game, &initial, RIGHT).unwrap();
+
+        let cursors = replay_rule_firing_states(&game, &initial, &trace.firings).unwrap();
+
+        assert_eq!(cursors.len(), 2);
+        assert!(cursors[0].has_object(&game, 0, 0, PLAYER));
+        assert!(cursors[1].has_object(&game, 0, 0, BOX));
+        assert_eq!(cursors[1], trace.next_state);
+    }
+
+    #[test]
+    fn firing_cursor_replay_captures_each_variable_update_state() {
+        let game = CompiledGame::new_with_program(
+            1,
+            Vec::new(),
+            vec![
+                RuleStep::Rule(variable_rule(
+                    50,
+                    Vec::new(),
+                    vec![set_variable(0, 2)],
+                    RuleApplication::Once,
+                )),
+                RuleStep::Rule(variable_rule(
+                    51,
+                    Vec::new(),
+                    vec![add_variable(0, 3)],
+                    RuleApplication::Once,
+                )),
+            ],
+        );
+        let initial =
+            State::empty_with_variables(1, 1, game.layer_count, game.object_count(), vec![0])
+                .unwrap();
+        let trace = transition_trace(&game, &initial, RIGHT).unwrap();
+
+        let cursors = replay_rule_firing_states(&game, &initial, &trace.firings).unwrap();
+
+        assert_eq!(cursors.len(), 2);
+        assert_eq!(cursors[0].visible_variables(), &[2]);
+        assert_eq!(cursors[1].visible_variables(), &[5]);
+        assert_eq!(cursors[1], trace.next_state);
     }
 
     #[test]

@@ -13,8 +13,8 @@ if (($# > 1)) || [[ "$wasm_profile" != "debug" && "$wasm_profile" != "release" ]
 fi
 
 if [[ "$wasm_profile" == "release" ]]; then
-  target_profile_dir="release"
-  cargo build --target wasm32-unknown-unknown --release -p puzzle-wasm-game
+  target_profile_dir="wasm-player-release"
+  cargo build --target wasm32-unknown-unknown --profile wasm-player-release -p puzzle-wasm-game
 else
   target_profile_dir="debug"
   cargo build --target wasm32-unknown-unknown -p puzzle-wasm-game
@@ -26,23 +26,18 @@ wasm-bindgen \
   --out-dir crates/html_play/static/wasm_game \
   "$game_target_dir/wasm32-unknown-unknown/$target_profile_dir/puzzle_wasm_game.wasm"
 
-if ! grep -q "export class WasmStandaloneSession" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
-  echo "generated game WASM bindings are missing WasmStandaloneSession" >&2
+if ! grep -q "startEditorPreview" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
+  echo "generated editor preview WASM bindings are missing startEditorPreview" >&2
   exit 1
 fi
 
-if ! grep -q "dispatch(action_json)" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
-  echo "generated game WASM bindings are missing typed session dispatch" >&2
+if ! grep -q "dispatchEditorPreviewCommand" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
+  echo "generated editor preview WASM bindings are missing the typed editor command ingress" >&2
   exit 1
 fi
 
-if ! grep -q "apply_debug_input_name(input_name)" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
-  echo "generated editor game WASM bindings are missing the editor debug ingress" >&2
-  exit 1
-fi
-
-if grep -Eq "apply_command_name|apply_input_name" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
-  echo "generated game WASM bindings expose an untyped session ingress" >&2
+if grep -Eq "WasmStandaloneSession|dispatch\\(action_json\\)|apply_debug_input_name|apply_command_name|apply_input_name|takeEditorPreviewControlResponses|submitEditorPreviewControl" crates/html_play/static/wasm_game/puzzle_wasm_game.js; then
+  echo "generated editor preview WASM bindings expose a legacy or parallel session ingress" >&2
   exit 1
 fi
 
@@ -53,11 +48,6 @@ fi
 
 if grep -aEq "solve_state|puzzle_solver|PuzzleDomain|SearchBudget|suggest_source_completions|highlight_source_html|compile_preview|PuzzleStudioSolve|WasmCoreRuntime|WasmCompiledCoreRuntime" crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm; then
   echo "generated game WASM binary includes editor, solver, or core-runtime symbols" >&2
-  exit 1
-fi
-
-if ! grep -aFq "debug_transition_value" crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm; then
-  echo "generated editor game WASM binary is missing the editor debug endpoint" >&2
   exit 1
 fi
 

@@ -445,6 +445,52 @@ impl PuzzleBevyPlayerHost {
         )
     }
 
+    /// Replaces the active model state through the editor-only hydration
+    /// contract, then projects it through the same player snapshot path used
+    /// by ordinary session actions.
+    #[cfg(feature = "editor-debug")]
+    pub fn hydrate_editor_state(
+        &mut self,
+        state_json: &str,
+        level_index: usize,
+        materialize_level_start: bool,
+        now_seconds: f64,
+    ) -> Result<(), BevyPlayerError> {
+        self.runtime
+            .set_current_state_json(state_json, level_index, materialize_level_start)
+            .map_err(BevyPlayerError::Runtime)?;
+        self.refresh_runtime_snapshot(now_seconds)
+    }
+
+    /// Resolves an editor-forwarded key in the runtime owner. When tracing is
+    /// enabled, only resolved model input collects a trace; scene, menu, and
+    /// modal actions retain their ordinary player behavior.
+    #[cfg(feature = "editor-debug")]
+    pub fn dispatch_editor_key(
+        &mut self,
+        trigger: RuntimeKeyTrigger,
+        trace_model_input: bool,
+        now_seconds: f64,
+    ) -> Result<Option<serde_json::Value>, BevyPlayerError> {
+        let dispatch = self
+            .runtime
+            .dispatch_editor_key(trigger, trace_model_input)
+            .map_err(BevyPlayerError::Runtime)?;
+        self.apply_snapshot(dispatch.snapshot, now_seconds, false)?;
+        Ok(dispatch.debug)
+    }
+
+    /// Returns editor inspection data paired with the exact player snapshot
+    /// currently owned by this host. Development data is never an input to the
+    /// renderer.
+    #[cfg(feature = "editor-debug")]
+    pub fn editor_development_snapshot(
+        &self,
+    ) -> puzzle_session_contract::RuntimeDevelopmentSessionSnapshot {
+        self.runtime
+            .development_snapshot_from_player(self.snapshot.clone())
+    }
+
     pub fn restore_progress_save(
         &mut self,
         save_json: &str,
@@ -2249,7 +2295,35 @@ fn preserve_presentation_event_queue(
 
 fn runtime_key_trigger(key: &Key) -> Option<RuntimeKeyTrigger> {
     match key {
-        Key::Character(value) => {
+        Key::Character(value) => runtime_key_trigger_for_logical_key(value),
+        Key::ArrowUp => runtime_key_trigger_for_logical_key("ArrowUp"),
+        Key::ArrowDown => runtime_key_trigger_for_logical_key("ArrowDown"),
+        Key::ArrowLeft => runtime_key_trigger_for_logical_key("ArrowLeft"),
+        Key::ArrowRight => runtime_key_trigger_for_logical_key("ArrowRight"),
+        Key::Enter => runtime_key_trigger_for_logical_key("Enter"),
+        Key::Space => runtime_key_trigger_for_logical_key(" "),
+        Key::Escape => runtime_key_trigger_for_logical_key("Escape"),
+        Key::Tab => runtime_key_trigger_for_logical_key("Tab"),
+        Key::Backspace => runtime_key_trigger_for_logical_key("Backspace"),
+        _ => None,
+    }
+}
+
+/// Converts a platform logical-key value into the runtime-owned trigger
+/// contract. Native Bevy events and editor-forwarded browser events share this
+/// mapping rather than maintaining parallel key semantics.
+pub fn runtime_key_trigger_for_logical_key(value: &str) -> Option<RuntimeKeyTrigger> {
+    match value {
+        "ArrowUp" => Some(RuntimeKeyTrigger::ArrowUp),
+        "ArrowDown" => Some(RuntimeKeyTrigger::ArrowDown),
+        "ArrowLeft" => Some(RuntimeKeyTrigger::ArrowLeft),
+        "ArrowRight" => Some(RuntimeKeyTrigger::ArrowRight),
+        "Enter" => Some(RuntimeKeyTrigger::Enter),
+        " " | "Spacebar" => Some(RuntimeKeyTrigger::Space),
+        "Escape" | "Esc" => Some(RuntimeKeyTrigger::Escape),
+        "Tab" => Some(RuntimeKeyTrigger::Tab),
+        "Backspace" => Some(RuntimeKeyTrigger::Backspace),
+        value => {
             let mut characters = value.chars();
             let value = characters.next()?;
             characters
@@ -2257,16 +2331,6 @@ fn runtime_key_trigger(key: &Key) -> Option<RuntimeKeyTrigger> {
                 .is_none()
                 .then_some(RuntimeKeyTrigger::Character { value })
         }
-        Key::ArrowUp => Some(RuntimeKeyTrigger::ArrowUp),
-        Key::ArrowDown => Some(RuntimeKeyTrigger::ArrowDown),
-        Key::ArrowLeft => Some(RuntimeKeyTrigger::ArrowLeft),
-        Key::ArrowRight => Some(RuntimeKeyTrigger::ArrowRight),
-        Key::Enter => Some(RuntimeKeyTrigger::Enter),
-        Key::Space => Some(RuntimeKeyTrigger::Space),
-        Key::Escape => Some(RuntimeKeyTrigger::Escape),
-        Key::Tab => Some(RuntimeKeyTrigger::Tab),
-        Key::Backspace => Some(RuntimeKeyTrigger::Backspace),
-        _ => None,
     }
 }
 
@@ -2970,6 +3034,15 @@ level "start" { A }
             Some(RuntimeKeyTrigger::Character { value: '。' })
         );
         assert_eq!(runtime_key_trigger(&Key::F1), None);
+        assert_eq!(
+            runtime_key_trigger_for_logical_key("ArrowRight"),
+            Some(RuntimeKeyTrigger::ArrowRight)
+        );
+        assert_eq!(
+            runtime_key_trigger_for_logical_key("。"),
+            Some(RuntimeKeyTrigger::Character { value: '。' })
+        );
+        assert_eq!(runtime_key_trigger_for_logical_key("F1"), None);
     }
 
     #[test]

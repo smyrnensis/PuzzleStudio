@@ -9,7 +9,7 @@ use puzzle_core::GridState;
 #[cfg(feature = "editor-debug")]
 use puzzle_core::{
     GridCompiledGame, GridCoord, GridPatch, MarkId, MarkValueMatch as CoreMarkValueMatch, PatchOp,
-    RuleId, TransitionCommand, VariableId, VariableUpdateOp,
+    RuleId, TransitionCommand, VariableId, VariableUpdateOp, replay_rule_firing_states,
 };
 use puzzle_core::{GridSize, InputId, ObjectId, Size2, Size3, State as PuzzleState};
 use puzzle_lang::{
@@ -100,6 +100,12 @@ pub struct RuntimeSession {
 pub struct RuntimeDebugDispatch {
     pub snapshot: RuntimeSessionSnapshot,
     pub debug: Value,
+}
+
+#[cfg(feature = "editor-debug")]
+pub struct RuntimeEditorKeyDispatch {
+    pub snapshot: RuntimeSessionSnapshot,
+    pub debug: Option<Value>,
 }
 
 trait StandaloneSessionModel {
@@ -216,6 +222,9 @@ trait GridSessionProjection<const D: usize, Size: GridSize<D>> {
         game: &GridCompiledGame<D>,
         state_json: &str,
     ) -> Result<GridState<D, Size>, String>;
+
+    #[cfg(feature = "editor-debug")]
+    fn editor_hydration_state(&self, state: &GridState<D, Size>) -> Value;
 
     fn player_viewport_sources(
         &self,
@@ -476,13 +485,18 @@ impl RuntimeSession {
             }
         }
 
+        self.finish_mutation(should_persist)?;
+        Ok(self.response_snapshot())
+    }
+
+    fn finish_mutation(&mut self, should_persist: bool) -> Result<(), String> {
         self.revision = self.next_revision()?;
         if self.model.take_progress_clear_request() {
             self.request_progress_persistence(RuntimeProgressPersistenceOperation::Delete)?;
         } else if should_persist {
             self.refresh_progress_save_request()?;
         }
-        Ok(self.response_snapshot())
+        Ok(())
     }
 
     #[cfg(feature = "editor-debug")]
@@ -519,8 +533,50 @@ impl RuntimeSession {
         input_name: &str,
     ) -> Result<RuntimeDebugDispatch, String> {
         let condition_context = self.scene_condition_context();
-        self.model
-            .apply_debug_input_name(input_name, condition_context)
+        let mut dispatch = self
+            .model
+            .apply_debug_input_name(input_name, condition_context)?;
+        let events = dispatch.snapshot.presentation_events.clone();
+        self.finish_mutation(true)?;
+        dispatch.snapshot = self.snapshot_with_events(&events);
+        Ok(dispatch)
+    }
+
+    /// Resolves an editor-forwarded physical key through the same session key
+    /// owner as the player. Model input collects a trace when requested;
+    /// scene/menu/modal actions continue through their ordinary typed action.
+    #[cfg(feature = "editor-debug")]
+    pub fn dispatch_editor_key(
+        &mut self,
+        trigger: RuntimeKeyTrigger,
+        trace_model_input: bool,
+    ) -> Result<RuntimeEditorKeyDispatch, String> {
+        if trigger == RuntimeKeyTrigger::AnyInput {
+            return Err(
+                "`any_input` is a binding wildcard and cannot be dispatched as a key".to_string(),
+            );
+        }
+        let snapshot = self.snapshot_with_events(&[]);
+        let inputs = self.model.input_bindings();
+        let Some(action) = session_action_for_key(&snapshot, &inputs, trigger) else {
+            return Ok(RuntimeEditorKeyDispatch {
+                snapshot,
+                debug: None,
+            });
+        };
+        if trace_model_input {
+            if let SessionAction::Input { name } = action {
+                let dispatch = self.apply_debug_input_name(&name)?;
+                return Ok(RuntimeEditorKeyDispatch {
+                    snapshot: dispatch.snapshot,
+                    debug: Some(dispatch.debug),
+                });
+            }
+        }
+        Ok(RuntimeEditorKeyDispatch {
+            snapshot: self.dispatch_typed(action)?,
+            debug: None,
+        })
     }
 
     #[cfg(feature = "editor-debug")]
@@ -531,7 +587,8 @@ impl RuntimeSession {
         materialize_level_start: bool,
     ) -> Result<(), String> {
         self.model
-            .set_current_state_json(state_json, level_index, materialize_level_start)
+            .set_current_state_json(state_json, level_index, materialize_level_start)?;
+        self.finish_mutation(false)
     }
 
     pub fn progress_save_json(&self) -> String {
@@ -1589,14 +1646,33 @@ where
     ) -> Result<RuntimeDebugDispatch, String> {
         let input = input_id_by_name(&self.loaded, input_name)
             .ok_or_else(|| format!("unknown input: {input_name}"))?;
+        let initial_state = self.session.state().clone();
         self.session
             .apply_traced_input(&self.loaded, input)
             .map_err(|error| format!("{error:?}"))?;
         let debug = self.session.last_transition_trace().cloned();
+        let snapshots = debug
+            .as_ref()
+            .map(|debug| {
+                replay_rule_firing_states(&self.loaded.game, &initial_state, &debug.firings)
+                    .map_err(|error| format!("debug trace cursor replay failed: {error:?}"))
+                    .map(|states| {
+                        states
+                            .iter()
+                            .map(|state| self.projection.editor_hydration_state(state))
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .transpose()?;
         let presentation_events = self.take_presentation_events();
         Ok(RuntimeDebugDispatch {
             snapshot: self.player_snapshot(0, condition_context, &presentation_events),
-            debug: debug_transition_value_grid(&self.loaded, debug.as_ref()),
+            debug: debug_transition_value_grid_with_snapshots(
+                &self.loaded,
+                debug.as_ref(),
+                Some(self.projection.editor_hydration_state(&initial_state)),
+                snapshots.as_deref(),
+            ),
         })
     }
 
@@ -1688,6 +1764,12 @@ impl GridSessionProjection<2, Size2> for CanvasProjection {
             .into_state(game)
     }
 
+    #[cfg(feature = "editor-debug")]
+    fn editor_hydration_state(&self, state: &GridState<2, Size2>) -> Value {
+        serde_json::to_value(RuntimeStateSnapshot2d::from_state(state))
+            .expect("typed 2D editor hydration state must serialize")
+    }
+
     fn player_viewport_sources(
         &self,
         loaded: &LoadedGame,
@@ -1731,6 +1813,12 @@ impl GridSessionProjection<3, Size3> for SpatialProjection {
         serde_json::from_str::<RuntimeStateSnapshot3d>(state_json)
             .map_err(|error| error.to_string())?
             .into_state(game)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn editor_hydration_state(&self, state: &GridState<3, Size3>) -> Value {
+        serde_json::to_value(RuntimeStateSnapshot3d::from_state(state))
+            .expect("typed 3D editor hydration state must serialize")
     }
 
     fn player_viewport_sources(
@@ -2858,10 +2946,50 @@ pub fn debug_transition_value_grid<const D: usize, Size: GridSize<D>>(
     loaded: &LoadedGridGame<D, Size>,
     debug: Option<&GridTransitionTrace<D>>,
 ) -> Value {
+    debug_transition_value_grid_with_snapshots(loaded, debug, None, None)
+}
+
+#[cfg(feature = "editor-debug")]
+fn debug_transition_value_grid_with_snapshots<const D: usize, Size: GridSize<D>>(
+    loaded: &LoadedGridGame<D, Size>,
+    debug: Option<&GridTransitionTrace<D>>,
+    initial_snapshot: Option<Value>,
+    snapshots_after: Option<&[Value]>,
+) -> Value {
     let Some(debug) = debug else {
         return Value::Null;
     };
-    json!({
+    if let Some(snapshots_after) = snapshots_after {
+        assert_eq!(
+            snapshots_after.len(),
+            debug.firings.len(),
+            "debug cursor snapshots must correspond one-to-one with rule firings"
+        );
+    }
+    let executions = debug
+        .firings
+        .iter()
+        .enumerate()
+        .map(|(index, firing)| {
+            let mut execution = json!({
+                "index": index,
+                "cursorIndex": index + 1,
+                "ruleId": firing.rule.0,
+                "rule": debug_rule_value(loaded, firing.rule),
+                "progressed": firing.progressed,
+                "observable": firing.observable,
+                "patch": debug_patch_value(loaded, &firing.patch),
+            });
+            if let Some(snapshots_after) = snapshots_after {
+                execution
+                    .as_object_mut()
+                    .expect("debug execution projection is an object")
+                    .insert("snapshotAfter".to_string(), snapshots_after[index].clone());
+            }
+            execution
+        })
+        .collect::<Vec<_>>();
+    let mut value = json!({
         "kind": "model_input",
         "inputId": debug.input.0,
         "input": loaded.input_labels.get(&debug.input).map(String::as_str).unwrap_or(""),
@@ -2870,17 +2998,15 @@ pub fn debug_transition_value_grid<const D: usize, Size: GridSize<D>>(
         "cancelled": debug.cancelled,
         "target": debug.target,
         "commands": debug.commands.iter().map(debug_command_value).collect::<Vec<_>>(),
-        "executions": debug.firings.iter().enumerate().map(|(index, firing)| {
-            json!({
-                "index": index,
-                "ruleId": firing.rule.0,
-                "rule": debug_rule_value(loaded, firing.rule),
-                "progressed": firing.progressed,
-                "observable": firing.observable,
-                "patch": debug_patch_value(loaded, &firing.patch),
-            })
-        }).collect::<Vec<_>>(),
-    })
+        "executions": executions,
+    });
+    if let Some(initial_snapshot) = initial_snapshot {
+        value
+            .as_object_mut()
+            .expect("debug transition projection is an object")
+            .insert("initialSnapshot".to_string(), initial_snapshot);
+    }
+    value
 }
 
 #[cfg(feature = "editor-debug")]
@@ -2933,18 +3059,21 @@ fn debug_patch_op_value<const D: usize, Size: GridSize<D>>(
     match op {
         PatchOp::Add { position, object } => json!({
             "kind": "add",
+            "visible": true,
             "position": position_value_from_grid(*position),
             "objectId": object.0,
             "object": object_name(loaded, *object),
         }),
         PatchOp::Remove { position, object } => json!({
             "kind": "remove",
+            "visible": true,
             "position": position_value_from_grid(*position),
             "objectId": object.0,
             "object": object_name(loaded, *object),
         }),
         PatchOp::Move { from, to, object } => json!({
             "kind": "move",
+            "visible": true,
             "from": position_value_from_grid(*from),
             "to": position_value_from_grid(*to),
             "objectId": object.0,
@@ -2956,6 +3085,7 @@ fn debug_patch_op_value<const D: usize, Size: GridSize<D>>(
             add,
         } => json!({
             "kind": "replace",
+            "visible": true,
             "position": position_value_from_grid(*position),
             "remove": remove.0,
             "add": add.0,
@@ -2968,6 +3098,7 @@ fn debug_patch_op_value<const D: usize, Size: GridSize<D>>(
             value,
         } => json!({
             "kind": "update_variable",
+            "visible": true,
             "variableId": variable.0,
             "variable": variable_name(loaded, *variable),
             "op": match op {
@@ -2987,6 +3118,7 @@ fn debug_patch_op_value<const D: usize, Size: GridSize<D>>(
             value,
         } => json!({
             "kind": "set_mark",
+            "visible": !mark_name(loaded, *mark).starts_with("__"),
             "position": position_value_from_grid(*position),
             "objectId": object.0,
             "object": object_name(loaded, *object),
@@ -3002,6 +3134,7 @@ fn debug_patch_op_value<const D: usize, Size: GridSize<D>>(
             match_value,
         } => json!({
             "kind": "remove_mark",
+            "visible": !mark_name(loaded, *mark).starts_with("__"),
             "position": position_value_from_grid(*position),
             "objectId": object.0,
             "object": object_name(loaded, *object),
@@ -5201,14 +5334,37 @@ levels main of main {
 }
 "#;
         let mut bridge = RuntimeSession::from_source(source, "export_test.puzzle").unwrap();
+        let mut ordinary = RuntimeSession::from_source(source, "export_test.puzzle").unwrap();
+        let ordinary_snapshot = ordinary
+            .dispatch_typed(SessionAction::Input {
+                name: "right".to_string(),
+            })
+            .unwrap();
 
         let body: Value =
             serde_json::from_str(&bridge.apply_debug_input_name_json("right").unwrap()).unwrap();
 
+        assert_eq!(body["snapshot"]["revision"], ordinary_snapshot.revision);
+        assert_eq!(
+            bridge.progress_save_request(),
+            ordinary.progress_save_request(),
+            "traced model input must use the same persistence lifecycle as ordinary model input"
+        );
         assert_eq!(body["snapshot"]["surface"]["focus"], "main");
         assert_eq!(body["debug"]["input"], "right");
         assert_eq!(body["debug"]["executions"].as_array().unwrap().len(), 1);
+        assert_eq!(body["debug"]["initialSnapshot"]["slots"], json!([1]));
+        assert_eq!(body["debug"]["executions"][0]["cursorIndex"], 1);
+        assert_eq!(
+            body["debug"]["executions"][0]["snapshotAfter"]["slots"],
+            json!([0])
+        );
         assert_eq!(body["debug"]["executions"][0]["patch"][0]["kind"], "remove");
+        assert_eq!(body["debug"]["executions"][0]["patch"][0]["visible"], true);
+        assert_eq!(
+            body["debug"]["executions"][0]["patch"][0]["object"],
+            "Player"
+        );
     }
 
     #[test]
@@ -5468,11 +5624,13 @@ step board
         let loaded = puzzle_lang::parse_game2d(source).unwrap();
         let editor_state = compiled_state_value(&loaded.levels[1].initial_state).to_string();
         let mut bridge = RuntimeSession::from_source(source, "editor_state_start.puzzle").unwrap();
+        let before_revision = bridge.snapshot().revision;
 
         bridge
             .set_current_state_json(&editor_state, 0, false)
             .expect("editor state should start level 0");
         let started: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
+        assert_eq!(started["revision"], before_revision + 1);
         assert_eq!(started["levelIndex"], json!(0));
         assert!(cell_has_object(
             &first_viewport_state(&started)["cells"][0],

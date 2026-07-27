@@ -5950,19 +5950,15 @@ dependencies = [
 name = "puzzle-wasm-game"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "js-sys",
- "puzzle-assets",
- "puzzle-audio",
- "puzzle-game-runtime",
+ "puzzle-bevy-player",
  "puzzle-player-bootstrap",
- "puzzle-presentation",
  "puzzle-presentation-json",
- "puzzle-runtime-contract",
- "puzzle-session-contract",
- "puzzle-web-audio",
+ "serde",
  "serde_json",
  "wasm-bindgen",
- "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
