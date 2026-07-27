@@ -1192,6 +1192,32 @@ P
     }
 
     #[test]
+    fn html_play_treats_null_awaited_action_as_an_inactive_capability() {
+        let start = APP_JS
+            .find("function bindAwaitedComponentEvent(root, instance, presentation)")
+            .expect("awaited component binding");
+        let end = APP_JS[start..]
+            .find("\nfunction markSingleFrameComponentLayer(")
+            .expect("end of awaited component binding")
+            + start;
+        let body = &APP_JS[start..end];
+
+        assert!(
+            body.contains("if (!Object.prototype.hasOwnProperty.call(binding, \"actionToken\"))"),
+            "an absent wire field must remain a malformed contract"
+        );
+        assert!(
+            body.contains("if (binding.actionToken === null) {\n    return;\n  }"),
+            "an explicit null token is the runtime-owned inactive capability"
+        );
+        assert!(
+            body.find("binding.actionToken === null")
+                < body.find("root.addEventListener(\"pointerdown\""),
+            "inactive stacked components must not receive pointer handlers"
+        );
+    }
+
+    #[test]
     fn html_play_dispatches_one_typed_key_without_adapter_semantics() {
         assert!(APP_JS.contains("function runtimeKeyTriggerFromEvent(event)"));
         assert!(APP_JS.contains("postSessionAction({ kind: \"key\", trigger });"));

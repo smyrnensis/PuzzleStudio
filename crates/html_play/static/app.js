@@ -839,8 +839,11 @@ function bindAwaitedComponentEvent(root, instance, presentation) {
   if (!binding) {
     throw new Error(`Presented component ${instance.id} does not declare awaited event ${eventName}`);
   }
-  if (!binding.actionToken) {
+  if (!Object.prototype.hasOwnProperty.call(binding, "actionToken")) {
     throw new Error(`Presented component ${instance.id} event ${eventName} is missing its action token`);
+  }
+  if (binding.actionToken === null) {
+    return;
   }
   if (binding.pointer === true) {
     root.addEventListener("pointerdown", (event) => {
