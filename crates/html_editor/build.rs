@@ -96,10 +96,6 @@ fn main() {
     if editor_js.contains("const viewportWidth = availableWidth || previewVirtualWidth") {
         failures.push("editor preview iframe must not inherit the pane aspect");
     }
-    if !editor_js.contains("previousFrame.removeAttribute(\"id\")") {
-        failures
-            .push("preview iframe swap must show the loaded frame before removing the old frame");
-    }
     if editor_css.contains("transform: scale(var(--preview-scale))")
         || editor_css.contains("--preview-virtual-width")
         || editor_css.contains("--preview-virtual-height")

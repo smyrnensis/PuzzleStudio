@@ -4,14 +4,12 @@ use std::{
 };
 
 use puzzle_audio::{AudioAssetCatalog, AudioCommand, MusicRecipe, MusicTarget, SfxRecipe};
-#[cfg(any(feature = "editor-debug", test))]
-use puzzle_core::GridState;
 #[cfg(feature = "editor-debug")]
 use puzzle_core::{
     GridCompiledGame, GridCoord, GridPatch, MarkId, MarkValueMatch as CoreMarkValueMatch, PatchOp,
     RuleId, TransitionCommand, VariableId, VariableUpdateOp, replay_rule_firing_states,
 };
-use puzzle_core::{GridSize, InputId, ObjectId, Size2, Size3, State as PuzzleState};
+use puzzle_core::{GridSize, GridState, InputId, ObjectId, Size2, Size3, State as PuzzleState};
 use puzzle_lang::{
     ArrowKey, KeyTrigger, LoadedDocument, LoadedDocumentModel, LoadedGame, LoadedGridGame,
     PuzzleGridMode, STANDARD_MESSAGE_COMPONENT, STANDARD_MESSAGE_DISMISS_EVENT,
@@ -108,6 +106,14 @@ pub struct RuntimeEditorKeyDispatch {
     pub debug: Option<Value>,
 }
 
+#[cfg(feature = "editor-debug")]
+#[derive(Clone)]
+pub struct RuntimeEditorModelProjection {
+    pub source: RuntimeViewportSourceId,
+    pub renderer: RuntimeRendererState,
+    pub solver_state: SolverStateSnapshot,
+}
+
 trait StandaloneSessionModel {
     fn player_snapshot(
         &self,
@@ -120,6 +126,44 @@ trait StandaloneSessionModel {
         &self,
         player: &RuntimeSessionSnapshot,
     ) -> RuntimeDevelopmentProjection;
+    #[cfg(feature = "editor-debug")]
+    fn editor_model_name(&self) -> Option<&str>;
+    #[cfg(feature = "editor-debug")]
+    fn preview_editor_model_state(
+        &self,
+        model: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<RuntimeEditorModelProjection, String>;
+    #[cfg(feature = "editor-debug")]
+    fn commit_editor_model_state(
+        &mut self,
+        model: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<RuntimeEditorModelProjection, String>;
+    #[cfg(feature = "editor-debug")]
+    fn current_editor_model_projection(
+        &self,
+        model: &str,
+    ) -> Result<RuntimeEditorModelProjection, String>;
+    #[cfg(feature = "editor-debug")]
+    fn editor_model_input_bindings(&self, model: &str) -> Result<Vec<RuntimeInputBinding>, String>;
+    #[cfg(feature = "editor-debug")]
+    fn apply_editor_model_input_name(
+        &mut self,
+        model: &str,
+        input_name: &str,
+    ) -> Result<(), String>;
+    #[cfg(feature = "editor-debug")]
+    fn apply_editor_model_debug_input_name(
+        &mut self,
+        model: &str,
+        input_name: &str,
+        condition_context: SceneConditionContext,
+    ) -> Result<RuntimeDebugDispatch, String>;
     fn input_bindings(&self) -> Vec<RuntimeInputBinding>;
     fn level_count(&self) -> usize;
     fn take_presentation_events(&mut self) -> Vec<RuntimePresentationEvent>;
@@ -186,13 +230,6 @@ trait StandaloneSessionModel {
     fn next_level(&mut self) -> Result<(), String>;
     fn previous_level(&mut self) -> Result<(), String>;
     fn goto_level(&mut self, level: usize) -> Result<(), String>;
-    #[cfg(feature = "editor-debug")]
-    fn set_current_state_json(
-        &mut self,
-        state_json: &str,
-        level_index: usize,
-        materialize_level_start: bool,
-    ) -> Result<(), String>;
     fn progress_save_data(&self) -> ProgressSaveData;
     fn restore_progress_save_json(&mut self, save_json: &str) -> Result<(), String>;
     fn take_progress_clear_request(&mut self) -> bool;
@@ -217,10 +254,10 @@ struct DocumentSessionRuntime {
 
 trait GridSessionProjection<const D: usize, Size: GridSize<D>> {
     #[cfg(feature = "editor-debug")]
-    fn decode_state_json(
+    fn decode_editor_state(
         &self,
         game: &GridCompiledGame<D>,
-        state_json: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
     ) -> Result<GridState<D, Size>, String>;
 
     #[cfg(feature = "editor-debug")]
@@ -232,6 +269,15 @@ trait GridSessionProjection<const D: usize, Size: GridSize<D>> {
         session: &GridGameSession<D, Size>,
         theme: &RuntimeTheme,
     ) -> ProjectedPlayerGridSnapshot;
+
+    #[cfg(feature = "editor-debug")]
+    fn editor_renderer_state(
+        &self,
+        loaded: &LoadedGridGame<D, Size>,
+        state: &GridState<D, Size>,
+        level_index: usize,
+        theme: &RuntimeTheme,
+    ) -> Result<RuntimeRendererState, String>;
 
     #[cfg(any(feature = "editor-debug", test))]
     fn development_viewport_sources(
@@ -317,6 +363,41 @@ impl RuntimeSession {
         player: RuntimeSessionSnapshot,
     ) -> RuntimeDevelopmentSessionSnapshot {
         self.compose_development_snapshot(player)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    pub fn preview_editor_model_state(
+        &self,
+        model: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<RuntimeEditorModelProjection, String> {
+        self.model
+            .preview_editor_model_state(model, state, level_index, materialize_level_start)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    pub fn commit_editor_model_state(
+        &mut self,
+        model: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<RuntimeSessionSnapshot, String> {
+        let next_revision = self.next_revision()?;
+        self.model
+            .commit_editor_model_state(model, state, level_index, materialize_level_start)?;
+        self.revision = next_revision;
+        Ok(self.snapshot())
+    }
+
+    #[cfg(feature = "editor-debug")]
+    pub fn current_editor_model_projection(
+        &self,
+        model: &str,
+    ) -> Result<RuntimeEditorModelProjection, String> {
+        self.model.current_editor_model_projection(model)
     }
 
     pub fn audio_catalog(&self) -> Arc<AudioAssetCatalog> {
@@ -542,9 +623,8 @@ impl RuntimeSession {
         Ok(dispatch)
     }
 
-    /// Resolves an editor-forwarded physical key through the same session key
-    /// owner as the player. Model input collects a trace when requested;
-    /// scene/menu/modal actions continue through their ordinary typed action.
+    /// Resolves a key from the ordinary editor player surface through the same
+    /// session owner and priority order as the standalone player.
     #[cfg(feature = "editor-debug")]
     pub fn dispatch_editor_key(
         &mut self,
@@ -564,14 +644,12 @@ impl RuntimeSession {
                 debug: None,
             });
         };
-        if trace_model_input {
-            if let SessionAction::Input { name } = action {
-                let dispatch = self.apply_debug_input_name(&name)?;
-                return Ok(RuntimeEditorKeyDispatch {
-                    snapshot: dispatch.snapshot,
-                    debug: Some(dispatch.debug),
-                });
-            }
+        if trace_model_input && let SessionAction::Input { name } = action {
+            let dispatch = self.apply_debug_input_name(&name)?;
+            return Ok(RuntimeEditorKeyDispatch {
+                snapshot: dispatch.snapshot,
+                debug: Some(dispatch.debug),
+            });
         }
         Ok(RuntimeEditorKeyDispatch {
             snapshot: self.dispatch_typed(action)?,
@@ -579,16 +657,56 @@ impl RuntimeSession {
         })
     }
 
+    /// Resolves a key from a dedicated editor Play token without allowing
+    /// scene or modal actions behind that token to receive it.
     #[cfg(feature = "editor-debug")]
-    pub fn set_current_state_json(
+    pub fn dispatch_editor_model_key(
         &mut self,
-        state_json: &str,
-        level_index: usize,
-        materialize_level_start: bool,
-    ) -> Result<(), String> {
-        self.model
-            .set_current_state_json(state_json, level_index, materialize_level_start)?;
-        self.finish_mutation(false)
+        model: &str,
+        trigger: RuntimeKeyTrigger,
+        trace_model_input: bool,
+    ) -> Result<RuntimeEditorKeyDispatch, String> {
+        if trigger == RuntimeKeyTrigger::AnyInput {
+            return Err(
+                "`any_input` is a binding wildcard and cannot be dispatched as a key".to_string(),
+            );
+        }
+        let mut snapshot = self.snapshot_with_events(&[]);
+        let inputs = self.model.editor_model_input_bindings(model)?;
+        snapshot.accepts_model_input = true;
+        let Some(action) = session_model_input_action_for_key(&snapshot, &inputs, trigger) else {
+            return Ok(RuntimeEditorKeyDispatch {
+                snapshot,
+                debug: None,
+            });
+        };
+        if let SessionAction::Input { name } = action {
+            if trace_model_input {
+                let condition_context = self.scene_condition_context();
+                let mut dispatch = self.model.apply_editor_model_debug_input_name(
+                    model,
+                    &name,
+                    condition_context,
+                )?;
+                let events = dispatch.snapshot.presentation_events.clone();
+                self.finish_mutation(true)?;
+                dispatch.snapshot = self.snapshot_with_events(&events);
+                return Ok(RuntimeEditorKeyDispatch {
+                    snapshot: dispatch.snapshot,
+                    debug: Some(dispatch.debug),
+                });
+            }
+            self.model.apply_editor_model_input_name(model, &name)?;
+            self.finish_mutation(true)?;
+            return Ok(RuntimeEditorKeyDispatch {
+                snapshot: self.response_snapshot(),
+                debug: None,
+            });
+        }
+        Ok(RuntimeEditorKeyDispatch {
+            snapshot: self.dispatch_typed(action)?,
+            debug: None,
+        })
     }
 
     pub fn progress_save_json(&self) -> String {
@@ -1028,6 +1146,76 @@ impl StandaloneSessionModel for DocumentSessionRuntime {
         projection
     }
 
+    #[cfg(feature = "editor-debug")]
+    fn editor_model_name(&self) -> Option<&str> {
+        None
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn preview_editor_model_state(
+        &self,
+        model: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<RuntimeEditorModelProjection, String> {
+        let target = document_editor_model(&self.models, model)?;
+        target.preview_editor_model_state(model, state, level_index, materialize_level_start)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn commit_editor_model_state(
+        &mut self,
+        model: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<RuntimeEditorModelProjection, String> {
+        let index = document_editor_model_index(&self.models, model)?;
+        self.models[index].commit_editor_model_state(
+            model,
+            state,
+            level_index,
+            materialize_level_start,
+        )
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn current_editor_model_projection(
+        &self,
+        model: &str,
+    ) -> Result<RuntimeEditorModelProjection, String> {
+        let target = document_editor_model(&self.models, model)?;
+        target.current_editor_model_projection(model)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn editor_model_input_bindings(&self, model: &str) -> Result<Vec<RuntimeInputBinding>, String> {
+        let target = document_editor_model(&self.models, model)?;
+        target.editor_model_input_bindings(model)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn apply_editor_model_input_name(
+        &mut self,
+        model: &str,
+        input_name: &str,
+    ) -> Result<(), String> {
+        let index = document_editor_model_index(&self.models, model)?;
+        self.models[index].apply_editor_model_input_name(model, input_name)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn apply_editor_model_debug_input_name(
+        &mut self,
+        model: &str,
+        input_name: &str,
+        condition_context: SceneConditionContext,
+    ) -> Result<RuntimeDebugDispatch, String> {
+        let index = document_editor_model_index(&self.models, model)?;
+        self.models[index].apply_editor_model_debug_input_name(model, input_name, condition_context)
+    }
+
     fn input_bindings(&self) -> Vec<RuntimeInputBinding> {
         let mut inputs = Vec::<RuntimeInputBinding>::new();
         for input in self.models.iter().flat_map(|model| model.input_bindings()) {
@@ -1298,26 +1486,6 @@ impl StandaloneSessionModel for DocumentSessionRuntime {
         Ok(())
     }
 
-    #[cfg(feature = "editor-debug")]
-    fn set_current_state_json(
-        &mut self,
-        state_json: &str,
-        level_index: usize,
-        materialize_level_start: bool,
-    ) -> Result<(), String> {
-        let candidates = self
-            .models
-            .iter()
-            .enumerate()
-            .filter(|(_, model)| model.accepts_model_input())
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        let [index] = candidates.as_slice() else {
-            return Err("setting raw model state requires one focused puzzle model".to_string());
-        };
-        self.models[*index].set_current_state_json(state_json, level_index, materialize_level_start)
-    }
-
     fn progress_save_data(&self) -> ProgressSaveData {
         let mut saves = self.models.iter().map(|model| model.progress_save_data());
         let mut combined = saves
@@ -1362,6 +1530,157 @@ impl StandaloneSessionModel for DocumentSessionRuntime {
             .filter_map(|model| model.solver_session_2d());
         let session = sessions.next()?;
         sessions.next().is_none().then_some(session)
+    }
+}
+
+#[cfg(feature = "editor-debug")]
+fn document_editor_model_index(
+    models: &[Box<dyn StandaloneSessionModel>],
+    requested: &str,
+) -> Result<usize, String> {
+    let matches = models
+        .iter()
+        .enumerate()
+        .filter(|(_, model)| model.editor_model_name() == Some(requested))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let [index] = matches.as_slice() else {
+        return Err(format!(
+            "editor model identity {requested:?} must resolve to exactly one compiled model"
+        ));
+    };
+    Ok(*index)
+}
+
+#[cfg(feature = "editor-debug")]
+fn document_editor_model<'a>(
+    models: &'a [Box<dyn StandaloneSessionModel>],
+    requested: &str,
+) -> Result<&'a dyn StandaloneSessionModel, String> {
+    let index = document_editor_model_index(models, requested)?;
+    Ok(models[index].as_ref())
+}
+
+#[cfg(feature = "editor-debug")]
+impl<const D: usize, Size, Projection> GridSessionRuntime<D, Size, Projection>
+where
+    Size: GridSize<D> + 'static,
+    Projection: GridSessionProjection<D, Size> + 'static,
+{
+    fn prepared_editor_model_state(
+        &self,
+        requested_model: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<(GridGameSession<D, Size>, RuntimeEditorModelProjection), String> {
+        if requested_model != self.model_name {
+            return Err(format!(
+                "editor model identity {requested_model:?} does not match compiled model {:?}",
+                self.model_name
+            ));
+        }
+        if level_index >= self.loaded.levels.len() {
+            return Err(format!("level index out of range: {level_index}"));
+        }
+        let state = self
+            .projection
+            .decode_editor_state(&self.loaded.game, state)?;
+        let mut candidate = self.session.clone();
+        candidate
+            .start_level_from_state(&self.loaded, level_index, state, materialize_level_start)
+            .map_err(|error| format!("{error:?}"))?;
+        let solver_state = self.projection.solver_state(candidate.state());
+        let renderer = self.projection.editor_renderer_state(
+            &self.loaded,
+            candidate.state(),
+            level_index,
+            &self.theme,
+        )?;
+        Ok((
+            candidate,
+            RuntimeEditorModelProjection {
+                source: RuntimeViewportSourceId {
+                    model: self.model_name.clone(),
+                    component: "editor-authoring".to_string(),
+                    source: "model".to_string(),
+                },
+                renderer,
+                solver_state,
+            },
+        ))
+    }
+
+    fn current_editor_projection(
+        &self,
+        requested_model: &str,
+    ) -> Result<RuntimeEditorModelProjection, String> {
+        if requested_model != self.model_name {
+            return Err(format!(
+                "editor model identity {requested_model:?} does not match compiled model {:?}",
+                self.model_name
+            ));
+        }
+        let level_index = self
+            .session
+            .active_level_index()
+            .ok_or_else(|| format!("editor model {:?} has no active level", self.model_name))?;
+        Ok(RuntimeEditorModelProjection {
+            source: RuntimeViewportSourceId {
+                model: self.model_name.clone(),
+                component: "editor-authoring".to_string(),
+                source: "model".to_string(),
+            },
+            renderer: self.projection.editor_renderer_state(
+                &self.loaded,
+                self.session.state(),
+                level_index,
+                &self.theme,
+            )?,
+            solver_state: self.projection.solver_state(self.session.state()),
+        })
+    }
+
+    fn apply_editor_traced_input_name(
+        &mut self,
+        input_name: &str,
+        condition_context: SceneConditionContext,
+        targeted_model: bool,
+    ) -> Result<RuntimeDebugDispatch, String> {
+        let input = input_id_by_name(&self.loaded, input_name)
+            .ok_or_else(|| format!("unknown input: {input_name}"))?;
+        let initial_state = self.session.state().clone();
+        if targeted_model {
+            self.session
+                .apply_targeted_model_traced_input(&self.loaded, input)
+        } else {
+            self.session.apply_traced_input(&self.loaded, input)
+        }
+        .map_err(|error| format!("{error:?}"))?;
+        let debug = self.session.last_transition_trace().cloned();
+        let snapshots = debug
+            .as_ref()
+            .map(|debug| {
+                replay_rule_firing_states(&self.loaded.game, &initial_state, &debug.firings)
+                    .map_err(|error| format!("debug trace cursor replay failed: {error:?}"))
+                    .map(|states| {
+                        states
+                            .iter()
+                            .map(|state| self.projection.editor_hydration_state(state))
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .transpose()?;
+        let presentation_events = self.take_presentation_events();
+        Ok(RuntimeDebugDispatch {
+            snapshot: self.player_snapshot(0, condition_context, &presentation_events),
+            debug: debug_transition_value_grid_with_snapshots(
+                &self.loaded,
+                debug.as_ref(),
+                Some(self.projection.editor_hydration_state(&initial_state)),
+                snapshots.as_deref(),
+            ),
+        })
     }
 }
 
@@ -1452,6 +1771,91 @@ where
             inputs: self.input_bindings(),
             viewport_sources,
         }
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn editor_model_name(&self) -> Option<&str> {
+        Some(&self.model_name)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn preview_editor_model_state(
+        &self,
+        model: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<RuntimeEditorModelProjection, String> {
+        self.prepared_editor_model_state(model, state, level_index, materialize_level_start)
+            .map(|(_, projection)| projection)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn commit_editor_model_state(
+        &mut self,
+        model: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
+        level_index: usize,
+        materialize_level_start: bool,
+    ) -> Result<RuntimeEditorModelProjection, String> {
+        let (candidate, projection) =
+            self.prepared_editor_model_state(model, state, level_index, materialize_level_start)?;
+        self.session = candidate;
+        Ok(projection)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn current_editor_model_projection(
+        &self,
+        model: &str,
+    ) -> Result<RuntimeEditorModelProjection, String> {
+        self.current_editor_projection(model)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn editor_model_input_bindings(&self, model: &str) -> Result<Vec<RuntimeInputBinding>, String> {
+        if model != self.model_name {
+            return Err(format!(
+                "editor model identity {model:?} does not match compiled model {:?}",
+                self.model_name
+            ));
+        }
+        Ok(self.input_bindings())
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn apply_editor_model_input_name(
+        &mut self,
+        model: &str,
+        input_name: &str,
+    ) -> Result<(), String> {
+        if model != self.model_name {
+            return Err(format!(
+                "editor model identity {model:?} does not match compiled model {:?}",
+                self.model_name
+            ));
+        }
+        let input = input_id_by_name(&self.loaded, input_name)
+            .ok_or_else(|| format!("unknown input: {input_name}"))?;
+        self.session
+            .apply_targeted_model_input(&self.loaded, input)
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn apply_editor_model_debug_input_name(
+        &mut self,
+        model: &str,
+        input_name: &str,
+        condition_context: SceneConditionContext,
+    ) -> Result<RuntimeDebugDispatch, String> {
+        if model != self.model_name {
+            return Err(format!(
+                "editor model identity {model:?} does not match compiled model {:?}",
+                self.model_name
+            ));
+        }
+        self.apply_editor_traced_input_name(input_name, condition_context, true)
     }
 
     fn input_bindings(&self) -> Vec<RuntimeInputBinding> {
@@ -1644,36 +2048,7 @@ where
         input_name: &str,
         condition_context: SceneConditionContext,
     ) -> Result<RuntimeDebugDispatch, String> {
-        let input = input_id_by_name(&self.loaded, input_name)
-            .ok_or_else(|| format!("unknown input: {input_name}"))?;
-        let initial_state = self.session.state().clone();
-        self.session
-            .apply_traced_input(&self.loaded, input)
-            .map_err(|error| format!("{error:?}"))?;
-        let debug = self.session.last_transition_trace().cloned();
-        let snapshots = debug
-            .as_ref()
-            .map(|debug| {
-                replay_rule_firing_states(&self.loaded.game, &initial_state, &debug.firings)
-                    .map_err(|error| format!("debug trace cursor replay failed: {error:?}"))
-                    .map(|states| {
-                        states
-                            .iter()
-                            .map(|state| self.projection.editor_hydration_state(state))
-                            .collect::<Vec<_>>()
-                    })
-            })
-            .transpose()?;
-        let presentation_events = self.take_presentation_events();
-        Ok(RuntimeDebugDispatch {
-            snapshot: self.player_snapshot(0, condition_context, &presentation_events),
-            debug: debug_transition_value_grid_with_snapshots(
-                &self.loaded,
-                debug.as_ref(),
-                Some(self.projection.editor_hydration_state(&initial_state)),
-                snapshots.as_deref(),
-            ),
-        })
+        self.apply_editor_traced_input_name(input_name, condition_context, false)
     }
 
     fn undo(&mut self) {
@@ -1711,24 +2086,6 @@ where
             .map_err(|error| format!("{error:?}"))
     }
 
-    #[cfg(feature = "editor-debug")]
-    fn set_current_state_json(
-        &mut self,
-        state_json: &str,
-        level_index: usize,
-        materialize_level_start: bool,
-    ) -> Result<(), String> {
-        if level_index >= self.loaded.levels.len() {
-            return Err(format!("level index out of range: {level_index}"));
-        }
-        let state = self
-            .projection
-            .decode_state_json(&self.loaded.game, state_json)?;
-        self.session
-            .start_level_from_state(&self.loaded, level_index, state, materialize_level_start)
-            .map_err(|error| format!("{error:?}"))
-    }
-
     fn progress_save_data(&self) -> ProgressSaveData {
         self.session.progress_save_data(&self.loaded)
     }
@@ -1754,14 +2111,15 @@ where
 
 impl GridSessionProjection<2, Size2> for CanvasProjection {
     #[cfg(feature = "editor-debug")]
-    fn decode_state_json(
+    fn decode_editor_state(
         &self,
         game: &GridCompiledGame<2>,
-        state_json: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
     ) -> Result<GridState<2, Size2>, String> {
-        serde_json::from_str::<RuntimeStateSnapshot2d>(state_json)
-            .map_err(|error| error.to_string())?
-            .into_state(game)
+        let puzzle_runtime_contract::RuntimeStateSnapshot::TwoD(state) = state else {
+            return Err("2D editor model requires a grid2d state".to_string());
+        };
+        state.clone().into_state(game)
     }
 
     #[cfg(feature = "editor-debug")]
@@ -1777,6 +2135,19 @@ impl GridSessionProjection<2, Size2> for CanvasProjection {
         theme: &RuntimeTheme,
     ) -> ProjectedPlayerGridSnapshot {
         viewport_sources_2d(loaded, session, theme)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn editor_renderer_state(
+        &self,
+        loaded: &LoadedGame,
+        state: &GridState<2, Size2>,
+        _level_index: usize,
+        theme: &RuntimeTheme,
+    ) -> Result<RuntimeRendererState, String> {
+        Ok(RuntimeRendererState::TwoD(scene_player_snapshot_for_state(
+            loaded, state, theme,
+        )))
     }
 
     #[cfg(any(feature = "editor-debug", test))]
@@ -1805,14 +2176,15 @@ impl GridSessionProjection<2, Size2> for CanvasProjection {
 
 impl GridSessionProjection<3, Size3> for SpatialProjection {
     #[cfg(feature = "editor-debug")]
-    fn decode_state_json(
+    fn decode_editor_state(
         &self,
         game: &GridCompiledGame<3>,
-        state_json: &str,
+        state: &puzzle_runtime_contract::RuntimeStateSnapshot,
     ) -> Result<GridState<3, Size3>, String> {
-        serde_json::from_str::<RuntimeStateSnapshot3d>(state_json)
-            .map_err(|error| error.to_string())?
-            .into_state(game)
+        let puzzle_runtime_contract::RuntimeStateSnapshot::ThreeD(state) = state else {
+            return Err("3D editor model requires a grid3d state".to_string());
+        };
+        state.clone().into_state(game)
     }
 
     #[cfg(feature = "editor-debug")]
@@ -1828,6 +2200,18 @@ impl GridSessionProjection<3, Size3> for SpatialProjection {
         theme: &RuntimeTheme,
     ) -> ProjectedPlayerGridSnapshot {
         viewport_sources_3d(loaded, session, &self.resources, theme)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn editor_renderer_state(
+        &self,
+        loaded: &LoadedGridGame<3, Size3>,
+        state: &GridState<3, Size3>,
+        level_index: usize,
+        theme: &RuntimeTheme,
+    ) -> Result<RuntimeRendererState, String> {
+        spatial_state_snapshot(loaded, state, level_index, &self.resources, theme)
+            .map(RuntimeRendererState::ThreeD)
     }
 
     #[cfg(any(feature = "editor-debug", test))]
@@ -1934,9 +2318,19 @@ fn spatial_world_snapshot(
     let level_index = world.active_level_index.ok_or_else(|| {
         "presented spatial viewport has no active level; level selection must be established by the owning session before presentation".to_string()
     })?;
-    let cells = puzzle_lang::runtime_puzzle3_cells(&world.state, resources)
+    spatial_state_snapshot(loaded, &world.state, level_index, resources, theme)
+}
+
+fn spatial_state_snapshot(
+    loaded: &LoadedGridGame<3, Size3>,
+    state: &GridState<3, Size3>,
+    level_index: usize,
+    resources: &RuntimePuzzle3Resources,
+    theme: &RuntimeTheme,
+) -> Result<RuntimePuzzle3Snapshot, String> {
+    let cells = puzzle_lang::runtime_puzzle3_cells(state, resources)
         .expect("validated Puzzle3 visual order must resolve runtime cells");
-    let size = puzzle_lang::runtime_puzzle3_size(world.state.size);
+    let size = puzzle_lang::runtime_puzzle3_size(state.size);
     let mut render_scene = resolved_render_scene_3d(resources, &cells)
         .expect("validated Puzzle3 visuals must resolve a typed render scene");
     render_scene.decorations = resolve_grid_decoration_3d(
@@ -1952,7 +2346,7 @@ fn spatial_world_snapshot(
         level_count: loaded.levels.len(),
         size,
         cells,
-        completed: loaded.is_goal_complete(&world.state),
+        completed: loaded.is_goal_complete(state),
         has_next_level: level_index + 1 < loaded.levels.len(),
         has_previous_level: level_index > 0,
         render: resources.render.clone(),
@@ -3444,6 +3838,34 @@ fn session_action_for_key(
         }
     }
 
+    session_model_action_for_key(snapshot, inputs, trigger)
+}
+
+fn session_model_action_for_key(
+    snapshot: &RuntimeSessionSnapshot,
+    inputs: &[RuntimeInputBinding],
+    trigger: RuntimeKeyTrigger,
+) -> Option<SessionAction> {
+    if let Some(action) = session_model_input_action_for_key(snapshot, inputs, trigger) {
+        return Some(action);
+    }
+
+    match trigger {
+        RuntimeKeyTrigger::Character { value: 'z' | 'Z' } if snapshot.can_undo => {
+            Some(SessionAction::Undo)
+        }
+        RuntimeKeyTrigger::Character { value: 'y' | 'Y' } if snapshot.can_redo => {
+            Some(SessionAction::Redo)
+        }
+        _ => None,
+    }
+}
+
+fn session_model_input_action_for_key(
+    snapshot: &RuntimeSessionSnapshot,
+    inputs: &[RuntimeInputBinding],
+    trigger: RuntimeKeyTrigger,
+) -> Option<SessionAction> {
     if snapshot.accepts_model_input || (snapshot.busy && snapshot.input_buffer.queue_during_wait) {
         if let Some(input) = inputs.iter().find(|binding| {
             binding
@@ -3457,15 +3879,7 @@ fn session_action_for_key(
         }
     }
 
-    match trigger {
-        RuntimeKeyTrigger::Character { value: 'z' | 'Z' } if snapshot.can_undo => {
-            Some(SessionAction::Undo)
-        }
-        RuntimeKeyTrigger::Character { value: 'y' | 'Y' } if snapshot.can_redo => {
-            Some(SessionAction::Redo)
-        }
-        _ => None,
-    }
+    None
 }
 
 fn scene_event_action_for_key(
@@ -5585,7 +5999,7 @@ step board
 
     #[cfg(feature = "editor-debug")]
     #[test]
-    fn standalone_session_bridge_starts_from_editor_state() {
+    fn standalone_session_bridge_starts_from_typed_named_editor_state() {
         let source = r#"
 const title = editor_state_start
 
@@ -5622,12 +6036,14 @@ step board
 }
 "#;
         let loaded = puzzle_lang::parse_game2d(source).unwrap();
-        let editor_state = compiled_state_value(&loaded.levels[1].initial_state).to_string();
+        let editor_state: puzzle_runtime_contract::RuntimeStateSnapshot =
+            serde_json::from_value(compiled_state_value(&loaded.levels[1].initial_state))
+                .expect("compiled editor state must satisfy the typed runtime contract");
         let mut bridge = RuntimeSession::from_source(source, "editor_state_start.puzzle").unwrap();
         let before_revision = bridge.snapshot().revision;
 
         bridge
-            .set_current_state_json(&editor_state, 0, false)
+            .commit_editor_model_state("board", &editor_state, 0, false)
             .expect("editor state should start level 0");
         let started: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
         assert_eq!(started["revision"], before_revision + 1);
@@ -5663,7 +6079,7 @@ step board
 
         assert!(
             bridge
-                .set_current_state_json(&editor_state, 99, false)
+                .commit_editor_model_state("board", &editor_state, 99, false)
                 .unwrap_err()
                 .contains("level index out of range: 99")
         );
@@ -6306,6 +6722,159 @@ scene playing {
             })
             .expect_err("one input must not be broadcast to multiple puzzle models");
         assert!(error.contains("ambiguous across 2 focused puzzle models"));
+    }
+
+    #[cfg(feature = "editor-debug")]
+    #[test]
+    fn editor_hydration_targets_an_offscreen_named_model_and_is_failure_atomic() {
+        let source = r#"
+const title = editor_named_model
+puzzle first {
+  layers { actor = A }
+  empty .
+  input right
+  rules {
+    input right [ A | no A ] -> [ | A ]
+  }
+}
+levels first_levels of first {
+  legend A = A
+  level "first" { A. }
+}
+puzzle second {
+  layers { actor = B }
+  empty .
+  input right
+  rules {
+    input right [ B | no B ] -> [ | B ]
+  }
+}
+levels second_levels of second {
+  legend B = B
+  level "second" { B. }
+}
+scene playing {
+  layout {
+    puzzle visible = second
+  }
+}
+"#;
+        let mut runtime = RuntimeSession::from_source(source, "editor_named_model.puzzle")
+            .expect("multi-model editor fixture must compile");
+        let first_before = runtime
+            .current_editor_model_projection("first")
+            .expect("offscreen first model must have an editor projection");
+        let second_before = runtime
+            .current_editor_model_projection("second")
+            .expect("visible second model must have an editor projection");
+        let SolverStateSnapshot::TwoD {
+            width,
+            height,
+            layer_count,
+            slots,
+            variables,
+            level_fired_rules,
+        } = first_before.solver_state.clone()
+        else {
+            panic!("first model must be 2D");
+        };
+        let mut empty_slots = slots.clone();
+        empty_slots.fill(0);
+        let draft = puzzle_runtime_contract::RuntimeStateSnapshot::TwoD(RuntimeStateSnapshot2d {
+            kind: puzzle_runtime_contract::RuntimeModelKind::TwoD,
+            width,
+            height,
+            layer_count,
+            slots: empty_slots,
+            variables: variables.clone(),
+            level_fired_rules: level_fired_rules.clone(),
+        });
+
+        let revision_before = runtime.snapshot().revision;
+        let mut invalid_state = draft.clone();
+        let puzzle_runtime_contract::RuntimeStateSnapshot::TwoD(invalid) = &mut invalid_state
+        else {
+            unreachable!();
+        };
+        invalid.slots[0] = u16::MAX;
+        assert!(
+            runtime
+                .commit_editor_model_state("first", &invalid_state, 0, false)
+                .is_err()
+        );
+        assert_eq!(runtime.snapshot().revision, revision_before);
+        assert_eq!(
+            runtime
+                .current_editor_model_projection("first")
+                .unwrap()
+                .solver_state,
+            first_before.solver_state
+        );
+
+        let preview = runtime
+            .preview_editor_model_state("first", &draft, 0, false)
+            .expect("named offscreen model must preview without a scene viewport");
+        assert_eq!(preview.source.model, "first");
+        assert_eq!(preview.source.component, "editor-authoring");
+        assert!(matches!(preview.renderer, RuntimeRendererState::TwoD(_)));
+        let snapshot = runtime
+            .commit_editor_model_state("first", &draft, 0, false)
+            .expect("named offscreen model must commit");
+
+        assert_eq!(snapshot.revision, revision_before + 1);
+        assert!(matches!(
+            runtime
+                .current_editor_model_projection("first")
+                .unwrap()
+                .solver_state,
+            SolverStateSnapshot::TwoD { slots, .. } if slots.iter().all(|slot| *slot == 0)
+        ));
+        assert_eq!(
+            runtime
+                .current_editor_model_projection("second")
+                .unwrap()
+                .solver_state,
+            second_before.solver_state
+        );
+        assert!(
+            snapshot
+                .viewport_sources
+                .keys()
+                .all(|source| source.model == "second"),
+            "public player viewport projection must remain scene-owned"
+        );
+
+        let playable =
+            puzzle_runtime_contract::RuntimeStateSnapshot::TwoD(RuntimeStateSnapshot2d {
+                kind: puzzle_runtime_contract::RuntimeModelKind::TwoD,
+                width,
+                height,
+                layer_count,
+                slots,
+                variables,
+                level_fired_rules,
+            });
+        runtime
+            .commit_editor_model_state("first", &playable, 0, false)
+            .expect("named offscreen model must accept its authored state");
+        runtime
+            .dispatch_editor_model_key("first", RuntimeKeyTrigger::ArrowRight, false)
+            .expect("the editor Play token must route input to its named model");
+        assert!(matches!(
+            runtime
+                .current_editor_model_projection("first")
+                .unwrap()
+                .solver_state,
+            SolverStateSnapshot::TwoD { slots, .. } if slots[0] == 0 && slots[1] != 0
+        ));
+        assert_eq!(
+            runtime
+                .current_editor_model_projection("second")
+                .unwrap()
+                .solver_state,
+            second_before.solver_state,
+            "the scene-focused sibling model must not receive the authoring surface input"
+        );
     }
 
     #[test]

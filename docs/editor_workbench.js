@@ -909,7 +909,7 @@ function applyPaneVisibility() {
   });
   syncPreviewModeButtonState();
   scheduleBoardScaleSync();
-  requestAnimationFrame(syncPreviewViewportScale);
+  requestAnimationFrame(syncPreviewViewportGeometry);
 }
 
 function toggleWorkPaneMaximized(paneId) {
@@ -1036,7 +1036,7 @@ function resizePanes(event) {
   if (typeof scheduleSourceEditorLayoutSync === "function") {
     scheduleSourceEditorLayoutSync(2);
   }
-  syncPreviewViewportScale();
+  syncPreviewViewportGeometry();
   workbench.dataset.collapsingPane = pendingPaneCollapse || "";
   workbench.dataset.collapsingPreview = pendingPaneCollapse && isPreviewHostPaneId(pendingPaneCollapse) ? "true" : "false";
 }
@@ -1107,7 +1107,7 @@ function resizeExplorer(event) {
   if (typeof scheduleSourceEditorLayoutSync === "function") {
     scheduleSourceEditorLayoutSync(2);
   }
-  syncPreviewViewportScale();
+  syncPreviewViewportGeometry();
   workbench.classList.toggle("is-explorer-collapse-pending", pendingExplorerCollapse);
 }
 
@@ -1155,8 +1155,8 @@ function resizePreviewLog(event) {
   const maxLogHeight = Math.max(minLogHeight, rect.height - splitterHeight - minPreviewHeight);
   const next = Math.max(minLogHeight, Math.min(maxLogHeight, rect.bottom - event.clientY - 12));
   playPreview.style.setProperty("--preview-log-height", `${Math.round(next)}px`);
-  syncPreviewViewportScale();
-  schedulePreviewViewportSync(3);
+  syncPreviewViewportGeometry();
+  schedulePreviewViewportGeometrySync(3);
   event.preventDefault();
 }
 
@@ -1169,28 +1169,25 @@ function stopPreviewLogResize(event) {
   draggingPreviewLogSplitterPointerId = null;
   playPreview?.classList.remove("is-resizing-log");
   releasePointerCaptureIfHeld(previewLogSplitter, pointerId);
-  syncPreviewViewportScale();
-  schedulePreviewViewportSync(3);
+  syncPreviewViewportGeometry();
+  schedulePreviewViewportGeometrySync(3);
 }
-function fitEditorAspectFrame(available, aspect, virtualHeight) {
+function fitEditorAspectFrame(available, aspect) {
   const safeAspect = Number.isFinite(aspect) && aspect > 0
     ? aspect
     : previewDefaultLogicalWidth / previewDefaultLogicalHeight;
-  const safeVirtualHeight = Math.max(1, Number(virtualHeight) || previewMinimumHeight);
-  const virtualWidth = Math.max(1, Math.round(safeVirtualHeight * safeAspect));
-  const scale = Math.max(
-    0.0001,
-    Math.min(
-      Math.max(1, Number(available?.width) || 1) / virtualWidth,
-      Math.max(1, Number(available?.height) || 1) / safeVirtualHeight,
-    ),
-  );
+  const availableWidth = Math.max(1, Math.floor(Number(available?.width) || 1));
+  const availableHeight = Math.max(1, Math.floor(Number(available?.height) || 1));
+  const availableAspect = availableWidth / availableHeight;
+  const width = availableAspect > safeAspect
+    ? Math.max(1, Math.floor(availableHeight * safeAspect))
+    : availableWidth;
+  const height = availableAspect > safeAspect
+    ? availableHeight
+    : Math.max(1, Math.floor(availableWidth / safeAspect));
   return {
-    width: Math.max(1, Math.floor(virtualWidth * scale)),
-    height: Math.max(1, Math.floor(safeVirtualHeight * scale)),
-    virtualWidth,
-    virtualHeight: safeVirtualHeight,
-    scale,
+    width,
+    height,
   };
 }
 function editorFrameAvailableSize(frame, options = {}) {

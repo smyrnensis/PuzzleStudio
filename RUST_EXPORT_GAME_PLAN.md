@@ -160,10 +160,17 @@ Implemented foundations:
   refreshing its typed surface and viewport state after persistence changes.
 - Official player/game WASM bindings expose the typed session ingress and the
   request-ID persistence protocol without command-name or direct input-name
-  compatibility methods. Raw editor-state injection exists only in the
-  editor-debug game artifact and is absent from the player artifact and normal
-  standalone export. Debug trace input likewise uses an editor-only WASM method
-  and is not a player `SessionAction`.
+  compatibility methods. Typed, model-scoped editor state and draft hydration
+  exists only in the editor-debug game artifact and is absent from the player
+  artifact and normal standalone export. Debug trace input likewise uses an
+  editor-only WASM method and is not a player `SessionAction`.
+- Editor preview, playtest, solver observation, and level authoring share the
+  editor-debug `PuzzleBevyPlayerHost`. Rust resolves draft object identities,
+  validates the prospective renderer, and atomically commits the named model
+  only after its typed projection succeeds. Each frontmost runtime surface owns
+  an explicit input token and iframe generation; JavaScript connects browser
+  events and transport but does not project runtime state or interpret source
+  syntax.
 - The topmost visible modal exclusively owns keyboard resolution, including
   unmatched keys, so input cannot fall through to focused scenes or model
   actions behind it.
@@ -182,11 +189,11 @@ Implemented foundations:
 - Official player generation uses a dedicated size-oriented Cargo profile with
   LTO, one codegen unit, aborting panics, and stripped symbols. The generator
   enforces byte budgets for the player WASM, generated glue, and audio worklet;
-  the current artifacts are 40,555,988 bytes, 123,849 bytes, and 745,170 bytes,
+  the current artifacts are 40,553,433 bytes, 123,849 bytes, and 745,170 bytes,
   respectively.
 - A separate final-export size gate runs the official CLI for fixed 2D and 3D
   fixtures and checks raw and gzip HTML budgets. Current results are
-  60,275,181/14,171,542 bytes for 2D and 54,362,796/14,057,121 bytes for 3D.
+  60,293,309/14,176,183 bytes for 2D and 54,359,443/14,061,246 bytes for 3D.
 - Browser progress restore and exact request-ID save acknowledgement are owned
   by the Rust/WASM host. A committed save acknowledgement cannot be exposed as
   retryable after the runtime consumes it; later projection failure enters the
@@ -230,13 +237,13 @@ Implemented foundations:
   interaction limits plus
   fixture-specific memory and payload thresholds. Two serial Chrome
   measurements under the committed 3-second visibility window recorded maxima
-  of 1,667.36 ms startup, 1,492.72 ms input-to-browser-frame latency, 8,701
+  of 1,794.71 ms startup, 1,711.54 ms input-to-browser-frame latency, 8,900
   microseconds presentation CPU p95, 250,000 microseconds submission interval,
-  331,808 bytes
+  334,364 bytes
   steady JavaScript heap growth, and zero Wasm linear-memory growth. Immediate
-  regenerated-release validation additionally observed 5,301- and
-  8,701-microsecond presentation CPU p95 values in the representative 2D and
-  3D fixtures. The committed limits retain explicit measured headroom rather
+  regenerated-release validation additionally observed 3,100-5,301 and
+  8,600-8,900 microseconds presentation CPU p95 in the representative 2D and
+  3D fixtures, respectively. The committed limits retain explicit measured headroom rather
   than the former provisional ceilings.
 - Release WASM generation remaps repository, user, Cargo, and toolchain paths
   through one shared build environment and rejects generated artifacts that
@@ -246,11 +253,6 @@ Implemented foundations:
 
 Known incomplete boundaries:
 
-- EditorPreview and live development tooling retain their separately owned
-  legacy browser presentation implementation and editor-only
-  `WasmStandaloneSession`. They are not loaded by, embedded in, or available as
-  a fallback to the official player artifact. Replacing those development
-  surfaces is a separate migration with different debugging contracts.
 - Camera-backed viewport leaves are ordered against other viewport leaves, but
   arbitrary interleaving with overlapping Bevy UI descendants is not yet an
   owned composition contract. If authored overlap requires that behavior,

@@ -45,6 +45,8 @@ use puzzle_editor_preview_contract::{
     EditorAuthoringHitTarget, EditorAuthoringPresentation, EditorPointerGesture,
     EditorRendererStrategy,
 };
+#[cfg(feature = "editor-debug")]
+use puzzle_game_runtime::RuntimeEditorModelProjection;
 use puzzle_game_runtime::RuntimeSession;
 use puzzle_player_bootstrap::{PlayerBootstrapError, decode_standalone_player_export};
 #[cfg(test)]
@@ -472,54 +474,62 @@ impl PuzzleBevyPlayerHost {
         )
     }
 
-    /// Replaces the active model state through the editor-only hydration
-    /// contract, then projects it through the same player snapshot path used
-    /// by ordinary session actions.
-    #[cfg(feature = "editor-debug")]
-    pub fn hydrate_editor_state(
-        &mut self,
-        state_json: &str,
-        level_index: usize,
-        materialize_level_start: bool,
-        now_seconds: f64,
-    ) -> Result<(), BevyPlayerError> {
-        self.runtime
-            .set_current_state_json(state_json, level_index, materialize_level_start)
-            .map_err(BevyPlayerError::Runtime)?;
-        self.editor_authoring = None;
-        self.editor_authoring_frame = None;
-        self.refresh_runtime_snapshot(now_seconds)
-    }
-
-    /// Atomically installs the typed editor draft and its authoring
-    /// presentation contract. Presentation validity is checked against the
-    /// prospective state before the runtime is mutated.
+    /// Atomically installs the typed editor draft and its model-scoped
+    /// authoring presentation contract. Presentation validity is checked
+    /// against the prospective state before the runtime is mutated.
     #[cfg(feature = "editor-debug")]
     pub fn hydrate_editor_draft_state(
         &mut self,
+        model: &str,
         state: &RuntimeStateSnapshot,
         level_index: usize,
         presentation: EditorAuthoringPresentation,
         now_seconds: f64,
     ) -> Result<(), BevyPlayerError> {
-        let source = editor_authoring_viewport_source(&self.viewports, &presentation.renderer)
-            .map_err(BevyPlayerError::EditorAuthoring)?;
+        self.hydrate_editor_model_state(model, state, level_index, false, presentation, now_seconds)
+    }
+
+    /// Atomically installs a typed model state and its model-scoped editor
+    /// presentation. The prospective renderer is fully validated before the
+    /// runtime session commits the state.
+    #[cfg(feature = "editor-debug")]
+    pub fn hydrate_editor_model_state(
+        &mut self,
+        model: &str,
+        state: &RuntimeStateSnapshot,
+        level_index: usize,
+        materialize_level_start: bool,
+        presentation: EditorAuthoringPresentation,
+        now_seconds: f64,
+    ) -> Result<(), BevyPlayerError> {
+        let renderer = presentation.renderer.clone();
+        let requested_source = RuntimeViewportSourceId {
+            model: model.to_string(),
+            component: String::new(),
+            source: String::new(),
+        };
         let configuration =
-            editor_authoring::EditorAuthoringConfiguration::new(presentation, source);
+            editor_authoring::EditorAuthoringConfiguration::new(presentation, requested_source);
         configuration
             .validate_for_state(state)
             .map_err(BevyPlayerError::EditorAuthoring)?;
-        let state_json = serde_json::to_string(state).map_err(|error| {
-            BevyPlayerError::EditorAuthoring(format!(
-                "editor draft state serialization failed: {error}"
-            ))
-        })?;
-        self.runtime
-            .set_current_state_json(&state_json, level_index, false)
+        let preview = self
+            .runtime
+            .preview_editor_model_state(model, state, level_index, materialize_level_start)
             .map_err(BevyPlayerError::Runtime)?;
-        self.editor_authoring = Some(configuration);
-        self.editor_authoring_frame = None;
-        self.refresh_runtime_snapshot(now_seconds)
+        let (configuration, viewports) = prepare_editor_authoring_projection(
+            configuration,
+            preview,
+            &renderer,
+            &self.snapshot.theme,
+            now_seconds,
+        )?;
+        let snapshot = self
+            .runtime
+            .commit_editor_model_state(model, state, level_index, materialize_level_start)
+            .map_err(BevyPlayerError::Runtime)?;
+        self.install_editor_authoring_projection(snapshot, configuration, viewports, now_seconds);
+        Ok(())
     }
 
     #[cfg(feature = "editor-debug")]
@@ -575,12 +585,63 @@ impl PuzzleBevyPlayerHost {
         trace_model_input: bool,
         now_seconds: f64,
     ) -> Result<Option<serde_json::Value>, BevyPlayerError> {
+        let Some(configuration) = self.editor_authoring.clone() else {
+            let dispatch = self
+                .runtime
+                .dispatch_editor_key(trigger, trace_model_input)
+                .map_err(BevyPlayerError::Runtime)?;
+            self.apply_snapshot(dispatch.snapshot, now_seconds, false)?;
+            return Ok(dispatch.debug);
+        };
+        if !configuration.accepts_model_input() {
+            return Ok(None);
+        }
+        let model = configuration.viewport_source.model.clone();
         let dispatch = self
             .runtime
-            .dispatch_editor_key(trigger, trace_model_input)
+            .dispatch_editor_model_key(&model, trigger, trace_model_input)
             .map_err(BevyPlayerError::Runtime)?;
-        self.apply_snapshot(dispatch.snapshot, now_seconds, false)?;
+        let renderer = configuration.renderer.clone();
+        let projection = self
+            .runtime
+            .current_editor_model_projection(&model)
+            .map_err(BevyPlayerError::Runtime)?;
+        let (configuration, viewports) = prepare_editor_authoring_projection(
+            configuration,
+            projection,
+            &renderer,
+            &dispatch.snapshot.theme,
+            now_seconds,
+        )?;
+        self.install_editor_authoring_projection(
+            dispatch.snapshot,
+            configuration,
+            viewports,
+            now_seconds,
+        );
         Ok(dispatch.debug)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    fn install_editor_authoring_projection(
+        &mut self,
+        snapshot: RuntimeSessionSnapshot,
+        configuration: editor_authoring::EditorAuthoringConfiguration,
+        viewports: BTreeMap<RuntimeViewportSourceId, HostViewport>,
+        now_seconds: f64,
+    ) {
+        self.viewports = viewports;
+        self.snapshot = snapshot;
+        self.editor_authoring = Some(configuration);
+        self.editor_authoring_frame = None;
+        self.pending_presentation.clear();
+        self.pending_presentation_continuation = None;
+        self.wait_until_seconds = None;
+        for viewport in self.viewports.values_mut() {
+            viewport.active_animations.clear();
+            viewport.animation_epoch_seconds = now_seconds;
+            viewport.needs_frame = true;
+        }
     }
 
     /// Returns editor inspection data paired with the exact player snapshot
@@ -773,25 +834,22 @@ impl PuzzleBevyPlayerHost {
             }
         }
         #[cfg(feature = "editor-debug")]
-        if let Some(configuration) = self.editor_authoring.as_mut() {
-            let development = self
+        if let Some(configuration) = self.editor_authoring.clone() {
+            let model = configuration.viewport_source.model.clone();
+            let renderer = configuration.renderer.clone();
+            let projection = self
                 .runtime
-                .development_snapshot_from_player(snapshot.clone());
-            configuration
-                .validate_for_solver_state(&development.solver_state)
-                .map_err(BevyPlayerError::EditorAuthoring)?;
-            let source = editor_authoring_viewport_source(&next, &configuration.renderer)
-                .map_err(BevyPlayerError::EditorAuthoring)?;
-            configuration.viewport_source = source.clone();
-            let viewport = next.get_mut(&source).ok_or_else(|| {
-                BevyPlayerError::EditorAuthoring(format!(
-                    "editor authoring viewport {}.{} is not mounted",
-                    source.component, source.source
-                ))
-            })?;
-            configuration
-                .apply_to_renderer(&mut viewport.renderer, &snapshot.theme)
-                .map_err(BevyPlayerError::EditorAuthoring)?;
+                .current_editor_model_projection(&model)
+                .map_err(BevyPlayerError::Runtime)?;
+            let (configuration, authoring_viewports) = prepare_editor_authoring_projection(
+                configuration,
+                projection,
+                &renderer,
+                &snapshot.theme,
+                now_seconds,
+            )?;
+            next = authoring_viewports;
+            self.editor_authoring = Some(configuration);
             self.editor_authoring_frame = None;
         }
         self.viewports = next;
@@ -939,41 +997,61 @@ fn projected_viewports(
 }
 
 #[cfg(feature = "editor-debug")]
-fn editor_authoring_viewport_source(
-    viewports: &BTreeMap<RuntimeViewportSourceId, HostViewport>,
+fn prepare_editor_authoring_projection(
+    mut configuration: editor_authoring::EditorAuthoringConfiguration,
+    projection: RuntimeEditorModelProjection,
     strategy: &EditorRendererStrategy,
-) -> Result<RuntimeViewportSourceId, String> {
-    let mut matching = viewports.values().filter(|viewport| {
-        matches!(
-            (strategy, &viewport.renderer),
-            (
-                EditorRendererStrategy::Grid2d,
-                RuntimeRendererState::TwoD(_)
-            ) | (
-                EditorRendererStrategy::Grid3d { .. },
-                RuntimeRendererState::ThreeD(_)
-            )
+    theme: &RuntimeTheme,
+    now_seconds: f64,
+) -> Result<
+    (
+        editor_authoring::EditorAuthoringConfiguration,
+        BTreeMap<RuntimeViewportSourceId, HostViewport>,
+    ),
+    BevyPlayerError,
+> {
+    if projection.source.model != configuration.viewport_source.model {
+        return Err(BevyPlayerError::EditorAuthoring(format!(
+            "editor authoring requested model {:?}, but runtime projected {:?}",
+            configuration.viewport_source.model, projection.source.model
+        )));
+    }
+    if !matches!(
+        (strategy, &projection.renderer),
+        (
+            EditorRendererStrategy::Grid2d,
+            RuntimeRendererState::TwoD(_)
+        ) | (
+            EditorRendererStrategy::Grid3d { .. },
+            RuntimeRendererState::ThreeD(_)
         )
-    });
-    let Some(viewport) = matching.next() else {
-        return Err(format!(
-            "editor authoring requires exactly one {} viewport, but none is mounted",
-            match strategy {
-                EditorRendererStrategy::Grid2d => "grid2d",
-                EditorRendererStrategy::Grid3d { .. } => "grid3d",
-            }
-        ));
-    };
-    if matching.next().is_some() {
-        return Err(format!(
-            "editor authoring requires exactly one {} viewport, but multiple are mounted",
-            match strategy {
-                EditorRendererStrategy::Grid2d => "grid2d",
-                EditorRendererStrategy::Grid3d { .. } => "grid3d",
-            }
+    ) {
+        return Err(BevyPlayerError::EditorAuthoring(
+            "editor authoring renderer strategy does not match the projected model".to_string(),
         ));
     }
-    Ok(viewport.source.clone())
+    configuration
+        .validate_for_solver_state(&projection.solver_state)
+        .map_err(BevyPlayerError::EditorAuthoring)?;
+    validate_renderer_source(&projection.source, &projection.renderer)?;
+    configuration.viewport_source = projection.source.clone();
+    let mut renderer = projection.renderer;
+    configuration
+        .apply_to_renderer(&mut renderer, theme)
+        .map_err(BevyPlayerError::EditorAuthoring)?;
+    let viewport = HostViewport {
+        source: projection.source.clone(),
+        order: 0,
+        renderer,
+        active_animations: Vec::new(),
+        animation_epoch_seconds: now_seconds,
+        continue_animation: false,
+        needs_frame: true,
+    };
+    Ok((
+        configuration,
+        BTreeMap::from([(projection.source, viewport)]),
+    ))
 }
 
 fn collect_viewport_sources(
@@ -1428,6 +1506,60 @@ fn sync_resolved_ui(
         .map(|(entity, id)| (id.clone(), entity))
         .collect::<HashMap<_, _>>();
     let mut retained = BTreeSet::new();
+    #[cfg(feature = "editor-debug")]
+    if let Some(authoring) = host.editor_authoring.as_ref() {
+        let root_id = PuzzleBevyUiIdentity {
+            component: authoring.surface.surface_id.clone(),
+            tree_path: Vec::new(),
+        };
+        let viewport_id = PuzzleBevyUiIdentity {
+            component: authoring.surface.surface_id.clone(),
+            tree_path: vec![0],
+        };
+        let authoring_root = old
+            .get(&root_id)
+            .copied()
+            .unwrap_or_else(|| commands.spawn_empty().id());
+        let authoring_viewport = old
+            .get(&viewport_id)
+            .copied()
+            .unwrap_or_else(|| commands.spawn_empty().id());
+        retained.insert(root_id.clone());
+        retained.insert(viewport_id.clone());
+        commands.entity(authoring_root).insert((
+            root_id,
+            Node {
+                width: percent(100),
+                height: percent(100),
+                ..default()
+            },
+            ZIndex(PuzzleBevyUiSurfaceLayer::Content.z_index()),
+        ));
+        commands
+            .entity(authoring_root)
+            .remove::<(PuzzleBevyUiAction, Button, BackgroundColor)>()
+            .replace_children(&[authoring_viewport]);
+        commands.entity(authoring_viewport).insert((
+            viewport_id,
+            Node {
+                width: percent(100),
+                height: percent(100),
+                ..default()
+            },
+            PuzzleBevyUiViewport(authoring.viewport_source.clone()),
+        ));
+        commands.entity(root_layer).replace_children(&[]);
+        commands
+            .entity(content_layer)
+            .replace_children(&[authoring_root]);
+        commands.entity(overlay_layer).replace_children(&[]);
+        for (id, entity) in old {
+            if !retained.contains(&id) {
+                commands.entity(entity).despawn();
+            }
+        }
+        return;
+    }
     let mut root_components = Vec::new();
     let mut content_components = Vec::new();
     let mut overlay_components = Vec::new();

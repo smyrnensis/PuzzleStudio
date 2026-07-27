@@ -83,18 +83,22 @@ fn apply_editor_control(
 ) -> EditorPreviewObservation {
     let command_id = request.command_id();
     let result = match request {
-        EditorPreviewControlRequest::HydrateState {
+        EditorPreviewControlRequest::HydrateModelState {
+            model,
             state,
             level_index,
             materialize_level_start,
+            presentation,
             ..
         } => usize::try_from(level_index)
             .map_err(|_| "editor preview level index is out of range".to_string())
             .and_then(|level_index| {
-                host.hydrate_editor_state(
-                    &state.to_string(),
+                host.hydrate_editor_model_state(
+                    &model,
+                    &state,
                     level_index,
                     materialize_level_start,
+                    presentation,
                     now_seconds,
                 )
                 .map_err(|error| error.to_string())
@@ -117,8 +121,14 @@ fn apply_editor_control(
                     .map(|state| (state, level_index))
             })
             .and_then(|(state, level_index)| {
-                host.hydrate_editor_draft_state(&state, level_index, presentation, now_seconds)
-                    .map_err(|error| error.to_string())
+                host.hydrate_editor_draft_state(
+                    &model,
+                    &state,
+                    level_index,
+                    presentation,
+                    now_seconds,
+                )
+                .map_err(|error| error.to_string())
             })
             .and_then(|()| inspect_host(host))
             .map(|snapshot| AppliedEditorControl::State {
@@ -523,7 +533,7 @@ P.
     }
 
     #[test]
-    fn hydration_updates_the_snapshot_observed_by_the_same_bevy_host() {
+    fn typed_model_hydration_updates_the_snapshot_observed_by_the_same_bevy_host() {
         let mut host =
             PuzzleBevyPlayerHost::from_image_free_source(SOURCE, "editor_bevy_host.puzzle")
                 .expect("editor fixture should initialize");
@@ -532,9 +542,10 @@ P.
         let observation = apply_editor_control(
             &mut host,
             &document(),
-            EditorPreviewControlRequest::HydrateState {
+            EditorPreviewControlRequest::HydrateModelState {
                 command_id: 9,
-                state: serde_json::json!({
+                model: "default".to_string(),
+                state: serde_json::from_value(serde_json::json!({
                     "kind": "2d",
                     "width": 2,
                     "height": 1,
@@ -542,9 +553,18 @@ P.
                     "slots": [0, 1],
                     "variables": [],
                     "levelFiredRules": [],
-                }),
+                }))
+                .expect("typed editor state"),
                 level_index: 0,
                 materialize_level_start: false,
+                presentation: puzzle_editor_preview_contract::EditorAuthoringPresentation {
+                    surface: puzzle_editor_preview_contract::EditorAuthoringSurface {
+                        surface_id: "preview".to_string(),
+                        interaction:
+                            puzzle_editor_preview_contract::EditorAuthoringInteraction::Observe,
+                    },
+                    renderer: puzzle_editor_preview_contract::EditorRendererStrategy::Grid2d,
+                },
             },
             0.0,
         );

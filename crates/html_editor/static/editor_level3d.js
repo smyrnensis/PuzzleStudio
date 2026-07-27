@@ -2379,7 +2379,7 @@ function renderLevel3dRuntime() {
   const surfaceId = layer ? "level-authoring-layer" : "level-authoring-stage";
   const host = layer
     ? level3dLayerBoard
-    : level3dBuilder?.querySelector(".level3d-frame-surface");
+    : document.querySelector("#level3dStageRuntimeMount");
   const selected = level3dSelectedEntry();
   const resize = level3dStageResizeMode();
   const interaction = level3dPlaytestActive
@@ -2404,7 +2404,14 @@ function renderLevel3dRuntime() {
         .slice(0, level3d.width);
       for (let x = 0; x < level3d.width; x += 1) {
         const entry = level3d.palette.find((candidate) => candidate.char === row[x]);
-        const objectIds = Array.isArray(entry?.objectIds) ? [...entry.objectIds] : [];
+        if (!entry || !Array.isArray(entry.objectIds)) {
+          setLevel3dActionStatus(
+            `3D level cell (${x}, ${y}, ${z}) has no typed legend identity for ${JSON.stringify(row[x])}.`,
+            "is-error",
+          );
+          return;
+        }
+        const objectIds = [...entry.objectIds];
         cells.push({ position: { x, y, z }, objectIds });
       }
     }
@@ -2421,24 +2428,11 @@ function renderLevel3dRuntime() {
     },
     presentation: {
       surface: { surfaceId, interaction },
-      renderer: {
-        kind: "grid3d",
+      renderer: level3dEditorRendererStrategy(exportData, {
+        camera,
+        origin,
         sliceZ: layer ? currentLevel3dLayerZ() : null,
-        hiddenLayers: [],
-        camera: {
-          projection: camera.projection,
-          yawDegrees: camera.yawDegrees,
-          pitchDegrees: camera.pitchDegrees,
-          rollDegrees: camera.rollDegrees,
-          zoom: camera.zoom,
-        },
-        view: { target: { x: origin.x, y: origin.y, z: origin.z } },
-        settings: {
-          gridVisible: level3d.previewFrames,
-          occupiedCellFrames: level3d.previewFrames,
-          stageFrame: level3d.previewFrames,
-        },
-      },
+      }),
     },
   };
   queueEditorRuntimeDisplay({
@@ -3252,6 +3246,29 @@ function level3dPreviewOriginState() {
     z: level3dClampNumber(level3dPreviewOrigin?.z, -128, 128),
   };
   return level3dPreviewOrigin;
+}
+
+function level3dEditorRendererStrategy(exportData = previewBuild?.exportData, options = {}) {
+  const camera = options.camera || level3dPreviewCamera(exportData);
+  const origin = options.origin || level3dPreviewOriginState();
+  return {
+    kind: "grid3d",
+    sliceZ: Number.isInteger(options.sliceZ) ? options.sliceZ : null,
+    hiddenLayers: [],
+    camera: {
+      projection: camera.projection,
+      yawDegrees: camera.yawDegrees,
+      pitchDegrees: camera.pitchDegrees,
+      rollDegrees: camera.rollDegrees,
+      zoom: camera.zoom,
+    },
+    view: { target: { x: origin.x, y: origin.y, z: origin.z } },
+    settings: {
+      gridVisible: level3d.previewFrames,
+      occupiedCellFrames: level3d.previewFrames,
+      stageFrame: level3d.previewFrames,
+    },
+  };
 }
 
 function level3dProjectedBoundsUnit(size, camera) {

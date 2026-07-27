@@ -59,6 +59,7 @@ pub(crate) fn level_editor_manifest_json(
         "version": CONTRACT_VERSION,
         "kind": "puzzle2d-level-editor",
         "objects": objects,
+        "visualOrder": parsed.catalog.visual_order,
         "legend": legend_value(parsed, &parsed.catalog.char_objects),
         "levels": levels,
         "diagnostics": parsed.diagnostics,

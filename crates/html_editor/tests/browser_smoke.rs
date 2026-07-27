@@ -1,7 +1,10 @@
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    sync::Mutex,
 };
+
+static BROWSER_SMOKE_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn editor_browser_smoke_flows() {
@@ -11,6 +14,16 @@ fn editor_browser_smoke_flows() {
 #[test]
 fn initial_preview_starts_without_waiting_for_source_analysis() {
     run_editor_browser_smoke(&["--initial-preview-only"]);
+}
+
+#[test]
+fn solver_observations_render_through_bevy() {
+    run_editor_browser_smoke(&["--solver-bevy-only"]);
+}
+
+#[test]
+fn retired_runtime_generation_cannot_mutate_current_controller() {
+    run_editor_browser_smoke(&["--stale-runtime-generation-only"]);
 }
 
 #[test]
@@ -44,6 +57,9 @@ fn level_selection_waits_for_current_revision_entries() {
 }
 
 fn run_editor_browser_smoke(extra_args: &[&str]) {
+    let _browser_smoke_guard = BROWSER_SMOKE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)

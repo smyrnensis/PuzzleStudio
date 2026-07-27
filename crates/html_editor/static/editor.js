@@ -2339,12 +2339,20 @@ function syncPreviewDebugState() {
     setStatus("Preview debug trace is missing its Rust-projected state.", "is-error");
     return;
   }
-  postEditorPreviewCommand("hydrateState", {
+  const exportData = currentPreviewExportData();
+  postEditorPreviewCommand("hydrateModelState", {
+    model: editorModelName(exportData),
     state,
     levelIndex: Number.isInteger(Number(previewDebugSnapshot?.levelIndex))
       ? Math.trunc(Number(previewDebugSnapshot.levelIndex))
       : previewSession?.state?.levelIndex ?? currentEditableLevelIndex(previewBuild?.exportData),
     materializeLevelStart: false,
+    presentation: editorRuntimePresentationForState(
+      state,
+      "preview",
+      { kind: "observe" },
+      exportData,
+    ),
   });
 }
 
@@ -2458,8 +2466,8 @@ let nextEditorPreviewCommandId = 1;
 function editorPreviewCommand(kind, payload = {}) {
   const commandId = nextEditorPreviewCommandId++;
   switch (kind) {
-    case "hydrateState":
-      return { type: "hydrateState", commandId, ...payload };
+    case "hydrateModelState":
+      return { type: "hydrateModelState", commandId, ...payload };
     case "hydrateDraft":
       return { type: "hydrateDraft", commandId, ...payload };
     case "editorPointer":
@@ -2663,16 +2671,18 @@ function loadEditorRuntimeController(controller, html, buildId) {
   controller.displayKey = "";
   controller.pending = null;
   controller.resolveReady?.(false);
+  controller.resolveLoaded?.(false);
   controller.readyPromise = new Promise((resolve) => {
     controller.resolveReady = resolve;
   });
+  let resolveLoaded = null;
   controller.loadedPromise = new Promise((resolve) => {
+    resolveLoaded = resolve;
     controller.resolveLoaded = resolve;
   });
   controller.loadId += 1;
   const loadId = controller.loadId;
-  const previousFrame = controller.frame;
-  const nextFrame = previousFrame.cloneNode(false);
+  const nextFrame = controller.frame.cloneNode(false);
   nextFrame.removeAttribute("id");
   nextFrame.setAttribute("aria-hidden", "true");
   nextFrame.style.visibility = "hidden";
@@ -2680,22 +2690,21 @@ function loadEditorRuntimeController(controller, html, buildId) {
   controller.frame = nextFrame;
   if (nextFrame.contentWindow) {
     previewRuntimeAssetWindows.add(nextFrame.contentWindow);
-    editorRuntimeControllerByWindow.set(nextFrame.contentWindow, controller);
+    editorRuntimeControllerByWindow.set(nextFrame.contentWindow, { controller, loadId });
   }
   nextFrame.addEventListener("load", () => {
     if (controller.loadId !== loadId) {
-      previewRuntimeAssetWindows.delete(nextFrame.contentWindow);
-      nextFrame.remove();
-      controller.resolveLoaded?.(false);
-      controller.resolveLoaded = null;
+      retireEditorRuntimeFrame(nextFrame);
+      resolveLoaded(false);
       return;
     }
-    previewRuntimeAssetWindows.delete(previousFrame.contentWindow);
-    editorRuntimeControllerByWindow.delete(previousFrame.contentWindow);
+    for (const frame of controller.surface.querySelectorAll("iframe")) {
+      if (frame !== nextFrame) {
+        retireEditorRuntimeFrame(frame);
+      }
+    }
     nextFrame.removeAttribute("aria-hidden");
     nextFrame.style.visibility = "";
-    previousFrame.removeAttribute("id");
-    previousFrame.remove();
     controller.frame = nextFrame;
     if (controller.surfaceId === "preview") {
       editorRuntimeFrame = nextFrame;
@@ -2704,10 +2713,22 @@ function loadEditorRuntimeController(controller, html, buildId) {
     }
     controller.buildId = buildId;
     controller.loadingBuildId = "";
-    controller.resolveLoaded?.(true);
-    controller.resolveLoaded = null;
+    resolveLoaded(true);
+    if (controller.resolveLoaded === resolveLoaded) {
+      controller.resolveLoaded = null;
+    }
   }, { once: true });
   nextFrame.srcdoc = html;
+}
+
+function retireEditorRuntimeFrame(frame) {
+  if (!frame) {
+    return;
+  }
+  previewRuntimeAssetWindows.delete(frame.contentWindow);
+  editorRuntimeControllerByWindow.delete(frame.contentWindow);
+  frame.removeAttribute("id");
+  frame.remove();
 }
 
 async function ensureEditorRuntimeController(host, surfaceId, role) {
@@ -2804,6 +2825,30 @@ function editorModelName(exportData = previewBuild?.exportData) {
 
 function editorDraftSurface(interaction, surfaceId) {
   return { surfaceId, interaction };
+}
+
+function editorRuntimePresentationForState(
+  state,
+  surfaceId,
+  interaction,
+  exportData = previewBuild?.exportData,
+) {
+  if (state?.kind === "2d") {
+    return {
+      surface: editorDraftSurface(interaction, surfaceId),
+      renderer: { kind: "grid2d" },
+    };
+  }
+  if (state?.kind === "3d") {
+    if (typeof level3dEditorRendererStrategy !== "function") {
+      throw new Error("The compiled 3D editor renderer presentation is unavailable.");
+    }
+    return {
+      surface: editorDraftSurface(interaction, surfaceId),
+      renderer: level3dEditorRendererStrategy(exportData),
+    };
+  }
+  throw new Error("Editor runtime state must declare kind 2d or 3d.");
 }
 
 function levelDraftState(exportData = currentLevelExportData()) {
@@ -4598,9 +4643,14 @@ async function loadLevelSourceEntry(source, entry, options = {}) {
   if (options.openPane !== false) {
     openPreviewModePane("edit");
   }
+  const modelName = String(entry?.params?.model || "").trim();
+  if (!modelName) {
+    reportLevelSourceLoadFailure("Level source target is missing its compiled model identity.", options);
+    return null;
+  }
   let exportData = null;
   try {
-    exportData = await levelEditorSourceExportData(source);
+    exportData = await levelEditorSourceExportData(source, modelName);
   } catch (error) {
     reportLevelSourceLoadFailure(
       `Could not load level editor source contract: ${userFacingRuntimeError(error)}`,
@@ -4611,7 +4661,7 @@ async function loadLevelSourceEntry(source, entry, options = {}) {
   return loadLevelSourceEntryWithExportData(source, entry, exportData, loadOptions);
 }
 
-async function levelEditorSourceExportData(source) {
+async function levelEditorSourceExportData(source, modelName) {
   if (typeof window.PuzzleStudioRuntime?.levelEditorSourceSession !== "function") {
     throw new Error("Editor WASM function is missing: levelEditorSourceSession");
   }
@@ -4633,9 +4683,10 @@ async function levelEditorSourceExportData(source) {
     || new Set(objects.map((object) => object.id)).size !== objects.length) {
     throw new Error("Level editor source contract contains invalid object identities");
   }
-  applyLevelEditorContractVisuals(session, objects);
+  applyLevelEditorContractVisuals(session, objects, contract.visualOrder);
   return {
     __kind: "puzzle2d",
+    modelName,
     source,
     editorSourceContract: contract,
     editorSourceSession: session,
@@ -4671,7 +4722,7 @@ function levelEditorContractState(level, slots) {
   };
 }
 
-function applyLevelEditorContractVisuals(session, objects) {
+function applyLevelEditorContractVisuals(session, objects, visualOrder) {
   ensureGameVisualRegistry();
   const aliases = {};
   const entries = {};
@@ -4684,7 +4735,11 @@ function applyLevelEditorContractVisuals(session, objects) {
     aliases[object.name] = visualName;
     entries[visualName] = payload;
   }
-  window.GameVisuals = window.PuzzleVisualRegistry.create({ aliases, entries });
+  window.GameVisuals = window.PuzzleVisualRegistry.create({
+    aliases,
+    entries,
+    order: visualOrder,
+  });
 }
 
 function loadLevelSourceEntryWithExportData(source, entry, exportData, options = {}) {
@@ -5820,11 +5875,18 @@ function queueSolverRuntimeState(display) {
     host: solverBoard,
     role: "solver",
     surfaceId: "solver-observation",
-    kind: "hydrateState",
+    kind: "hydrateModelState",
     payload: {
+      model: editorModelName(previewBuild?.exportData),
       state: display.state,
       levelIndex,
       materializeLevelStart: display.materializeLevelStart === true,
+      presentation: editorRuntimePresentationForState(
+        display.state,
+        "solver-observation",
+        { kind: "observe" },
+        previewBuild?.exportData,
+      ),
     },
     key: display.key,
     onError: (error) => setLevelSolveStatus(`Solver display failed: ${userFacingRuntimeError(error)}`, "is-error"),
@@ -6868,10 +6930,15 @@ function sendLevelStateToPreview(levelIndex = currentEditableLevelIndex(), state
   }
   previewFrameHasEditorLevelState = true;
   const materializeLevelStart = options.materializeLevelStart ?? (currentPreviewMode === "play" || levelPlaytestActive);
-  postEditorPreviewCommand("hydrateState", {
+  const interaction = materializeLevelStart
+    ? { kind: "play" }
+    : { kind: "observe" };
+  postEditorPreviewCommand("hydrateModelState", {
+    model: editorModelName(exportData),
     levelIndex,
     state,
     materializeLevelStart,
+    presentation: editorRuntimePresentationForState(state, "preview", interaction, exportData),
   });
 }
 
@@ -8845,10 +8912,15 @@ workbench.addEventListener("dragleave", (event) => {
   }
 });
 window.addEventListener("message", (event) => {
-  const controller = editorRuntimeControllerByWindow.get(event.source);
-  if (!controller || event.origin !== window.location.origin) {
+  const runtimeSource = editorRuntimeControllerByWindow.get(event.source);
+  if (
+    !runtimeSource
+    || runtimeSource.loadId !== runtimeSource.controller.loadId
+    || event.origin !== window.location.origin
+  ) {
     return;
   }
+  const controller = runtimeSource.controller;
   const fromSolverRuntime = controller.role === "solver";
   if (event.data?.type === "PuzzleStudioEditorPointer") {
     dispatchEditorAuthoringPointer(controller, event.data);
