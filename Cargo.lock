@@ -3763,7 +3763,6 @@ dependencies = [
  "puzzle-runtime-contract",
  "puzzle-scene",
  "puzzle-session-contract",
- "puzzle-solver-runtime",
  "puzzle-workspace",
  "serde",
  "serde_json",

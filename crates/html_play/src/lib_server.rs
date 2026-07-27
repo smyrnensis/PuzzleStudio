@@ -329,7 +329,6 @@ enum AppError {
     #[cfg(not(target_arch = "wasm32"))]
     Io(io::Error),
     Lang(DiagnosticReport),
-    CoreTransition(puzzle_core::TransitionError),
     Config(String),
 }
 
@@ -343,11 +342,5 @@ impl From<io::Error> for AppError {
 impl From<DiagnosticReport> for AppError {
     fn from(value: DiagnosticReport) -> Self {
         Self::Lang(value)
-    }
-}
-
-impl From<puzzle_core::TransitionError> for AppError {
-    fn from(value: puzzle_core::TransitionError) -> Self {
-        Self::CoreTransition(value)
     }
 }

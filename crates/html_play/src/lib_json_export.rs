@@ -479,59 +479,6 @@ fn push_state_data(out: &mut String, state: &State) {
     );
 }
 
-fn push_state2_cells(out: &mut String, state: &State, before: Option<&State>) {
-    out.push('[');
-    let mut first = true;
-    for y in 0..state.height {
-        for x in 0..state.width {
-            let cell = usize::from(y) * usize::from(state.width) + usize::from(x);
-            if before.is_some_and(|before| state2_cell_slots_equal(before, state, cell)) {
-                continue;
-            }
-            let mut objects = Vec::new();
-            for layer in 0..state.layer_count {
-                let slot = (cell * usize::from(state.layer_count)) + usize::from(layer);
-                let object = state.slots()[slot];
-                if !object.is_empty() {
-                    objects.push(object.0);
-                }
-            }
-            if before.is_none() && objects.is_empty() {
-                continue;
-            }
-            if !first {
-                out.push(',');
-            }
-            first = false;
-            out.push('{');
-            push_json_number(out, "x", x as u64);
-            out.push(',');
-            push_json_number(out, "y", y as u64);
-            out.push_str(",\"objects\":[");
-            for (index, object) in objects.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push_str(&object.to_string());
-            }
-            out.push_str("]}");
-        }
-    }
-    out.push(']');
-}
-
-fn state2_cell_slots_equal(before: &State, after: &State, cell: usize) -> bool {
-    if before.width != after.width
-        || before.height != after.height
-        || before.layer_count != after.layer_count
-    {
-        return false;
-    }
-    let layer_count = usize::from(after.layer_count);
-    let start = cell * layer_count;
-    before.slots()[start..start + layer_count] == after.slots()[start..start + layer_count]
-}
-
 fn push_pattern(out: &mut String, pattern: &Pattern) {
     out.push_str("\"pattern\":{\"components\":[");
     for (component_index, component) in pattern.components.iter().enumerate() {

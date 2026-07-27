@@ -4,10 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 
-[features]
-default = ["solver"]
-solver = ["dep:puzzle-solver-runtime", "puzzle-game-runtime/solver-session"]
-
 [[bin]]
 name = "html-play"
 path = "src/main.rs"
@@ -24,7 +20,6 @@ puzzle-session-contract = { path = "../session_contract" }
 puzzle-play = { path = "../play" }
 puzzle-presentation = { path = "../presentation" }
 puzzle-presentation-json = { path = "../presentation_json" }
-puzzle-solver-runtime = { path = "../solver_runtime", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
