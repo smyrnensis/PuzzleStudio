@@ -634,22 +634,11 @@ fn export_bevy_document_html(
     Ok(bevy_export_html(&runtime_export, runtime_wasm))
 }
 
-fn document_uses_puzzle3_renderer(document: &puzzle_lang::LoadedDocument) -> bool {
-    document
-        .models
-        .iter()
-        .any(|model| matches!(model, LoadedDocumentModel::Puzzle3d { .. }))
-}
-
 pub fn export_html_from_source(
     source: &str,
     puzzle_path: &str,
 ) -> Result<String, DiagnosticReport> {
-    export_html_from_source_with_host_mode(
-        source,
-        puzzle_path,
-        StandaloneHostMode::Export,
-    )
+    export_html_from_source_with_host_mode(source, puzzle_path, StandaloneHostMode::Export)
 }
 
 pub fn export_html_from_source_with_embedded_wasm(
@@ -714,11 +703,7 @@ pub fn export_editor_preview_html_from_source(
     source: &str,
     puzzle_path: &str,
 ) -> Result<String, DiagnosticReport> {
-    export_html_from_source_with_host_mode(
-        source,
-        puzzle_path,
-        StandaloneHostMode::EditorPreview,
-    )
+    export_html_from_source_with_host_mode(source, puzzle_path, StandaloneHostMode::EditorPreview)
 }
 
 pub fn export_editor_preview_html_from_document(

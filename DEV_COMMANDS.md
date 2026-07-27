@@ -62,9 +62,10 @@ tools/generate_web_editor.sh -o docs/index.html
 
 ## Tauri Desktop Shell
 
-The editor frontend keeps runtime renderer assets as generated distribution
-copies. After editing `crates/html_play/static/renderer.js` or
-`crates/html_play/static/renderer.css`, sync the Tauri static copy:
+The editor frontend keeps its shared authoring presentation assets as generated
+distribution copies. After editing `crates/html_play/static/renderer.css`,
+`crates/html_play/static/visual_tween_core.js`, or
+`crates/html_play/static/puzzle3_visual_core.js`, sync the Tauri static copies:
 
 ```bash
 tools/sync_static_assets.sh
