@@ -271,6 +271,7 @@ pub struct PuzzleBevyCamera {
     pub pitch_degrees: f32,
     pub roll_degrees: f32,
     pub distance_scale: f32,
+    pub target: Option<Vec3>,
 }
 
 impl Default for PuzzleBevyCamera {
@@ -281,6 +282,7 @@ impl Default for PuzzleBevyCamera {
             pitch_degrees: 35.0,
             roll_degrees: 0.0,
             distance_scale: 2.8,
+            target: None,
         }
     }
 }
@@ -307,8 +309,84 @@ impl PuzzleBevyCamera {
                 field: "distance_scale",
             });
         }
+        if self.target.is_some_and(|target| !target.is_finite()) {
+            return Err(BevyRenderError::InvalidCamera { field: "target" });
+        }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PuzzleBevyCameraRay {
+    pub origin: Vec3,
+    pub direction: Vec3,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PuzzleBevyCameraGeometry {
+    radius: f32,
+    transform: Transform,
+}
+
+pub fn puzzle_bevy_camera_ray(
+    camera: &PuzzleBevyCamera,
+    bounds: PreparedBounds,
+    normalized_from_top: Vec2,
+    aspect_ratio: f32,
+) -> Result<PuzzleBevyCameraRay, BevyRenderError> {
+    camera.validate()?;
+    if !normalized_from_top.is_finite()
+        || !(0.0..=1.0).contains(&normalized_from_top.x)
+        || !(0.0..=1.0).contains(&normalized_from_top.y)
+    {
+        return Err(BevyRenderError::InvalidCamera { field: "pointer" });
+    }
+    if !aspect_ratio.is_finite() || aspect_ratio <= 0.0 {
+        return Err(BevyRenderError::InvalidCamera {
+            field: "aspect_ratio",
+        });
+    }
+    let geometry = puzzle_bevy_camera_geometry(camera, bounds);
+    let ndc = Vec2::new(
+        normalized_from_top.x * 2.0 - 1.0,
+        1.0 - normalized_from_top.y * 2.0,
+    );
+    match camera.projection {
+        PuzzleCameraProjection::Perspective => {
+            let projection = PerspectiveProjection::default();
+            let tan_half_fov = (projection.fov * 0.5).tan();
+            let view_direction = Vec3::new(
+                ndc.x * aspect_ratio * tan_half_fov,
+                ndc.y * tan_half_fov,
+                -1.0,
+            )
+            .normalize();
+            Ok(PuzzleBevyCameraRay {
+                origin: geometry.transform.translation,
+                direction: geometry.transform.rotation * view_direction,
+            })
+        }
+        PuzzleCameraProjection::Orthographic => {
+            let visible_height = geometry.radius * 2.5;
+            let view_origin = Vec3::new(
+                ndc.x * visible_height * aspect_ratio * 0.5,
+                ndc.y * visible_height * 0.5,
+                0.0,
+            );
+            Ok(PuzzleBevyCameraRay {
+                origin: geometry.transform.transform_point(view_origin),
+                direction: geometry.transform.rotation * -Vec3::Z,
+            })
+        }
+    }
+}
+
+pub fn puzzle_visual_point_to_bevy(point: Vec3) -> Vec3 {
+    visual_to_bevy_basis().transform_point3(point)
+}
+
+pub fn puzzle_bevy_point_to_visual(point: Vec3) -> Vec3 {
+    visual_to_bevy_basis().inverse().transform_point3(point)
 }
 
 #[derive(Clone, Debug)]
@@ -1387,20 +1465,9 @@ fn update_3d_view_entities(
     bounds: PreparedBounds,
     render_layers: RenderLayers,
 ) {
-    let target = bounds.center();
-    let radius = (bounds.extent().length() * 0.5).max(0.75);
-    let yaw = view.camera.yaw_degrees.to_radians();
-    let pitch = view.camera.pitch_degrees.to_radians();
-    let direction = Vec3::new(
-        yaw.sin() * pitch.cos(),
-        pitch.sin(),
-        yaw.cos() * pitch.cos(),
-    )
-    .normalize_or_zero();
-    let mut transform =
-        Transform::from_translation(target + direction * radius * view.camera.distance_scale);
-    transform.look_at(target, Vec3::Y);
-    transform.rotate_local_z(view.camera.roll_degrees.to_radians());
+    let geometry = puzzle_bevy_camera_geometry(&view.camera, bounds);
+    let radius = geometry.radius;
+    let transform = geometry.transform;
     let projection = match view.camera.projection {
         PuzzleCameraProjection::Perspective => {
             Projection::Perspective(PerspectiveProjection::default())
@@ -1450,6 +1517,27 @@ fn update_3d_view_entities(
         lighting_transform(&view.lighting),
         render_layers,
     ));
+}
+
+fn puzzle_bevy_camera_geometry(
+    camera: &PuzzleBevyCamera,
+    bounds: PreparedBounds,
+) -> PuzzleBevyCameraGeometry {
+    let target = camera.target.unwrap_or_else(|| bounds.center());
+    let radius = (bounds.extent().length() * 0.5).max(0.75);
+    let yaw = camera.yaw_degrees.to_radians();
+    let pitch = camera.pitch_degrees.to_radians();
+    let direction = Vec3::new(
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    )
+    .normalize_or_zero();
+    let mut transform =
+        Transform::from_translation(target + direction * radius * camera.distance_scale);
+    transform.look_at(target, Vec3::Y);
+    transform.rotate_local_z(camera.roll_degrees.to_radians());
+    PuzzleBevyCameraGeometry { radius, transform }
 }
 
 fn material_for(
@@ -2095,6 +2183,38 @@ mod tests {
             }
         );
         assert!(queue.pending.is_empty());
+    }
+
+    #[test]
+    fn camera_ray_uses_the_same_target_and_projection_geometry_as_rendering() {
+        let visual_point = Vec3::new(3.0, 4.0, 5.0);
+        assert!(
+            puzzle_bevy_point_to_visual(puzzle_visual_point_to_bevy(visual_point))
+                .distance(visual_point)
+                < 0.000_01
+        );
+        let bounds = PreparedBounds {
+            min: Vec3::new(-1.0, -2.0, -3.0),
+            max: Vec3::new(1.0, 2.0, 3.0),
+        };
+        let camera = PuzzleBevyCamera {
+            target: Some(Vec3::new(2.0, 1.0, -1.0)),
+            ..PuzzleBevyCamera::default()
+        };
+        let ray = puzzle_bevy_camera_ray(&camera, bounds, Vec2::splat(0.5), 16.0 / 9.0)
+            .expect("center pointer must produce a camera ray");
+        let target = camera.target.unwrap();
+        let expected = (target - ray.origin).normalize();
+        assert!(ray.direction.distance(expected) < 0.000_01);
+
+        let mut orthographic = camera;
+        orthographic.projection = PuzzleCameraProjection::Orthographic;
+        let left =
+            puzzle_bevy_camera_ray(&orthographic, bounds, Vec2::new(0.25, 0.5), 1.0).unwrap();
+        let right =
+            puzzle_bevy_camera_ray(&orthographic, bounds, Vec2::new(0.75, 0.5), 1.0).unwrap();
+        assert!(left.direction.distance(right.direction) < 0.000_01);
+        assert!(left.origin.distance(right.origin) > 0.1);
     }
 
     #[test]

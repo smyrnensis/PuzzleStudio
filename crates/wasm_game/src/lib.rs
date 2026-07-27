@@ -9,7 +9,7 @@
 
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
-use bevy::prelude::{NonSend, NonSendMut, Res, Time};
+use bevy::prelude::{NonSend, NonSendMut, Res, Time, Vec2};
 use puzzle_bevy_player::PuzzleBevyPlayerHost;
 use puzzle_editor_preview_contract::{EditorPreviewControlRequest, EditorPreviewObservation};
 use serde_json::{Map, Value};
@@ -34,6 +34,7 @@ struct EditorPreviewBridge {
     requests: Rc<RefCell<VecDeque<EditorPreviewControlRequest>>>,
     observations: Rc<RefCell<VecDeque<QueuedEditorPreviewObservation>>>,
     ready_pending: Rc<RefCell<bool>>,
+    last_authoring_frame_revision: Rc<RefCell<Option<u64>>>,
 }
 
 struct EditorPreviewDocument(puzzle_lang::LoadedDocument);
@@ -62,6 +63,18 @@ fn editor_state_fields(state: Value) -> Result<Map<String, Value>, String> {
         .ok_or_else(|| "editor preview state projection must be a JSON object".to_string())
 }
 
+enum AppliedEditorControl {
+    State {
+        snapshot: Value,
+        trace: Option<Value>,
+    },
+    AuthoringHit {
+        surface_id: String,
+        frame_revision: u64,
+        hit: Option<puzzle_editor_preview_contract::EditorAuthoringHitTarget>,
+    },
+}
+
 fn apply_editor_control(
     host: &mut PuzzleBevyPlayerHost,
     document: &puzzle_lang::LoadedDocument,
@@ -87,12 +100,15 @@ fn apply_editor_control(
                 .map_err(|error| error.to_string())
             })
             .and_then(|()| inspect_host(host))
-            .map(|snapshot| (snapshot, None)),
+            .map(|snapshot| AppliedEditorControl::State {
+                snapshot,
+                trace: None,
+            }),
         EditorPreviewControlRequest::HydrateDraft {
             model,
             level_index,
             draft,
-            presentation: _,
+            presentation,
             ..
         } => usize::try_from(level_index)
             .map_err(|_| "editor preview level index is out of range".to_string())
@@ -101,16 +117,40 @@ fn apply_editor_control(
                     .map(|state| (state, level_index))
             })
             .and_then(|(state, level_index)| {
-                serde_json::to_string(&state)
-                    .map_err(|error| format!("editor draft state serialization failed: {error}"))
-                    .map(|state| (state, level_index))
-            })
-            .and_then(|(state, level_index)| {
-                host.hydrate_editor_state(&state, level_index, false, now_seconds)
+                host.hydrate_editor_draft_state(&state, level_index, presentation, now_seconds)
                     .map_err(|error| error.to_string())
             })
             .and_then(|()| inspect_host(host))
-            .map(|snapshot| (snapshot, None)),
+            .map(|snapshot| AppliedEditorControl::State {
+                snapshot,
+                trace: None,
+            }),
+        EditorPreviewControlRequest::EditorPointer {
+            surface_id,
+            committed_frame_revision,
+            x_css,
+            y_css,
+            gesture,
+            ..
+        } => {
+            let point_css = Vec2::new(x_css as f32, y_css as f32);
+            if !point_css.is_finite() {
+                Err("editor pointer coordinates must fit finite CSS coordinates".to_string())
+            } else {
+                host.dispatch_editor_pointer(
+                    &surface_id,
+                    committed_frame_revision,
+                    point_css,
+                    gesture,
+                )
+                .map_err(|error| error.to_string())
+                .map(|(frame_revision, hit)| AppliedEditorControl::AuthoringHit {
+                    surface_id,
+                    frame_revision,
+                    hit,
+                })
+            }
+        }
         EditorPreviewControlRequest::SyntheticKey {
             key,
             alt_key,
@@ -130,22 +170,37 @@ fn apply_editor_control(
                 Some(trigger) => host
                     .dispatch_editor_key(trigger, trace, now_seconds)
                     .map_err(|error| error.to_string())
-                    .and_then(|trace| inspect_host(host).map(|snapshot| (snapshot, trace))),
-                None => inspect_host(host).map(|snapshot| (snapshot, None)),
+                    .and_then(|trace| {
+                        inspect_host(host)
+                            .map(|snapshot| AppliedEditorControl::State { snapshot, trace })
+                    }),
+                None => inspect_host(host).map(|snapshot| AppliedEditorControl::State {
+                    snapshot,
+                    trace: None,
+                }),
             }
         }
         EditorPreviewControlRequest::RequestSnapshot { .. } => {
-            inspect_host(host).map(|snapshot| (snapshot, None))
+            inspect_host(host).map(|snapshot| AppliedEditorControl::State {
+                snapshot,
+                trace: None,
+            })
         }
     };
 
     match result {
-        Ok((state, Some(trace))) => EditorPreviewObservation::DebugTrace {
+        Ok(AppliedEditorControl::State {
+            snapshot,
+            trace: Some(trace),
+        }) => EditorPreviewObservation::DebugTrace {
             command_id,
             debug: trace,
-            snapshot: state,
+            snapshot,
         },
-        Ok((state, None)) => match editor_state_fields(state) {
+        Ok(AppliedEditorControl::State {
+            snapshot,
+            trace: None,
+        }) => match editor_state_fields(snapshot) {
             Ok(state) => EditorPreviewObservation::State {
                 command_id: Some(command_id),
                 state,
@@ -155,6 +210,16 @@ fn apply_editor_control(
                 label: "state projection failed",
                 message,
             },
+        },
+        Ok(AppliedEditorControl::AuthoringHit {
+            surface_id,
+            frame_revision,
+            hit,
+        }) => EditorPreviewObservation::EditorAuthoringHit {
+            command_id,
+            surface_id,
+            frame_revision,
+            hit,
         },
         Err(message) => EditorPreviewObservation::RuntimeError {
             command_id,
@@ -215,6 +280,21 @@ fn process_editor_preview_controls(
         }
     });
     bridge.observations.borrow_mut().extend(observations);
+    if let Some(frame) = host.editor_authoring_frame()
+        && *bridge.last_authoring_frame_revision.borrow() != Some(frame.revision)
+    {
+        *bridge.last_authoring_frame_revision.borrow_mut() = Some(frame.revision);
+        bridge
+            .observations
+            .borrow_mut()
+            .push_back(QueuedEditorPreviewObservation {
+                required_revision: Some(host.snapshot().revision),
+                observation: EditorPreviewObservation::EditorAuthoringFrame {
+                    surface_id: frame.surface_id.clone(),
+                    frame_revision: frame.revision,
+                },
+            });
+    }
     #[cfg(target_arch = "wasm32")]
     dispatch_committed_observations(&bridge, committed.latest().map(|value| value.revision));
 }
@@ -506,8 +586,16 @@ P.
                         }],
                     },
                 ),
-                presentation: puzzle_editor_preview_contract::EditorDraftPresentation::Grid2d {
-                    surface_id: "main".to_string(),
+                presentation: puzzle_editor_preview_contract::EditorAuthoringPresentation {
+                    surface: puzzle_editor_preview_contract::EditorAuthoringSurface {
+                        surface_id: "main".to_string(),
+                        interaction:
+                            puzzle_editor_preview_contract::EditorAuthoringInteraction::Paint {
+                                operation:
+                                    puzzle_editor_preview_contract::EditorPaintOperation::Replace,
+                            },
+                    },
+                    renderer: puzzle_editor_preview_contract::EditorRendererStrategy::Grid2d,
                 },
             },
             0.0,
@@ -574,6 +662,36 @@ P.
                 "commandId": 4,
                 "revision": 3,
                 "screen": "playing",
+            })
+        );
+
+        let observation = EditorPreviewObservation::EditorAuthoringFrame {
+            surface_id: "stage".to_string(),
+            frame_revision: 12,
+        };
+        assert_eq!(
+            serde_json::to_value(observation).unwrap(),
+            serde_json::json!({
+                "type": "PuzzleStudioEditorAuthoringFrame",
+                "surfaceId": "stage",
+                "frameRevision": 12,
+            })
+        );
+
+        let observation = EditorPreviewObservation::EditorAuthoringHit {
+            command_id: 5,
+            surface_id: "stage".to_string(),
+            frame_revision: 12,
+            hit: None,
+        };
+        assert_eq!(
+            serde_json::to_value(observation).unwrap(),
+            serde_json::json!({
+                "type": "PuzzleStudioEditorAuthoringHit",
+                "commandId": 5,
+                "surfaceId": "stage",
+                "frameRevision": 12,
+                "hit": null,
             })
         );
     }

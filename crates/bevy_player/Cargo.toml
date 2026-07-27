@@ -6,7 +6,12 @@ license.workspace = true
 
 [features]
 default = []
-editor-debug = ["puzzle-game-runtime/editor-debug", "dep:serde_json"]
+editor-debug = [
+    "puzzle-game-runtime/editor-debug",
+    "dep:puzzle-authoring",
+    "dep:puzzle-editor-preview-contract",
+    "dep:serde_json",
+]
 
 [dependencies]
 bevy = { version = "0.19", default-features = false, features = ["2d", "3d", "ui"] }
@@ -14,6 +19,8 @@ puzzle-assets = { path = "../assets" }
 puzzle-bevy-renderer = { path = "../bevy_renderer" }
 puzzle-audio = { path = "../audio" }
 puzzle-game-runtime = { path = "../game_runtime" }
+puzzle-authoring = { path = "../authoring", optional = true }
+puzzle-editor-preview-contract = { path = "../editor_preview_contract", optional = true }
 puzzle-lang = { path = "../lang" }
 puzzle-player-bootstrap = { path = "../player_bootstrap" }
 puzzle-presentation = { path = "../presentation" }
