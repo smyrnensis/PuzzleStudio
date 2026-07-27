@@ -132,6 +132,9 @@ pub struct RuntimeResolvedScene {
 pub struct RuntimeResolvedEventBinding {
     pub pointer: bool,
     pub keys: Vec<RuntimeKeyTrigger>,
+    /// The session-owned capability for dispatching this binding in the current
+    /// snapshot. `None` means the event remains declared but is currently
+    /// inactive, as with a modal covered by another modal.
     pub action: Option<RuntimeSceneActionToken>,
 }
 

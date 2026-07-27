@@ -139,10 +139,6 @@ pub enum BevyPlayerError {
         component: String,
         event: String,
     },
-    MissingAwaitedEventAction {
-        component: String,
-        event: String,
-    },
     InvalidCameraZoom {
         source: RuntimeViewportSourceId,
         zoom: f64,
@@ -217,10 +213,6 @@ impl fmt::Display for BevyPlayerError {
             Self::MissingAwaitedEvent { component, event } => write!(
                 formatter,
                 "component {component} awaits undeclared presentation event {event}"
-            ),
-            Self::MissingAwaitedEventAction { component, event } => write!(
-                formatter,
-                "component {component} awaited event {event} has no typed scene action token"
             ),
             Self::InvalidCameraZoom { source, zoom } => write!(
                 formatter,
@@ -685,18 +677,13 @@ fn projected_viewports(
         match &component.presentation {
             RuntimeComponentPresentation::Ready(scene) => {
                 if let Some(event_name) = &component.await_event {
-                    let binding = scene
+                    if scene
                         .events
                         .as_ref()
-                        .and_then(|events| events.get(event_name));
-                    let Some(binding) = binding else {
+                        .and_then(|events| events.get(event_name))
+                        .is_none()
+                    {
                         return Err(BevyPlayerError::MissingAwaitedEvent {
-                            component: component.id.clone(),
-                            event: event_name.clone(),
-                        });
-                    };
-                    if binding.action.is_none() {
-                        return Err(BevyPlayerError::MissingAwaitedEventAction {
                             component: component.id.clone(),
                             event: event_name.clone(),
                         });
@@ -3164,6 +3151,100 @@ level "start" { A }
     }
 
     #[test]
+    fn stacked_messages_keep_only_the_top_bevy_surface_actionable() {
+        let source = r#"
+const title = stacked_messages
+
+scene title {
+layout {
+choice "Start" -> {
+start playing
+}
+}
+}
+
+puzzle board {
+layers { actor = A }
+input noop
+rules {
+if input == noop {
+[ A ] -> [ A ]
+}
+}
+}
+
+levels {
+legend { A = A }
+level "start"
+message "first"
+message "second"
+A
+}
+
+scene playing {
+layout {
+puzzle board = board
+}
+rules {
+step board
+}
+}
+"#;
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(source, "stacked_messages.puzzle")
+                .unwrap();
+        host.dispatch_action(
+            SessionAction::Key {
+                trigger: RuntimeKeyTrigger::Enter,
+            },
+            0.0,
+        )
+        .expect("Bevy must accept an inactive covered modal");
+
+        let modals = host
+            .snapshot()
+            .surface
+            .components
+            .iter()
+            .filter(|component| component.modal)
+            .collect::<Vec<_>>();
+        assert_eq!(modals.len(), 2);
+        let RuntimeComponentPresentation::Ready(covered_scene) = &modals[0].presentation else {
+            panic!("covered message presentation must resolve");
+        };
+        assert!(
+            awaited_pointer_action(modals[0], covered_scene).is_none(),
+            "the covered Bevy surface must not receive a pointer action"
+        );
+        let covered_id = modals[0].id.clone();
+        let RuntimeComponentPresentation::Ready(top_scene) = &modals[1].presentation else {
+            panic!("top message presentation must resolve");
+        };
+        let top_action = awaited_pointer_action(modals[1], top_scene)
+            .expect("the top Bevy surface must receive the runtime-owned action")
+            .clone();
+
+        host.dispatch_action(SessionAction::SceneAction { token: top_action }, 0.0)
+            .unwrap();
+        let remaining = host
+            .snapshot()
+            .surface
+            .components
+            .iter()
+            .filter(|component| component.modal)
+            .collect::<Vec<_>>();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, covered_id);
+        let RuntimeComponentPresentation::Ready(scene) = &remaining[0].presentation else {
+            panic!("remaining message presentation must resolve");
+        };
+        assert!(
+            awaited_pointer_action(remaining[0], scene).is_some(),
+            "the next Bevy surface must become actionable after the top is dismissed"
+        );
+    }
+
+    #[test]
     fn authored_lighting_reaches_the_bevy_player_contract() {
         let source = TENETEN3D.replacen(
             "render {\n",
@@ -3483,6 +3564,22 @@ level "start" { A }
             projected_viewports(&snapshot, 0.0),
             Err(BevyPlayerError::ComponentPresentation { component, error })
                 if component == component_id && error == "unresolved title"
+        ));
+    }
+
+    #[test]
+    fn undeclared_awaited_events_still_fail_at_the_snapshot_boundary() {
+        let host =
+            PuzzleBevyPlayerHost::from_image_free_source(TENETEN, "games/TENETEN.puzzle").unwrap();
+        let mut snapshot = host.snapshot().clone();
+        let component = snapshot.surface.components.first_mut().unwrap();
+        let component_id = component.id.clone();
+        component.await_event = Some("missing".to_string());
+
+        assert!(matches!(
+            projected_viewports(&snapshot, 0.0),
+            Err(BevyPlayerError::MissingAwaitedEvent { component, event })
+                if component == component_id && event == "missing"
         ));
     }
 

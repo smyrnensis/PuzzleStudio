@@ -357,6 +357,34 @@ mod tests {
     }
 
     #[test]
+    fn inactive_event_binding_serializes_an_explicit_null_action_capability() {
+        let scene = RuntimeResolvedScene {
+            layout: SceneLayout::default(),
+            components: Vec::new(),
+            keys: None,
+            events: Some(BTreeMap::from([(
+                "dismiss".to_string(),
+                RuntimeResolvedEventBinding {
+                    pointer: true,
+                    keys: vec![RuntimeKeyTrigger::AnyInput],
+                    action: None,
+                },
+            )])),
+        };
+
+        let value = resolved_scene_to_value(&scene).unwrap();
+        let binding = &value["events"]["dismiss"];
+        assert!(
+            binding.get("actionToken").is_some(),
+            "inactive capability must remain distinct from a malformed missing wire field"
+        );
+        assert!(
+            binding["actionToken"].is_null(),
+            "inactive capability must serialize as explicit null"
+        );
+    }
+
+    #[test]
     fn two_dimensional_development_wire_requires_the_separate_debug_projection() {
         let player = RuntimeRendererState::TwoD(RuntimePuzzle2Snapshot {
             view: RuntimeResolvedView2d {

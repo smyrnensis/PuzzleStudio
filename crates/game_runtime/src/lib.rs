@@ -4382,6 +4382,96 @@ level "start" { A }
     }
 
     #[test]
+    fn stacked_messages_expose_only_the_top_action_and_transfer_it_on_dismiss() {
+        let source = r#"
+const title = stacked_messages
+
+scene title {
+layout {
+choice "Start" -> {
+start playing
+}
+}
+}
+
+puzzle board {
+layers { actor = A }
+input noop
+rules {
+if input == noop {
+[ A ] -> [ A ]
+}
+}
+}
+
+levels {
+legend { A = A }
+level "start"
+message "first"
+message "second"
+A
+}
+
+scene playing {
+layout {
+puzzle board = board
+}
+rules {
+step board
+}
+}
+"#;
+        let mut runtime = RuntimeSession::from_source(source, "stacked_messages.puzzle").unwrap();
+        let snapshot = runtime
+            .dispatch_typed(SessionAction::Key {
+                trigger: RuntimeKeyTrigger::Enter,
+            })
+            .unwrap();
+        let modals = snapshot
+            .surface
+            .components
+            .iter()
+            .filter(|component| component.modal)
+            .collect::<Vec<_>>();
+        assert_eq!(modals.len(), 2);
+
+        let dismiss_action = |component: &RuntimeSurfaceComponent| {
+            let RuntimeComponentPresentation::Ready(scene) = &component.presentation else {
+                panic!("message presentation must resolve");
+            };
+            scene
+                .events
+                .as_ref()
+                .and_then(|events| events.get(STANDARD_MESSAGE_DISMISS_EVENT))
+                .expect("message must declare its awaited dismiss event")
+                .action
+                .clone()
+        };
+        assert!(
+            dismiss_action(modals[0]).is_none(),
+            "the covered modal must remain visible without input authority"
+        );
+        let top_action =
+            dismiss_action(modals[1]).expect("the top modal must own the dismissal action");
+
+        let snapshot = runtime
+            .dispatch_typed(SessionAction::SceneAction { token: top_action })
+            .unwrap();
+        let remaining = snapshot
+            .surface
+            .components
+            .iter()
+            .filter(|component| component.modal)
+            .collect::<Vec<_>>();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, modals[0].id);
+        assert!(
+            dismiss_action(remaining[0]).is_some(),
+            "dismissing the top modal must transfer input authority to the next modal"
+        );
+    }
+
+    #[test]
     fn document_presentation_completion_preflights_all_waits_and_never_resumes_a_modal() {
         let source = r#"
 const title = document_wait_atomicity
