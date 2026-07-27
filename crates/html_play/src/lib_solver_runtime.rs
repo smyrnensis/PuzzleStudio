@@ -176,11 +176,6 @@ impl ServerState {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn snapshot_json(&self) -> Result<(String, usize), String> {
-        live_server_snapshot_json(self.runtime.development_snapshot())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     fn resolve_render_moment_json(&self, request_json: &[u8]) -> Result<String, String> {
         resolve_render_moment_request_json(&self.visual_images, request_json)
     }

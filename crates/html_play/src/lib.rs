@@ -16,8 +16,6 @@ use std::process::Command;
 use std::process::Stdio;
 #[cfg(any(not(target_arch = "wasm32"), feature = "solver"))]
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Mutex;
 #[cfg(any(feature = "solver", test))]
 use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
@@ -40,7 +38,7 @@ use puzzle_lang::{
     GoalCondition, GoalExpr, GoalValue, Level, LoadedDocumentModel, LoadedGame, RuleAnimation,
     RuleAnimationTrigger, SceneValue, parse_game2d as parse_game,
 };
-#[cfg(any(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 use puzzle_play::loaded_document_scene_host_loaded_game;
 use puzzle_play::{
     animation_events_contract_2d, animation_events_for_trace, scene_value_to_string,
@@ -90,9 +88,9 @@ mod tests {
     use serde_json::{Value, json};
 
     #[test]
-    fn live_server_render_moment_route_uses_a_strict_typed_request() {
-        let source = r#"
-const title = render_moment_route
+    fn static_server_serves_bevy_player_and_rejects_legacy_runtime_routes() {
+        let source_2d = r#"
+const title = static_bevy_server
 puzzle board {
   layers { item = A }
   rules { [ A ] -> [ A ] }
@@ -104,77 +102,99 @@ levels default of board {
   }
 }
 "#;
-        let document =
-            puzzle_lang::parse_game_for_path(source, "render_moment_route.puzzle").unwrap();
-        let loaded =
-            loaded_document_scene_host_loaded_game(&document).expect("select live server model");
-        let state = Arc::new(Mutex::new(ServerState::new(
-            document,
-            loaded,
-            DecodedVisualImageCatalog::default(),
-            "window.PuzzleAssets = { files: {} };".to_string(),
-            SolverConfig::default(),
-        )));
-        let assets = route(
+        let source_3d = r#"
+const title = static_bevy_server_3d
+puzzle cube {
+  dimension = 3
+  layers { item = A }
+  rules { }
+}
+levels default of cube {
+  legend { A = A }
+  level "first" {
+    A
+  }
+}
+"#;
+        let player_html = |source: &str, path: &str| {
+            let document =
+                puzzle_lang::parse_game_for_path(source, path).expect("compile server fixture");
+            export_bevy_document_html(&document, path, StandaloneRuntimeWasm::HostDefault)
+                .expect("build Bevy player page")
+        };
+        let html_2d = player_html(source_2d, "static_bevy_server.puzzle");
+        let html_3d = player_html(source_3d, "static_bevy_server_3d.puzzle");
+        let normalize_runtime_payload = |mut html: String| {
+            let prefix = "window.PuzzleRuntimeExportJson = \"";
+            let start = html.find(prefix).expect("runtime payload start") + prefix.len();
+            let end = html[start..]
+                .find("\";\n")
+                .map(|offset| start + offset)
+                .expect("runtime payload end");
+            html.replace_range(start..end, "<runtime-export>");
+            html
+        };
+        assert_eq!(
+            normalize_runtime_payload(html_2d.clone()),
+            normalize_runtime_payload(html_3d),
+            "2D and 3D serve pages must differ only in their typed runtime payload"
+        );
+
+        let response = route_static_html(
             &HttpRequest {
                 method: "GET".to_string(),
-                path: "/assets.js".to_string(),
-                body: Vec::new(),
+                path: "/".to_string(),
             },
-            Arc::clone(&state),
-        );
-        assert!(assets.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(assets.contains("window.PuzzleAssets = { files: {} };"));
-        for removed_path in ["/game.css", "/game.visuals.js"] {
-            let response = route(
-                &HttpRequest {
-                    method: "GET".to_string(),
-                    path: removed_path.to_string(),
-                    body: Vec::new(),
-                },
-                Arc::clone(&state),
-            );
-            assert!(response.starts_with("HTTP/1.1 404 Not Found\r\n"));
-        }
-        let request = json!({
-            "renderScene": {
-                "clips": [],
-                "instances": [],
-                "compositionGroups": [],
-                "cells": [],
-                "decorations": [],
-                "renderPriorityCount": 0,
-                "animationDurationMs": 0
-            },
-            "moment": {
-                "clipElapsedMs": 0,
-                "animationElapsedMs": 0,
-                "animations": []
-            }
-        });
-        let response = route(
-            &HttpRequest {
-                method: "POST".to_string(),
-                path: "/api/render-moment".to_string(),
-                body: serde_json::to_vec(&request).unwrap(),
-            },
-            Arc::clone(&state),
+            &html_2d,
         );
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(response.contains(r#""batches":[],"decorations":[],"continueAnimation":false"#));
+        assert!(response.contains(r#"<canvas id="puzzle-bevy""#));
+        assert!(response.contains("startStandalonePlayer"));
+        assert!(!response.contains(r#"<script src="/app.js""#));
+        assert!(!response.contains(r#"<script src="/renderer.js""#));
+        assert!(!response.contains("/api/state"));
+        assert!(!response.contains("/api/action"));
 
-        let mut invalid = request;
-        invalid["unexpected"] = json!(true);
-        let response = route(
-            &HttpRequest {
-                method: "POST".to_string(),
-                path: "/api/render-moment".to_string(),
-                body: serde_json::to_vec(&invalid).unwrap(),
-            },
-            state,
-        );
-        assert!(response.starts_with("HTTP/1.1 400 Bad Request\r\n"));
-        assert!(response.contains("unknown field `unexpected`"));
+        for (method, path) in [
+            ("GET", "/app.js"),
+            ("GET", "/renderer.js"),
+            ("GET", "/visual_tween_core.js"),
+            ("GET", "/game.css"),
+            ("GET", "/game.visuals.js"),
+            ("GET", "/api/state"),
+            ("POST", "/api/action"),
+            ("POST", "/api/render-moment"),
+            ("POST", "/api/solve"),
+        ] {
+            let response = route_static_html(
+                &HttpRequest {
+                    method: method.to_string(),
+                    path: path.to_string(),
+                },
+                &html_2d,
+            );
+            assert!(
+                response.starts_with("HTTP/1.1 404 Not Found\r\n"),
+                "{method} {path} unexpectedly remained reachable"
+            );
+        }
+
+        let server_source = include_str!("lib_server.rs");
+        for forbidden in [
+            "ServerState",
+            "APP_JS",
+            "RENDERER_JS",
+            "VISUAL_TWEEN_CORE_JS",
+            "\"/api/",
+        ] {
+            assert!(
+                !server_source.contains(forbidden),
+                "static server retained legacy dependency {forbidden}"
+            );
+        }
+        let cli_source = include_str!("lib_cli.rs");
+        assert!(!cli_source.contains("document_uses_puzzle3_renderer"));
+        assert!(!cli_source.contains("ServerState::new"));
     }
 
     #[test]
@@ -1439,36 +1459,6 @@ process.stdout.write(JSON.stringify({ aliased, duplicateAliases, ambiguous, unfo
         assert!(!APP_JS.contains("tickAudioConsumer"));
         assert!(!STANDALONE_JS.contains("audio_tick"));
         assert!(STANDALONE_JS.contains("console.error(`Audio consumer: ${diagnostic}`);"));
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn live_server_preserves_non_audio_events_and_rejects_audio_at_its_typed_boundary() {
-        use puzzle_audio_contract::{AudioCommand, SfxAssetId};
-        use puzzle_runtime_contract::{RuntimePresentationEvent, RuntimeViewportSourceId};
-
-        let wait = RuntimePresentationEvent::Wait { milliseconds: 10 };
-        let animation = RuntimePresentationEvent::AnimationBatch {
-            source: RuntimeViewportSourceId {
-                model: "default".to_string(),
-                component: "board".to_string(),
-                source: "puzzle".to_string(),
-            },
-            level_index: Some(0),
-            animations: Vec::new(),
-        };
-        let (public, rejected_audio) = project_live_server_events(vec![
-            wait.clone(),
-            RuntimePresentationEvent::Audio {
-                command: AudioCommand::PlaySfx {
-                    asset: SfxAssetId(0),
-                },
-            },
-            animation.clone(),
-        ]);
-
-        assert_eq!(public, vec![wait, animation]);
-        assert_eq!(rejected_audio, 1);
     }
 
     #[test]
@@ -3300,25 +3290,6 @@ window.parent = window;
             message.contains("saved progress was not modified"),
             "{message}"
         );
-    }
-
-    #[test]
-    fn dynamic_server_uses_the_shared_typed_runtime_snapshot() {
-        let server_source = include_str!("lib_server.rs");
-        let runtime_source = include_str!("lib_solver_runtime.rs");
-        let export_source = include_str!("lib_json_export.rs");
-        assert!(server_source.contains("state.runtime.dispatch_development_typed(action)"));
-        assert!(
-            runtime_source
-                .contains("live_server_snapshot_json(self.runtime.development_snapshot())")
-        );
-        assert!(!server_source.contains("push_scene_object_body("));
-        assert!(!server_source.contains("push_cells(out, loaded, state);"));
-        assert!(!server_source.contains("scenePuzzleState"));
-        assert!(!server_source.contains("scenePuzzles"));
-        assert!(!server_source.contains("sceneState"));
-        assert!(!export_source.contains("push_rule_effects"));
-        assert!(!export_source.contains("write_scene_effect_json"));
     }
 
     #[test]
