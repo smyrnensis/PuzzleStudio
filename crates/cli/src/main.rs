@@ -760,7 +760,7 @@ fn escape_json(value: &str) -> String {
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio inspect <path>\n  puzzlestudio agent --stdio\n  puzzlestudio agent request < requests.jsonl\n  puzzlestudio preview [path] [--port 7878] [--solver-depth N] [--solver-stored-nodes N] [--solver-ms N]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <docs/index.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio screenshot <path> --list\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
+        "usage:\n  puzzlestudio check <path> [--json]\n  puzzlestudio inspect <path>\n  puzzlestudio agent --stdio\n  puzzlestudio agent request < requests.jsonl\n  puzzlestudio preview [path] [--port 7878]\n  puzzlestudio editor [path] [--port 8787]\n  puzzlestudio export-html <path> -o <output.html>\n  puzzlestudio export-editor [path] -o <docs/index.html>\n  puzzlestudio screenshot <path> -o <output.png> [--scene name] [--level name-or-index] [--input name] [--inputs a,b,c] [--width 1280] [--height 720] [--browser path]\n  puzzlestudio screenshot <path> --list\n  puzzlestudio import-puzzlescript <source.txt> -o <game.puzzle>{}",
         adapter_feature_note()
     );
 }
@@ -786,9 +786,7 @@ fn print_export_html_usage() {
 
 #[cfg(feature = "preview")]
 fn print_preview_usage() {
-    eprintln!(
-        "usage: puzzlestudio preview <path/to/game.puzzle> [--port 7878] [--solver-depth N] [--solver-stored-nodes N] [--solver-ms N]"
-    );
+    eprintln!("usage: puzzlestudio preview <path/to/game.puzzle> [--port 7878]");
 }
 
 #[cfg(feature = "editor")]
@@ -884,6 +882,21 @@ inputs:
         assert_eq!(responses.len(), 2);
         assert!(responses[0].contains(r#""code":"invalid_request""#));
         assert!(responses[1].contains(r#""code":"unknown_session""#));
+    }
+
+    #[cfg(feature = "preview")]
+    #[test]
+    fn preview_facade_rejects_removed_live_server_solver_options() {
+        for option in ["--solver-depth", "--solver-stored-nodes", "--solver-ms"] {
+            let error = preview_command(&[
+                "game.puzzle".to_string(),
+                option.to_string(),
+                "1".to_string(),
+            ])
+            .expect_err("removed live-server solver option must not be forwarded")
+            .to_string();
+            assert_eq!(error, format!("unknown option: {option}"));
+        }
     }
 }
 
