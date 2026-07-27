@@ -23,24 +23,7 @@ fn export_html_with_runtime_wasm(
     if host_mode == StandaloneHostMode::Export {
         return bevy_export_html(&runtime_export, runtime_wasm);
     }
-    let mut boot_data = String::new();
-    push_export_boot_data(
-        &mut boot_data,
-        host_mode == StandaloneHostMode::EditorPreview,
-    );
-    let html = standalone_html(
-        &boot_data,
-        &runtime_export,
-        document_uses_puzzle3_renderer(preview_state_document(state)),
-        host_mode,
-        runtime_wasm,
-    );
-    if document_uses_puzzle3_renderer(preview_state_document(state)) {
-        let fixtures = puzzle3_frame_fixtures_json(preview_state_document(state));
-        inject_puzzle3_frame_assets(html, &fixtures, Some(&state.puzzle_path))
-    } else {
-        html
-    }
+    bevy_editor_preview_html(&runtime_export, runtime_wasm)
 }
 
 fn bevy_export_html(runtime_export: &str, runtime_wasm: StandaloneRuntimeWasm<'_>) -> String {
@@ -113,146 +96,329 @@ window.PuzzleRuntimeExportJson = "{runtime_export}";
     )
 }
 
-fn standalone_html(
-    boot_data: &str,
+fn bevy_editor_preview_html(
     runtime_export: &str,
-    uses_puzzle3_frames: bool,
-    host_mode: StandaloneHostMode,
     runtime_wasm: StandaloneRuntimeWasm<'_>,
 ) -> String {
-    let boot_data = escape_script_json(boot_data);
     let runtime_export = escape_script_json(runtime_export);
-    let app_css = escape_style(APP_CSS);
-    let renderer_css = escape_style(RENDERER_CSS);
-    let visual_tween_core_js = escape_script(VISUAL_TWEEN_CORE_JS);
-    let renderer_js = escape_script(RENDERER_JS);
-    let standalone_js_source = standalone_runtime_js(host_mode);
-    let standalone_js = escape_script(&standalone_js_source);
-    let runtime_wasm_js = standalone_runtime_wasm_script(host_mode, runtime_wasm);
-    let app_js_source = standalone_host_js(uses_puzzle3_frames, host_mode);
-    let app_js = escape_script(&app_js_source);
-
-    let html = INDEX_HTML
-        .replace(
-            "<title>PuzzleStudio HTML Play</title>",
-            "<title>PuzzleStudio HTML Export</title>",
-        )
-        .replace(
-            r#"<link rel="stylesheet" href="/app.css">"#,
-            &format!("<style>\n{app_css}\n</style>"),
-        )
-        .replace(
-            r#"<link rel="stylesheet" href="/renderer.css">"#,
-            &format!("<style>\n{renderer_css}\n</style>"),
-        )
-        .replace(
-            r#"<script src="/app.js"></script>"#,
-            &format!("<script>\n{app_js}\n</script>"),
-        );
-    let html = replace_required_script_asset(
-        html,
-        "/visual_tween_core.js",
-        &format!("<script>\n{visual_tween_core_js}\n</script>"),
-    );
-    replace_required_script_asset(
-        html,
-        "/renderer.js",
-        &format!(
-            "<script>\nwindow.PuzzleBoot = JSON.parse(\"{boot_data}\");\nwindow.PuzzleRuntimeExportJson = \"{runtime_export}\";\n{runtime_wasm_js}\n</script>\n<script>\n{renderer_js}\n</script>\n<script>\n{standalone_js}\n</script>"
-        ),
+    let runtime_wasm_js =
+        standalone_runtime_wasm_script(StandaloneHostMode::EditorPreview, runtime_wasm);
+    let editor_preview_browser_bridge_js = editor_preview_browser_bridge_script();
+    format!(
+        r##"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PuzzleStudio Editor Preview</title>
+    <style>
+      html, body {{
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+      }}
+      #puzzle-bevy {{
+        display: block;
+        width: 100%;
+        height: 100%;
+      }}
+      #puzzle-bevy-fatal {{
+        position: fixed;
+        inset: 0;
+        display: none;
+        box-sizing: border-box;
+        padding: 2rem;
+        overflow: auto;
+        white-space: pre-wrap;
+        color: #fff;
+        background: #280b0b;
+        font: 16px/1.5 system-ui, sans-serif;
+      }}
+    </style>
+  </head>
+  <body>
+    <canvas id="puzzle-bevy" aria-label="Puzzle game editor preview"></canvas>
+    <pre id="puzzle-bevy-fatal" role="alert"></pre>
+    <output id="puzzle-bevy-status" hidden data-state="starting"></output>
+    <script>
+window.PuzzleRuntimeExportJson = "{runtime_export}";
+{runtime_wasm_js}
+    </script>
+    <script>
+      (async () => {{
+        const fatal = document.getElementById("puzzle-bevy-fatal");
+        const status = document.getElementById("puzzle-bevy-status");
+        const parentOrigin = (() => {{
+          try {{
+            return new URL(document.referrer).origin;
+          }} catch (_error) {{
+            return "";
+          }}
+        }})();
+        try {{
+          if (!parentOrigin || parentOrigin === "null") {{
+            throw new Error("Editor preview requires a concrete parent origin.");
+          }}
+          window.PuzzleEditorPreviewParentOrigin = parentOrigin;
+{editor_preview_browser_bridge_js}
+          const editorPreview = await window.PuzzleRuntimeWasmLoader.load("bevy-editor-preview");
+          if (typeof editorPreview.startEditorPreview !== "function") {{
+            throw new Error("Editor preview WASM is missing startEditorPreview.");
+          }}
+          if (typeof editorPreview.dispatchEditorPreviewCommand !== "function") {{
+            throw new Error("Editor preview WASM is missing dispatchEditorPreviewCommand.");
+          }}
+          window.addEventListener("PuzzleStudioEditorPreviewObservation", (event) => {{
+            if (!event.detail || typeof event.detail !== "object") {{
+              return;
+            }}
+            window.parent.postMessage(event.detail, parentOrigin);
+          }});
+          const canvas = document.getElementById("puzzle-bevy");
+          const forwardEditorPointer = (gesture) => (event) => {{
+            const rect = canvas.getBoundingClientRect();
+            window.parent.postMessage({{
+              type: "PuzzleStudioEditorPointer",
+              gesture,
+              xCss: Number(event.clientX) - rect.left,
+              yCss: Number(event.clientY) - rect.top,
+            }}, parentOrigin);
+          }};
+          canvas.addEventListener("pointermove", forwardEditorPointer("move"));
+          canvas.addEventListener("pointerdown", forwardEditorPointer("press"));
+          canvas.addEventListener("pointerup", forwardEditorPointer("release"));
+          canvas.addEventListener("pointercancel", forwardEditorPointer("leave"));
+          canvas.addEventListener("pointerleave", forwardEditorPointer("leave"));
+          window.addEventListener("message", async (event) => {{
+            if (
+              event.source !== window.parent
+              || event.origin !== parentOrigin
+            ) {{
+              return;
+            }}
+            const envelope = event.data || {{}};
+            if (envelope.type !== "PuzzleStudioEditorPreviewCommand") {{
+              return;
+            }}
+            if (typeof envelope.commandJson !== "string") {{
+              window.parent.postMessage({{
+                type: "PuzzleStudioPreviewRuntimeError",
+                commandId: envelope.commandId,
+                label: "invalid editor preview command",
+                message: "PuzzleStudioEditorPreviewCommand requires commandJson.",
+              }}, parentOrigin);
+              return;
+            }}
+            try {{
+              await editorPreview.dispatchEditorPreviewCommand(envelope.commandJson);
+            }} catch (error) {{
+              window.parent.postMessage({{
+                type: "PuzzleStudioPreviewRuntimeError",
+                commandId: envelope.commandId,
+                label: "editor preview command failed",
+                message: error?.stack || error?.message || String(error),
+              }}, parentOrigin);
+            }}
+          }});
+          await editorPreview.startEditorPreview(
+            window.PuzzleRuntimeExportJson,
+            "#puzzle-bevy",
+          );
+        }} catch (error) {{
+          const message = error?.stack || error?.message || String(error);
+          fatal.textContent = `PuzzleStudio editor preview failed:\n${{message}}`;
+          fatal.style.display = "block";
+          status.dataset.state = "fatal";
+          if (parentOrigin && parentOrigin !== "null") {{
+            window.parent.postMessage({{
+              type: "PuzzleStudioPreviewRuntimeError",
+              label: "runtime initialization failed",
+              message,
+            }}, parentOrigin);
+          }}
+          console.error(message);
+        }}
+      }})();
+    </script>
+  </body>
+</html>
+"##
     )
 }
 
-fn replace_required_script_asset(html: String, asset_path: &str, replacement: &str) -> String {
-    let prefix = format!(r#"<script src="{asset_path}"#);
-    let count = html.matches(&prefix).count();
-    assert_eq!(
-        count, 1,
-        "HTML export template must contain exactly one script for {asset_path}, found {count}"
-    );
-    let start = html
-        .find(&prefix)
-        .expect("checked renderer script tag is present");
-    let end = html[start..]
-        .find("></script>")
-        .map(|offset| start + offset + "></script>".len())
-        .expect("HTML export renderer script tag must close");
-    let mut output = html;
-    output.replace_range(start..end, replacement);
-    output
-}
-
-fn standalone_host_js(uses_puzzle3_frames: bool, host_mode: StandaloneHostMode) -> String {
-    let mut script = APP_JS.to_string();
-    script = strip_optional_host_blocks(&script, "solver");
-    if host_mode == StandaloneHostMode::Export {
-        script = strip_optional_host_blocks(&script, "studio-bridge");
-        script = strip_optional_host_blocks(&script, "scene-editor");
-    }
-    if !uses_puzzle3_frames {
-        script = strip_optional_host_blocks(&script, "puzzle3");
-    }
-    remove_optional_host_markers(&script)
-}
-
-fn standalone_runtime_js(host_mode: StandaloneHostMode) -> String {
-    let mut script = STANDALONE_JS.to_string();
-    if host_mode == StandaloneHostMode::Export {
-        script = strip_optional_host_blocks(&script, "editor-preview");
-    }
-    remove_optional_host_markers(&script)
-}
-
-fn strip_optional_host_blocks(source: &str, name: &str) -> String {
-    let start_marker = format!("/* puzzle-host:optional:{name}:start */");
-    let end_marker = format!("/* puzzle-host:optional:{name}:end */");
-    let mut output = String::with_capacity(source.len());
-    let mut rest = source;
-
-    while let Some(start) = rest.find(&start_marker) {
-        let line_start = rest[..start].rfind('\n').map_or(0, |index| index + 1);
-        let block_start = rest[line_start..start]
-            .chars()
-            .all(char::is_whitespace)
-            .then_some(line_start)
-            .unwrap_or(start);
-        output.push_str(&rest[..block_start]);
-        let after_start = &rest[start + start_marker.len()..];
-        let Some(end) = after_start.find(&end_marker) else {
-            panic!("missing optional host end marker for {name}");
-        };
-        let after_end = &after_start[end + end_marker.len()..];
-        let line_end = after_end
-            .find('\n')
-            .map_or(after_end.len(), |index| index + 1);
-        rest = if after_end[..line_end].chars().all(char::is_whitespace) {
-            &after_end[line_end..]
-        } else {
-            after_end
-        };
-    }
-
-    if rest.contains(&end_marker) {
-        panic!("missing optional host start marker for {name}");
-    }
-
-    output.push_str(rest);
-    output
-}
-
-fn remove_optional_host_markers(source: &str) -> String {
-    let mut script = source.to_string();
-    for name in [
-        "solver",
-        "studio-bridge",
-        "scene-editor",
-        "puzzle3",
-        "editor-preview",
-    ] {
-        script = script.replace(&format!("/* puzzle-host:optional:{name}:start */"), "");
-        script = script.replace(&format!("/* puzzle-host:optional:{name}:end */"), "");
-    }
-    script
+fn editor_preview_browser_bridge_script() -> &'static str {
+    r#"          const postParent = (payload) => {
+            window.parent.postMessage(payload, parentOrigin);
+          };
+          const isEditorSaveShortcut = (event) => {
+            if (!event || event.altKey) {
+              return false;
+            }
+            const modifier = (event.metaKey && !event.ctrlKey)
+              || (event.ctrlKey && !event.metaKey);
+            const key = event.key && event.key.length === 1
+              ? event.key.toLowerCase()
+              : event.key;
+            return modifier && key === "s";
+          };
+          document.addEventListener("keydown", (event) => {
+            if (!isEditorSaveShortcut(event)) {
+              return;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            try {
+              postParent({ type: "PuzzleStudioEditorSaveShortcut" });
+            } catch (_error) {
+              // Editor shortcuts must not affect the preview runtime.
+            }
+          }, true);
+          const formatPreviewLogArgument = (value, depth = 0) => {
+            if (typeof value === "string") {
+              return value;
+            }
+            if (value instanceof Error) {
+              const headline = [value.name || "Error", value.message || ""]
+                .filter(Boolean)
+                .join(": ");
+              const stack = String(value.stack || "");
+              if (!stack) {
+                return headline || String(value);
+              }
+              return value.message && stack.includes(value.message)
+                ? stack
+                : [headline, stack].filter(Boolean).join("\n");
+            }
+            if (value === undefined) {
+              return "undefined";
+            }
+            if (
+              value === null
+              || typeof value === "number"
+              || typeof value === "boolean"
+              || typeof value === "bigint"
+            ) {
+              return String(value);
+            }
+            if (depth > 1) {
+              return Object.prototype.toString.call(value);
+            }
+            try {
+              return JSON.stringify(value, (_key, nested) => {
+                if (typeof nested === "function") {
+                  return "[Function]";
+                }
+                return nested;
+              });
+            } catch (_error) {
+              return String(value);
+            }
+          };
+          const previewLogStackOrigin = () => {
+            const stack = new Error().stack || "";
+            const lines = stack.split("\n").slice(1);
+            for (const line of lines) {
+              const text = String(line || "").trim();
+              if (
+                !text
+                || text.includes("postPreviewLog")
+                || text.includes("previewLogStackOrigin")
+                || text.includes("console.")
+              ) {
+                continue;
+              }
+              const match = text.match(/(?:at\s+)?(?:.*?\()?([^()\s]+:\d+:\d+)\)?$/);
+              if (match) {
+                return match[1];
+              }
+            }
+            return "";
+          };
+          const postPreviewLog = (level, args) => {
+            try {
+              postParent({
+                type: "PuzzleStudioPreviewLog",
+                level,
+                source: "preview console",
+                origin: previewLogStackOrigin(),
+                message: Array.from(args || [])
+                  .map((argument) => formatPreviewLogArgument(argument))
+                  .join(" "),
+              });
+            } catch (_error) {
+              // Logging must not affect the preview runtime.
+            }
+          };
+          for (const level of ["debug", "log", "info", "warn", "error"]) {
+            const original = console[level]?.bind(console);
+            console[level] = (...args) => {
+              postPreviewLog(level, args);
+              if (original) {
+                original(...args);
+              }
+            };
+          }
+          window.addEventListener("error", (event) => {
+            if (
+              window.PuzzleStudioPreviewRuntimeFailure
+              && event.message === "Script error."
+            ) {
+              return;
+            }
+            try {
+              postParent({
+                type: "PuzzleStudioPreviewLog",
+                level: "error",
+                source: "preview runtime",
+                origin: event.filename && event.lineno
+                  ? String(event.filename) + ":" + event.lineno + ":" + (event.colno || 0)
+                  : "",
+                message: formatPreviewLogArgument(
+                  event.error || event.message || "Runtime error",
+                ),
+              });
+            } catch (_error) {
+              // Logging must not affect the preview runtime.
+            }
+          });
+          window.addEventListener("unhandledrejection", (event) => {
+            const failure = window.PuzzleStudioPreviewRuntimeFailure;
+            const reasonMessage = String(event.reason?.message || event.reason || "");
+            if (failure?.message && failure.message === reasonMessage) {
+              return;
+            }
+            try {
+              postParent({
+                type: "PuzzleStudioPreviewLog",
+                level: "error",
+                source: "preview promise",
+                origin: "",
+                message: formatPreviewLogArgument(
+                  event.reason || "Unhandled promise rejection",
+                ),
+              });
+            } catch (_error) {
+              // Logging must not affect the preview runtime.
+            }
+          });
+          const postPreviewLoaded = () => {
+            try {
+              postParent({
+                type: "PuzzleStudioPreviewLoaded",
+                title: document.title || "",
+                href: location.href || "",
+              });
+            } catch (_error) {
+              // Runtime observability must not affect the preview runtime.
+            }
+          };
+          if (document.readyState === "complete") {
+            queueMicrotask(postPreviewLoaded);
+          } else {
+            window.addEventListener("load", postPreviewLoaded, { once: true });
+          }"#
 }
 
 fn standalone_runtime_wasm_script(
@@ -367,11 +533,19 @@ fn editor_preview_parent_wasm_loader_script() -> String {
   let modulePromise = null;
   let nextRequestId = 1;
 
+  function requiredParentOrigin() {
+    const origin = window.PuzzleEditorPreviewParentOrigin;
+    if (typeof origin !== "string" || !origin || origin === "null") {
+      throw new Error("Editor preview runtime assets require a concrete parent origin.");
+    }
+    return origin;
+  }
+
   function reportProgress(stage) {
     window.parent.postMessage({
       type: "PuzzleStudioPreviewRuntimeProgress",
       stage,
-    }, "*");
+    }, requiredParentOrigin());
   }
 
   function requestAsset(kind) {
@@ -382,6 +556,10 @@ fn editor_preview_parent_wasm_loader_script() -> String {
         reject(new Error(`Timed out waiting for editor preview runtime asset: ${kind}`));
       }, 15000);
       function handleMessage(event) {
+        const parentOrigin = requiredParentOrigin();
+        if (event.source !== window.parent || event.origin !== parentOrigin) {
+          return;
+        }
         const data = event.data || {};
         if (data.type !== "PuzzleStudioRuntimeAssetResponse" || data.requestId !== requestId) {
           return;
@@ -399,7 +577,7 @@ fn editor_preview_parent_wasm_loader_script() -> String {
         type: "PuzzleStudioRuntimeAssetRequest",
         requestId,
         kind,
-      }, "*");
+      }, requiredParentOrigin());
     });
   }
 
@@ -461,60 +639,6 @@ fn document_uses_puzzle3_renderer(document: &puzzle_lang::LoadedDocument) -> boo
         .models
         .iter()
         .any(|model| matches!(model, LoadedDocumentModel::Puzzle3d { .. }))
-}
-
-fn puzzle3_frame_fixtures_json(document: &puzzle_lang::LoadedDocument) -> String {
-    let mut fixtures = serde_json::Map::new();
-    for model in &document.models {
-        let LoadedDocumentModel::Puzzle3d {
-            name,
-            game,
-            presentation,
-        } = model
-        else {
-            continue;
-        };
-        let fixture = puzzle_lang::export_visual_fixture_json(game, presentation)
-            .expect("validated 3D editor model must export its visual fixture");
-        let fixture = serde_json::from_str(&fixture)
-            .expect("typed 3D editor visual fixture must serialize as JSON");
-        fixtures.insert(name.clone(), fixture);
-    }
-    serde_json::to_string(&fixtures).expect("typed 3D editor fixture map must serialize")
-}
-
-fn inject_puzzle3_frame_assets(
-    html: String,
-    fixtures_json: &str,
-    puzzle_path: Option<&str>,
-) -> String {
-    let mut assets = String::new();
-    assets.push('{');
-    if let Some(puzzle_path) = puzzle_path {
-        push_json_string(&mut assets, "puzzlePath");
-        assets.push(':');
-        push_json_string(&mut assets, puzzle_path);
-    }
-    assets.push('}');
-    let assets = escape_script(&assets);
-    let fixtures_json = escape_script_json(fixtures_json);
-    let style_css = escape_style(PUZZLE3_STYLE_CSS);
-    let visual_core_js = escape_script(PUZZLE3_VISUAL_CORE_JS);
-    let three_renderer_js = escape_script(PUZZLE3_THREE_RENDERER_JS);
-    let mut three_module_source = String::new();
-    push_json_string(&mut three_module_source, THREE_MODULE_JS);
-    let three_module_source = escape_script(&three_module_source);
-    let puzzle3_component_js = escape_script(PUZZLE3_COMPONENT_JS);
-    let html = html.replace(
-        "</head>",
-        &format!("<style>\n{style_css}\n</style>\n</head>"),
-    );
-    html.replace(
-        "window.PuzzleBoot = JSON.parse(",
-        &format!(
-            "window.Puzzle3DFrameFixtures = JSON.parse(\"{fixtures_json}\");\nwindow.Puzzle3DFrameAssets = {assets};\nwindow.Puzzle3ThreeModuleSource = {three_module_source};\n{visual_core_js}\n{three_renderer_js}\n{puzzle3_component_js}\nwindow.PuzzleBoot = JSON.parse("
-        ),
-    )
 }
 
 pub fn export_html_from_source(

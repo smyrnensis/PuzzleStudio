@@ -162,14 +162,16 @@
           <div id="playPreview" class="play-preview is-preview-unloaded">
             <div id="previewFrameWrap" class="preview-frame-wrap">
               <div id="previewViewport" class="preview-viewport">
-                <iframe
-                  id="previewFrame"
-                  class="preview-frame"
-                  title="Compiled puzzle preview"
-                  sandbox="allow-scripts"
-                  allow="autoplay"
-                  scrolling="no"
-                ></iframe>
+                <div id="editorRuntimeSurface" class="editor-runtime-surface" tabindex="0" aria-label="Bevy runtime preview">
+                  <iframe
+                    id="editorRuntimeFrame"
+                    class="editor-runtime-frame preview-frame"
+                    title="Editor runtime preview"
+                    sandbox="allow-scripts allow-same-origin"
+                    allow="autoplay"
+                    scrolling="no"
+                  ></iframe>
+                </div>
               </div>
             </div>
             <div id="previewLogPanel" class="preview-log-panel" role="log" aria-label="Preview log" aria-live="polite">
@@ -362,7 +364,7 @@
               </div>
               <div class="solver-board-wrap game-preview-scope">
                 <div id="solverBoardViewport" class="solver-board-viewport">
-                  <div id="solverBoard" class="solver-board board" tabindex="0" aria-label="Solver state preview"></div>
+                  <div id="solverBoard" class="solver-board" tabindex="0" aria-label="Solver state preview"></div>
                 </div>
               </div>
             </div>
@@ -648,21 +650,6 @@
                   <div id="level3dPalette" class="level-palette level3d-palette" aria-label="3D level palette"></div>
                   <div class="level3d-runtime-surface-viewport">
                     <div class="level3d-frame-surface">
-                      <iframe
-                        id="level3dRuntimeFrame"
-                        class="level3d-runtime-frame"
-                        title="Runtime preview"
-                        sandbox="allow-scripts"
-                        scrolling="no"
-                      ></iframe>
-                      <canvas
-                        id="level3dStageCanvas"
-                        class="level3d-stage-canvas"
-                        width="960"
-                        height="720"
-                        tabindex="0"
-                        aria-label="3D level placement surface"
-                      ></canvas>
                       <div class="visual3d-camera-controls level3d-preview-controls" aria-label="3D level preview controls">
                         <label>
                           <span title="yaw">Y</span>
@@ -728,20 +715,6 @@
                     <button class="edge-add edge-add-top level3d-layer-edge" type="button" data-level3d-layer-edge="top" aria-label="Add top-down row above">+</button>
                     <button class="edge-add edge-add-left level3d-layer-edge" type="button" data-level3d-layer-edge="left" aria-label="Add top-down column left">+</button>
                     <div id="level3dLayerBoard" class="level-board level3d-layer-board" tabindex="0" aria-label="Editable top-down 3D level layer">
-                      <iframe
-                        id="level3dLayerFrame"
-                        class="level3d-layer-frame"
-                        title="Layer preview"
-                        sandbox="allow-scripts"
-                        scrolling="no"
-                      ></iframe>
-                      <canvas
-                        id="level3dLayerOverlay"
-                        class="level3d-layer-overlay"
-                        width="960"
-                        height="720"
-                        aria-hidden="true"
-                      ></canvas>
                     </div>
                     <button class="edge-add edge-add-right level3d-layer-edge" type="button" data-level3d-layer-edge="right" aria-label="Add top-down column right">+</button>
                     <button class="edge-add edge-add-bottom level3d-layer-edge" type="button" data-level3d-layer-edge="bottom" aria-label="Add top-down row below">+</button>
@@ -882,7 +855,6 @@
 
     <script src="editor_icons.js"></script>
     <script src="visual_tween_core.js"></script>
-    <script src="renderer.js?v=board-canvas-visuals"></script>
     <script src="editor_authoring_renderer.js"></script>
     <script src="editor_codemirror.js"></script>
     <script src="editor_dom.js"></script>

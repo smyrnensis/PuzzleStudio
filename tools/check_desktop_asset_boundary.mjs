@@ -52,7 +52,6 @@ if (!fs.existsSync(path.join(repoRoot, "crates/html_editor/static/editor.html"))
 
 for (const asset of [
   "crates/html_editor/static/renderer.css",
-  "crates/html_editor/static/renderer.js",
   "crates/html_editor/static/puzzle3_visual_core.js",
   "crates/html_editor/static/wasm_game/puzzle_wasm_game.js",
   "crates/html_editor/static/wasm_game/puzzle_wasm_game_bg.wasm",

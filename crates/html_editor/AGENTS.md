@@ -5,7 +5,7 @@ highlighting integration, workspace behavior, and editor-owned layout.
 
 ## Generated Output
 
-`static/renderer.css`, `static/renderer.js`, `static/visual_tween_core.js`, and
+`static/renderer.css`, `static/visual_tween_core.js`, and
 `static/puzzle3_visual_core.js` are generated Tauri `frontendDist` copies. Their
 only source owners are the same-named files under `../html_play/static/`. Never
 edit the editor copies directly. Run `tools/sync_static_assets.sh` to regenerate
@@ -15,9 +15,9 @@ script; freshness and desktop-boundary checks consume the script's check mode.
 
 `static/editor_authoring_renderer.js` is editor-owned. It renders incomplete
 authoring grids and object thumbnails as interactive DOM. Solver observations,
-playtest previews, and other valid runtime states must be projected through the
-Rust typed render scene and use `../html_play/static/renderer.js`; they must not
-be interpreted by the authoring renderer.
+playtest previews, and other valid runtime states must run through the editor
+contract of `PuzzleBevyPlayerHost` and render in the Bevy canvas; they must not
+be interpreted by the authoring renderer or a JavaScript runtime renderer.
 
 `static/editor_codemirror.js` is generated from `web/src/editor_codemirror.js`
 and the locked npm dependencies under `web/`. Do not edit the bundle directly.
@@ -90,11 +90,13 @@ widths. Preview iframe fitting, level board fitting, and similar surfaces should
 ask shared frame helpers in `static/editor.js` for the available rectangle, then
 apply only their own aspect ratio, virtual size, or tool chrome.
 
-3D level editor preview must use a public runtime control contract, not runtime
-fixture internals. Editor-originated changes should go through explicit preview
-update/render APIs with named `level`, `resources`, `camera`, `view`, and
-`settings` fields. Keep whole-fixture replacement as compatibility/debug surface
-only.
+Valid editor state is rendered by reusable Bevy runtime-surface controllers
+through the dimension-generic editor preview contract. Each controller owns one
+`surfaceId`, iframe lifecycle, committed frame revision, and command
+correlation. Authoring sends typed object identities in `HydrateDraft`; camera,
+view, and grid geometry belong only to the typed renderer strategy. JavaScript
+must not inject runtime fixtures, resolve legends, project a board, or hit-test
+rendered state.
 
 Highlighting should use the Rust host/server path. If highlighting is
 unavailable, show plain escaped text and surface the reason visibly enough for

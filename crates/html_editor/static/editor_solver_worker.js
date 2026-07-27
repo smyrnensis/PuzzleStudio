@@ -115,17 +115,6 @@ self.onmessage = async (event) => {
       service.pin_artifact(data.artifactId ? String(data.artifactId) : undefined, Date.now());
       return;
     }
-    if (data.type === "materialize") {
-      const state = service.materialize_state(
-        String(data.artifactId || ""),
-        Number(data.levelIndex),
-        solverState(String(data.modelKind || ""), data.state),
-        data.materializeLevelStart === true,
-        Date.now(),
-      );
-      self.postMessage({ type: "materialized", requestId, state });
-      return;
-    }
     if (data.type === "cancel") {
       const active = activeSearches.get(requestId);
       if (!active) {
