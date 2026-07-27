@@ -5745,6 +5745,7 @@ name = "puzzle-authoring"
 version = "0.1.0"
 dependencies = [
  "puzzle-kernel",
+ "serde",
 ]
 
 [[package]]
@@ -5788,6 +5789,16 @@ version = "0.1.0"
 dependencies = [
  "puzzle-kernel",
  "serde",
+]
+
+[[package]]
+name = "puzzle-editor-preview-contract"
+version = "0.1.0"
+dependencies = [
+ "puzzle-authoring",
+ "puzzle-runtime-contract",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5952,7 +5963,10 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "js-sys",
+ "puzzle-authoring",
  "puzzle-bevy-player",
+ "puzzle-editor-preview-contract",
+ "puzzle-lang",
  "puzzle-player-bootstrap",
  "puzzle-presentation-json",
  "serde",

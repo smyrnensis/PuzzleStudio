@@ -2,6 +2,7 @@ mod ast;
 mod authoring_grammar;
 mod catalog;
 mod completion;
+mod editor_draft;
 mod error;
 mod frame3_literal;
 mod highlight;
@@ -59,6 +60,7 @@ pub use completion::{
     CompletionItem, CompletionKind, CompletionList, completion_list_json,
     suggest_source_completions,
 };
+pub use editor_draft::resolve_editor_draft;
 pub use error::{Diagnostic, DiagnosticReport, DiagnosticSeverity, DiagnosticSpan};
 pub use highlight::{
     HighlightedSource, HighlightedSourceWithOutline, SourceHighlightColor, SourceHighlightKind,

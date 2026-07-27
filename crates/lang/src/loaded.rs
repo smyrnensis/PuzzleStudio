@@ -582,6 +582,7 @@ pub struct LoadedGridLevel<const D: usize, Size: GridSize<D>> {
     pub pack: Option<String>,
     pub puzzle: String,
     pub initial_state: GridState<D, Size>,
+    pub legend: HashMap<char, Vec<ObjectId>>,
     pub regions: Vec<LevelRegionDef>,
     pub program: puzzle_core::GridProgramSequence,
     pub level_start_program: Option<GridProgramRef>,

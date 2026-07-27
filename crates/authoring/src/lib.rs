@@ -1,5 +1,72 @@
 use std::ops::Range;
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorDraftSize2d {
+    pub width: u16,
+    pub height: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorDraftSize3d {
+    pub width: u16,
+    pub depth: u16,
+    pub height: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorDraftPosition2d {
+    pub x: u16,
+    pub y: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorDraftPosition3d {
+    pub x: u16,
+    pub y: u16,
+    pub z: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorDraftCell2d {
+    pub position: EditorDraftPosition2d,
+    pub symbol: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorDraftCell3d {
+    pub position: EditorDraftPosition3d,
+    pub symbol: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorDraftLevel2d {
+    pub size: EditorDraftSize2d,
+    pub cells: Vec<EditorDraftCell2d>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditorDraftLevel3d {
+    pub size: EditorDraftSize3d,
+    pub cells: Vec<EditorDraftCell3d>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", content = "level", rename_all = "camelCase")]
+pub enum EditorDraftState {
+    Grid2d(EditorDraftLevel2d),
+    Grid3d(EditorDraftLevel3d),
+}
+
 pub trait VariantAxisSpec {
     fn name(&self) -> &str;
     fn allowed_values(&self, tag: &str) -> Option<Vec<String>>;

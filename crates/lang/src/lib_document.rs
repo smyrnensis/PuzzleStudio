@@ -1957,6 +1957,7 @@ fn lower_model_with_shell_inner(
                 pack: prepared.pack,
                 puzzle: prepared.puzzle,
                 initial_state: parsed_level.state,
+                legend: prepared.char_objects,
                 regions: parsed_level.regions,
                 program,
                 level_start_program,

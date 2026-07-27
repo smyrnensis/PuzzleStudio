@@ -9,9 +9,9 @@
 
 use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
-use bevy::prelude::{NonSendMut, Res, Time};
+use bevy::prelude::{NonSend, NonSendMut, Res, Time};
 use puzzle_bevy_player::PuzzleBevyPlayerHost;
-use serde::{Deserialize, Serialize};
+use puzzle_editor_preview_contract::{EditorPreviewControlRequest, EditorPreviewObservation};
 use serde_json::{Map, Value};
 
 #[cfg(target_arch = "wasm32")]
@@ -22,74 +22,6 @@ use bevy::{
 };
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
-
-#[derive(Debug, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-enum EditorPreviewControlRequest {
-    HydrateState {
-        command_id: u32,
-        state: Value,
-        level_index: u32,
-        materialize_level_start: bool,
-    },
-    SyntheticKey {
-        command_id: u32,
-        key: String,
-        code: String,
-        repeat: bool,
-        alt_key: bool,
-        ctrl_key: bool,
-        meta_key: bool,
-        shift_key: bool,
-        trace: bool,
-    },
-    RequestSnapshot {
-        command_id: u32,
-    },
-}
-
-impl EditorPreviewControlRequest {
-    fn command_id(&self) -> u32 {
-        match self {
-            Self::HydrateState { command_id, .. }
-            | Self::SyntheticKey { command_id, .. }
-            | Self::RequestSnapshot { command_id } => *command_id,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type")]
-enum EditorPreviewObservation {
-    #[serde(rename = "PuzzleStudioPreviewRuntimeReady")]
-    RuntimeReady,
-    #[serde(rename = "PuzzleStudioPreviewState")]
-    State {
-        #[serde(rename = "commandId", skip_serializing_if = "Option::is_none")]
-        command_id: Option<u32>,
-        #[serde(flatten)]
-        state: Map<String, Value>,
-    },
-    #[serde(rename = "PuzzleStudioPreviewDebugTrace")]
-    DebugTrace {
-        #[serde(rename = "commandId")]
-        command_id: u32,
-        debug: Value,
-        snapshot: Value,
-    },
-    #[serde(rename = "PuzzleStudioPreviewRuntimeError")]
-    RuntimeError {
-        #[serde(rename = "commandId")]
-        command_id: u32,
-        label: &'static str,
-        message: String,
-    },
-}
 
 #[derive(Debug)]
 struct QueuedEditorPreviewObservation {
@@ -104,9 +36,14 @@ struct EditorPreviewBridge {
     ready_pending: Rc<RefCell<bool>>,
 }
 
+struct EditorPreviewDocument(puzzle_lang::LoadedDocument);
+
 impl EditorPreviewBridge {
     fn submit_json(&self, request_json: &str) -> Result<(), String> {
-        let request = serde_json::from_str(request_json)
+        let request: EditorPreviewControlRequest = serde_json::from_str(request_json)
+            .map_err(|error| format!("invalid editor preview control request: {error}"))?;
+        request
+            .validate()
             .map_err(|error| format!("invalid editor preview control request: {error}"))?;
         self.requests.borrow_mut().push_back(request);
         Ok(())
@@ -127,6 +64,7 @@ fn editor_state_fields(state: Value) -> Result<Map<String, Value>, String> {
 
 fn apply_editor_control(
     host: &mut PuzzleBevyPlayerHost,
+    document: &puzzle_lang::LoadedDocument,
     request: EditorPreviewControlRequest,
     now_seconds: f64,
 ) -> EditorPreviewObservation {
@@ -147,6 +85,29 @@ fn apply_editor_control(
                     now_seconds,
                 )
                 .map_err(|error| error.to_string())
+            })
+            .and_then(|()| inspect_host(host))
+            .map(|snapshot| (snapshot, None)),
+        EditorPreviewControlRequest::HydrateDraft {
+            model,
+            level_index,
+            draft,
+            presentation: _,
+            ..
+        } => usize::try_from(level_index)
+            .map_err(|_| "editor preview level index is out of range".to_string())
+            .and_then(|level_index| {
+                puzzle_lang::resolve_editor_draft(document, &model, level_index, &draft)
+                    .map(|state| (state, level_index))
+            })
+            .and_then(|(state, level_index)| {
+                serde_json::to_string(&state)
+                    .map_err(|error| format!("editor draft state serialization failed: {error}"))
+                    .map(|state| (state, level_index))
+            })
+            .and_then(|(state, level_index)| {
+                host.hydrate_editor_state(&state, level_index, false, now_seconds)
+                    .map_err(|error| error.to_string())
             })
             .and_then(|()| inspect_host(host))
             .map(|snapshot| (snapshot, None)),
@@ -206,6 +167,7 @@ fn apply_editor_control(
 fn process_editor_preview_controls(
     time: Res<Time>,
     mut host: NonSendMut<PuzzleBevyPlayerHost>,
+    document: NonSend<EditorPreviewDocument>,
     bridge: NonSendMut<EditorPreviewBridge>,
     committed: Res<puzzle_bevy_player::PuzzleBevyPlayerObservationState>,
 ) {
@@ -240,7 +202,7 @@ fn process_editor_preview_controls(
     let requests = bridge.requests.borrow_mut().drain(..).collect::<Vec<_>>();
     let now_seconds = time.elapsed_secs_f64();
     let observations = requests.into_iter().map(|request| {
-        let observation = apply_editor_control(&mut host, request, now_seconds);
+        let observation = apply_editor_control(&mut host, &document.0, request, now_seconds);
         let required_revision =
             if matches!(observation, EditorPreviewObservation::RuntimeError { .. }) {
                 None
@@ -291,9 +253,9 @@ thread_local! {
 #[wasm_bindgen(js_name = startEditorPreview)]
 pub fn start_editor_preview(export_json: &str, canvas_selector: &str) -> Result<(), JsValue> {
     validate_canvas_selector(canvas_selector).map_err(js_error)?;
-    let decoded = puzzle_player_bootstrap::decode_standalone_player_export(export_json)
+    let decoded = puzzle_player_bootstrap::decode_editor_preview_export(export_json)
         .map_err(|error| js_error(format!("editor preview export is invalid: {error}")))?;
-    let (mut runtime, visual_images, _) = decoded.into_parts();
+    let (mut runtime, visual_images, _, document) = decoded.into_parts();
     runtime.set_progress_persistence_enabled(false);
     let host = PuzzleBevyPlayerHost::from_runtime_with_visual_images(runtime, visual_images)
         .map_err(|error| js_error(format!("editor preview initialization failed: {error}")))?;
@@ -321,7 +283,8 @@ pub fn start_editor_preview(export_json: &str, canvas_selector: &str) -> Result<
         ..Default::default()
     }));
     puzzle_bevy_player::install_puzzle_bevy_player(&mut app, host);
-    app.insert_non_send(bridge)
+    app.insert_non_send(EditorPreviewDocument(document))
+        .insert_non_send(bridge)
         .add_systems(Update, process_editor_preview_controls);
     app.run();
     Ok(())
@@ -436,6 +399,11 @@ P.
 }
 "#;
 
+    fn document() -> puzzle_lang::LoadedDocument {
+        puzzle_lang::parse_game_for_path(SOURCE, "editor_bevy_host.puzzle")
+            .expect("editor fixture should parse")
+    }
+
     #[test]
     fn traced_input_updates_the_same_snapshot_consumed_by_bevy() {
         let mut host =
@@ -445,6 +413,7 @@ P.
 
         let observation = apply_editor_control(
             &mut host,
+            &document(),
             EditorPreviewControlRequest::SyntheticKey {
                 command_id: 7,
                 key: "ArrowRight".to_string(),
@@ -482,6 +451,7 @@ P.
 
         let observation = apply_editor_control(
             &mut host,
+            &document(),
             EditorPreviewControlRequest::HydrateState {
                 command_id: 9,
                 state: serde_json::json!({
@@ -510,6 +480,48 @@ P.
         assert_eq!(host.snapshot().revision, before_revision + 1);
         assert_eq!(state["revision"], host.snapshot().revision);
         assert_eq!(state["scene"]["cells"][1]["objectIds"][0], 1);
+    }
+
+    #[test]
+    fn draft_hydration_resolves_compiled_symbols_before_updating_the_bevy_host() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(SOURCE, "editor_bevy_host.puzzle")
+                .expect("editor fixture should initialize");
+        let observation = apply_editor_control(
+            &mut host,
+            &document(),
+            EditorPreviewControlRequest::HydrateDraft {
+                command_id: 10,
+                model: "default".to_string(),
+                level_index: 0,
+                draft: puzzle_authoring::EditorDraftState::Grid2d(
+                    puzzle_authoring::EditorDraftLevel2d {
+                        size: puzzle_authoring::EditorDraftSize2d {
+                            width: 3,
+                            height: 1,
+                        },
+                        cells: vec![puzzle_authoring::EditorDraftCell2d {
+                            position: puzzle_authoring::EditorDraftPosition2d { x: 2, y: 0 },
+                            symbol: "P".to_string(),
+                        }],
+                    },
+                ),
+                presentation: puzzle_editor_preview_contract::EditorDraftPresentation::Grid2d {
+                    surface_id: "main".to_string(),
+                },
+            },
+            0.0,
+        );
+
+        let EditorPreviewObservation::State {
+            command_id: Some(10),
+            state,
+        } = observation
+        else {
+            panic!("valid draft hydration must emit a state observation");
+        };
+        assert_eq!(state["levelCells"].as_array().map(Vec::len), Some(3));
+        assert_eq!(state["levelCells"][2][0], 1);
     }
 
     #[test]
