@@ -9,8 +9,13 @@ use std::{
 
 #[cfg(not(target_arch = "wasm32"))]
 mod audio;
+#[cfg(feature = "editor-debug")]
+mod editor_authoring;
 #[cfg(target_arch = "wasm32")]
 mod web_audio;
+
+#[cfg(feature = "editor-debug")]
+pub use editor_authoring::EditorAuthoringFrame;
 
 use bevy::prelude::*;
 use bevy::{
@@ -32,12 +37,20 @@ use puzzle_bevy_renderer::{
     BevyRenderError, BevyResolvedFrameQueue, BevyResolvedFrameQueue2d, PuzzleBevy2dPlugin,
     PuzzleBevy2dView, PuzzleBevy3dPlugin, PuzzleBevy3dRenderSettings, PuzzleBevy3dView,
     PuzzleBevyCamera, PuzzleBevyFramebufferRect, PuzzleBevyLighting, PuzzleBevyPixelate,
-    PuzzleBevyRendererSystems, PuzzleBevyViewId, PuzzleCameraProjection,
+    PuzzleBevyRendererSystems, PuzzleBevyViewId, PuzzleCameraProjection, prepare_resolved_frame,
+    prepare_resolved_frame_2d,
+};
+#[cfg(feature = "editor-debug")]
+use puzzle_editor_preview_contract::{
+    EditorAuthoringHitTarget, EditorAuthoringPresentation, EditorPointerGesture,
+    EditorRendererStrategy,
 };
 use puzzle_game_runtime::RuntimeSession;
 use puzzle_player_bootstrap::{PlayerBootstrapError, decode_standalone_player_export};
 #[cfg(test)]
 use puzzle_runtime_contract::RuntimeProgressPersistenceOperation;
+#[cfg(feature = "editor-debug")]
+use puzzle_runtime_contract::RuntimeStateSnapshot;
 use puzzle_runtime_contract::{
     RuntimeAnimationEvent, RuntimeKeyTrigger, RuntimeLinearRgba,
     RuntimePresentationContinuationToken, RuntimePresentationEvent, RuntimeProgressSaveRequest,
@@ -143,6 +156,7 @@ pub enum BevyPlayerError {
         source: RuntimeViewportSourceId,
         zoom: f64,
     },
+    EditorAuthoring(String),
     Renderer(BevyRenderError),
 }
 
@@ -219,6 +233,7 @@ impl fmt::Display for BevyPlayerError {
                 "3D viewport {}.{} camera zoom must be finite and greater than zero, got {zoom}",
                 source.component, source.source
             ),
+            Self::EditorAuthoring(error) => write!(formatter, "editor authoring failed: {error}"),
             Self::Renderer(error) => write!(formatter, "Bevy renderer failed: {error}"),
         }
     }
@@ -284,6 +299,12 @@ pub struct PuzzleBevyPlayerHost {
     wait_until_seconds: Option<f64>,
     clip_epoch_seconds: f64,
     fatal_error: Option<String>,
+    #[cfg(feature = "editor-debug")]
+    editor_authoring: Option<editor_authoring::EditorAuthoringConfiguration>,
+    #[cfg(feature = "editor-debug")]
+    editor_authoring_frame: Option<EditorAuthoringFrame>,
+    #[cfg(feature = "editor-debug")]
+    next_editor_authoring_frame_revision: u64,
 }
 
 enum AudioDeviceFeedback {
@@ -348,6 +369,12 @@ impl PuzzleBevyPlayerHost {
             wait_until_seconds: None,
             clip_epoch_seconds: 0.0,
             fatal_error: None,
+            #[cfg(feature = "editor-debug")]
+            editor_authoring: None,
+            #[cfg(feature = "editor-debug")]
+            editor_authoring_frame: None,
+            #[cfg(feature = "editor-debug")]
+            next_editor_authoring_frame_revision: 1,
         };
         host.replace_presentation_events();
         Ok(host)
@@ -459,7 +486,91 @@ impl PuzzleBevyPlayerHost {
         self.runtime
             .set_current_state_json(state_json, level_index, materialize_level_start)
             .map_err(BevyPlayerError::Runtime)?;
+        self.editor_authoring = None;
+        self.editor_authoring_frame = None;
         self.refresh_runtime_snapshot(now_seconds)
+    }
+
+    /// Atomically installs the typed editor draft and its authoring
+    /// presentation contract. Presentation validity is checked against the
+    /// prospective state before the runtime is mutated.
+    #[cfg(feature = "editor-debug")]
+    pub fn hydrate_editor_draft_state(
+        &mut self,
+        state: &RuntimeStateSnapshot,
+        level_index: usize,
+        presentation: EditorAuthoringPresentation,
+        now_seconds: f64,
+    ) -> Result<(), BevyPlayerError> {
+        let source = editor_authoring_viewport_source(&self.viewports, &presentation.renderer)
+            .map_err(BevyPlayerError::EditorAuthoring)?;
+        let configuration =
+            editor_authoring::EditorAuthoringConfiguration::new(presentation, source);
+        configuration
+            .validate_for_state(state)
+            .map_err(BevyPlayerError::EditorAuthoring)?;
+        let state_json = serde_json::to_string(state).map_err(|error| {
+            BevyPlayerError::EditorAuthoring(format!(
+                "editor draft state serialization failed: {error}"
+            ))
+        })?;
+        self.runtime
+            .set_current_state_json(&state_json, level_index, false)
+            .map_err(BevyPlayerError::Runtime)?;
+        self.editor_authoring = Some(configuration);
+        self.editor_authoring_frame = None;
+        self.refresh_runtime_snapshot(now_seconds)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    pub fn editor_authoring_frame(&self) -> Option<&EditorAuthoringFrame> {
+        self.editor_authoring_frame.as_ref()
+    }
+
+    #[cfg(feature = "editor-debug")]
+    pub fn dispatch_editor_pointer(
+        &mut self,
+        surface_id: &str,
+        committed_frame_revision: u64,
+        point_css: Vec2,
+        gesture: EditorPointerGesture,
+    ) -> Result<(u64, Option<EditorAuthoringHitTarget>), BevyPlayerError> {
+        let frame = self.editor_authoring_frame.as_ref().ok_or_else(|| {
+            BevyPlayerError::EditorAuthoring(
+                "editor pointer requires a committed authoring frame".to_string(),
+            )
+        })?;
+        let frame_revision = frame.revision;
+        let hit = match gesture {
+            EditorPointerGesture::Move | EditorPointerGesture::Press => frame
+                .hit(surface_id, committed_frame_revision, point_css)
+                .map_err(BevyPlayerError::EditorAuthoring)?,
+            EditorPointerGesture::Leave => {
+                frame
+                    .validate_identity(surface_id, committed_frame_revision)
+                    .map_err(BevyPlayerError::EditorAuthoring)?;
+                None
+            }
+        };
+        let configuration = self.editor_authoring.as_mut().ok_or_else(|| {
+            BevyPlayerError::EditorAuthoring(
+                "editor pointer requires an authoring configuration".to_string(),
+            )
+        })?;
+        let viewport = self
+            .viewports
+            .get_mut(&configuration.viewport_source)
+            .ok_or_else(|| {
+                BevyPlayerError::EditorAuthoring(format!(
+                    "editor authoring viewport {}.{} is no longer mounted",
+                    configuration.viewport_source.component, configuration.viewport_source.source
+                ))
+            })?;
+        configuration
+            .set_highlight(&mut viewport.renderer, hit.clone(), &self.snapshot.theme)
+            .map_err(BevyPlayerError::EditorAuthoring)?;
+        viewport.needs_frame = true;
+        Ok((frame_revision, hit))
     }
 
     /// Resolves an editor-forwarded key in the runtime owner. When tracing is
@@ -669,6 +780,28 @@ impl PuzzleBevyPlayerHost {
                 viewport.animation_epoch_seconds = previous.animation_epoch_seconds;
             }
         }
+        #[cfg(feature = "editor-debug")]
+        if let Some(configuration) = self.editor_authoring.as_mut() {
+            let development = self
+                .runtime
+                .development_snapshot_from_player(snapshot.clone());
+            configuration
+                .validate_for_solver_state(&development.solver_state)
+                .map_err(BevyPlayerError::EditorAuthoring)?;
+            let source = editor_authoring_viewport_source(&next, &configuration.renderer)
+                .map_err(BevyPlayerError::EditorAuthoring)?;
+            configuration.viewport_source = source.clone();
+            let viewport = next.get_mut(&source).ok_or_else(|| {
+                BevyPlayerError::EditorAuthoring(format!(
+                    "editor authoring viewport {}.{} is not mounted",
+                    source.component, source.source
+                ))
+            })?;
+            configuration
+                .apply_to_renderer(&mut viewport.renderer, &snapshot.theme)
+                .map_err(BevyPlayerError::EditorAuthoring)?;
+            self.editor_authoring_frame = None;
+        }
         self.viewports = next;
         if preserve_event_queue {
             self.pending_presentation.extend(
@@ -811,6 +944,44 @@ fn projected_viewports(
         )
         .collect::<Result<BTreeMap<_, _>, _>>()?;
     Ok(viewports)
+}
+
+#[cfg(feature = "editor-debug")]
+fn editor_authoring_viewport_source(
+    viewports: &BTreeMap<RuntimeViewportSourceId, HostViewport>,
+    strategy: &EditorRendererStrategy,
+) -> Result<RuntimeViewportSourceId, String> {
+    let mut matching = viewports.values().filter(|viewport| {
+        matches!(
+            (strategy, &viewport.renderer),
+            (
+                EditorRendererStrategy::Grid2d,
+                RuntimeRendererState::TwoD(_)
+            ) | (
+                EditorRendererStrategy::Grid3d { .. },
+                RuntimeRendererState::ThreeD(_)
+            )
+        )
+    });
+    let Some(viewport) = matching.next() else {
+        return Err(format!(
+            "editor authoring requires exactly one {} viewport, but none is mounted",
+            match strategy {
+                EditorRendererStrategy::Grid2d => "grid2d",
+                EditorRendererStrategy::Grid3d { .. } => "grid3d",
+            }
+        ));
+    };
+    if matching.next().is_some() {
+        return Err(format!(
+            "editor authoring requires exactly one {} viewport, but multiple are mounted",
+            match strategy {
+                EditorRendererStrategy::Grid2d => "grid2d",
+                EditorRendererStrategy::Grid3d { .. } => "grid3d",
+            }
+        ));
+    }
+    Ok(viewport.source.clone())
 }
 
 fn collect_viewport_sources(
@@ -2068,6 +2239,10 @@ fn submit_resolved_frames(
         }
     }
     let clear_color = bevy_color(host.snapshot.theme.background);
+    #[cfg(feature = "editor-debug")]
+    let authoring_configuration = host.editor_authoring.clone();
+    #[cfg(feature = "editor-debug")]
+    let mut next_authoring_frame = None;
     for resolved in frames {
         let Some(framebuffer) = framebuffer_by_source.get(&resolved.source).copied() else {
             host.fail(BevyPlayerError::MissingViewportLayout(resolved.source));
@@ -2076,12 +2251,48 @@ fn submit_resolved_frames(
         let id = view_id(&resolved.source, &resolved.renderer);
         let order = order_by_id[&id];
         let result = match &resolved.renderer {
-            RuntimeRendererState::TwoD(scene) => queue_2d.submit(
-                PuzzleBevyViewId::two_d(&resolved.source.component, &resolved.source.source),
-                bevy_2d_view(scene, framebuffer, order, clear_color.clone()),
-                host.visual_images.clone(),
-                &resolved.frame,
-            ),
+            RuntimeRendererState::TwoD(scene) => {
+                let view = bevy_2d_view(scene, framebuffer, order, clear_color.clone());
+                let prepared =
+                    match prepare_resolved_frame_2d(&resolved.frame, &host.visual_images, &view) {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            host.fail(error.into());
+                            return;
+                        }
+                    };
+                #[cfg(feature = "editor-debug")]
+                if let Some(configuration) = authoring_configuration
+                    .as_ref()
+                    .filter(|configuration| configuration.viewport_source == resolved.source)
+                {
+                    let css_size =
+                        match editor_authoring_css_size(framebuffer, window.scale_factor()) {
+                            Ok(css_size) => css_size,
+                            Err(error) => {
+                                host.fail(BevyPlayerError::EditorAuthoring(error));
+                                return;
+                            }
+                        };
+                    match configuration.frame2d(
+                        scene,
+                        host.next_editor_authoring_frame_revision,
+                        css_size,
+                    ) {
+                        Ok(frame) => next_authoring_frame = Some(frame),
+                        Err(error) => {
+                            host.fail(BevyPlayerError::EditorAuthoring(error));
+                            return;
+                        }
+                    }
+                }
+                queue_2d.submit_prepared(
+                    PuzzleBevyViewId::two_d(&resolved.source.component, &resolved.source.source),
+                    view,
+                    host.visual_images.clone(),
+                    prepared,
+                )
+            }
             RuntimeRendererState::ThreeD(scene) => {
                 let camera = match bevy_camera(
                     &resolved.source,
@@ -2094,7 +2305,52 @@ fn submit_resolved_frames(
                         return;
                     }
                 };
-                queue_3d.submit(
+                #[cfg(feature = "editor-debug")]
+                let mut camera = camera;
+                #[cfg(feature = "editor-debug")]
+                if let Some(configuration) = authoring_configuration
+                    .as_ref()
+                    .filter(|configuration| configuration.viewport_source == resolved.source)
+                    && let Err(error) = configuration.apply_camera(&mut camera)
+                {
+                    host.fail(BevyPlayerError::EditorAuthoring(error));
+                    return;
+                }
+                let prepared = match prepare_resolved_frame(&resolved.frame) {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        host.fail(error.into());
+                        return;
+                    }
+                };
+                #[cfg(feature = "editor-debug")]
+                if let Some(configuration) = authoring_configuration
+                    .as_ref()
+                    .filter(|configuration| configuration.viewport_source == resolved.source)
+                {
+                    let css_size =
+                        match editor_authoring_css_size(framebuffer, window.scale_factor()) {
+                            Ok(css_size) => css_size,
+                            Err(error) => {
+                                host.fail(BevyPlayerError::EditorAuthoring(error));
+                                return;
+                            }
+                        };
+                    match configuration.frame3d(
+                        scene,
+                        host.next_editor_authoring_frame_revision,
+                        css_size,
+                        camera.clone(),
+                        prepared.bounds,
+                    ) {
+                        Ok(frame) => next_authoring_frame = Some(frame),
+                        Err(error) => {
+                            host.fail(BevyPlayerError::EditorAuthoring(error));
+                            return;
+                        }
+                    }
+                }
+                queue_3d.submit_prepared(
                     PuzzleBevyViewId::three_d(&resolved.source.component, &resolved.source.source),
                     PuzzleBevy3dView {
                         active: true,
@@ -2106,7 +2362,7 @@ fn submit_resolved_frames(
                         shadows_enabled: scene.render.shadow,
                         render_settings: bevy_render_settings(scene),
                     },
-                    &resolved.frame,
+                    prepared,
                 )
             }
         };
@@ -2114,6 +2370,17 @@ fn submit_resolved_frames(
             host.fail(error.into());
             return;
         }
+    }
+    #[cfg(feature = "editor-debug")]
+    if let Some(frame) = next_authoring_frame {
+        let Some(next_revision) = host.next_editor_authoring_frame_revision.checked_add(1) else {
+            host.fail(BevyPlayerError::EditorAuthoring(
+                "editor authoring frame revision overflow".to_string(),
+            ));
+            return;
+        };
+        host.editor_authoring_frame = Some(frame);
+        host.next_editor_authoring_frame_revision = next_revision;
     }
     submitted_ids.0 = active;
     submitted_rects.0 = framebuffer_by_source;
@@ -2187,6 +2454,25 @@ fn bevy_2d_view(
     }
 }
 
+#[cfg(feature = "editor-debug")]
+fn editor_authoring_css_size(
+    framebuffer: PuzzleBevyFramebufferRect,
+    scale_factor: f32,
+) -> Result<Vec2, String> {
+    if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        return Err(format!(
+            "editor authoring window scale factor must be finite and greater than zero, got {scale_factor}"
+        ));
+    }
+    let size = framebuffer.physical_size.as_vec2() / scale_factor;
+    if !size.is_finite() || size.x <= 0.0 || size.y <= 0.0 {
+        return Err(
+            "editor authoring committed CSS size must be finite and greater than zero".to_string(),
+        );
+    }
+    Ok(size)
+}
+
 fn framebuffer_rect(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
@@ -2249,6 +2535,7 @@ fn bevy_camera(
         pitch_degrees: f32::from(source.pitch_degrees) + interaction.pitch_degrees,
         roll_degrees: f32::from(source.roll_degrees),
         distance_scale: 2.8 / (source.zoom as f32 * interaction.zoom_factor),
+        target: None,
     })
 }
 
