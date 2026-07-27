@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use puzzle_authoring::{EditorDraftCell2d, EditorDraftCell3d, EditorDraftState};
 use puzzle_core::GridSize;
+use puzzle_kernel::{LayerId, ObjectId};
 use puzzle_runtime_contract::{
     RuntimeModelKind, RuntimeStateSnapshot, RuntimeStateSnapshot2d, RuntimeStateSnapshot3d,
 };
@@ -30,7 +31,10 @@ pub fn resolve_editor_draft(
                 level_index,
                 [level.size.width, level.size.height],
                 level.cells.iter().map(|cell: &EditorDraftCell2d| {
-                    ([cell.position.x, cell.position.y], &cell.symbol)
+                    (
+                        [cell.position.x, cell.position.y],
+                        cell.object_ids.as_slice(),
+                    )
                 }),
             )?;
             Ok(RuntimeStateSnapshot::TwoD(RuntimeStateSnapshot2d {
@@ -51,7 +55,7 @@ pub fn resolve_editor_draft(
                 level.cells.iter().map(|cell: &EditorDraftCell3d| {
                     (
                         [cell.position.x, cell.position.y, cell.position.z],
-                        &cell.symbol,
+                        cell.object_ids.as_slice(),
                     )
                 }),
             )?;
@@ -90,7 +94,7 @@ fn resolve_grid_draft<'a, const D: usize, Size, Cells>(
 ) -> Result<ResolvedGridDraft, String>
 where
     Size: GridSize<D>,
-    Cells: IntoIterator<Item = ([u16; D], &'a String)>,
+    Cells: IntoIterator<Item = ([u16; D], &'a [u16])>,
 {
     let level = game
         .levels
@@ -110,13 +114,7 @@ where
 
     let mut slots = vec![0; slot_count];
     let mut occupied_cells = HashSet::new();
-    for (position, symbol_text) in cells {
-        let symbol = one_symbol(symbol_text)?;
-        let objects = level.legend.get(&symbol).ok_or_else(|| {
-            format!(
-                "editor draft cell references symbol `{symbol}` not defined by compiled level {level_index}"
-            )
-        })?;
+    for (position, object_ids) in cells {
         let cell = cell_index(&axes, position)?;
         if !occupied_cells.insert(cell) {
             return Err(format!(
@@ -124,11 +122,41 @@ where
                 format_position(position)
             ));
         }
-        for object in objects {
-            let layer = game
-                .game
-                .object_layer(*object)
-                .ok_or_else(|| format!("editor draft object {} has no compiled layer", object.0))?;
+        let mut object_ids = object_ids.to_vec();
+        object_ids.sort_unstable();
+        if let Some(duplicate) = object_ids
+            .windows(2)
+            .find_map(|pair| (pair[0] == pair[1]).then_some(pair[0]))
+        {
+            return Err(format!(
+                "editor draft cell {} references object {duplicate} more than once",
+                format_position(position)
+            ));
+        }
+        let mut occupied_layers: Vec<(LayerId, ObjectId)> = Vec::with_capacity(object_ids.len());
+        for raw_object in object_ids {
+            let object = ObjectId(raw_object);
+            let layer = game.game.object_layer(object).ok_or_else(|| {
+                format!(
+                    "editor draft cell {} references unknown object {raw_object}",
+                    format_position(position)
+                )
+            })?;
+            if let Some((_, existing)) = occupied_layers
+                .iter()
+                .find(|(existing_layer, _)| *existing_layer == layer)
+            {
+                return Err(format!(
+                    "editor draft cell {} references objects {} and {} on compiled layer {}",
+                    format_position(position),
+                    existing.0,
+                    object.0,
+                    layer.0
+                ));
+            }
+            occupied_layers.push((layer, object));
+        }
+        for (layer, object) in occupied_layers {
             slots[cell * usize::from(layer_count) + usize::from(layer.0)] = object.0;
         }
     }
@@ -144,19 +172,6 @@ where
             .map(|rule| rule.0)
             .collect(),
     })
-}
-
-fn one_symbol(value: &str) -> Result<char, String> {
-    let mut chars = value.chars();
-    let symbol = chars
-        .next()
-        .ok_or_else(|| "editor draft symbol must contain exactly one character".to_string())?;
-    if chars.next().is_some() {
-        return Err(format!(
-            "editor draft symbol `{value}` must contain exactly one character"
-        ));
-    }
-    Ok(symbol)
 }
 
 fn cell_index<const D: usize>(axes: &[u16; D], position: [u16; D]) -> Result<usize, String> {
@@ -241,9 +256,37 @@ levels demo3 of board3 {
         .unwrap()
     }
 
+    fn object_id(document: &crate::LoadedDocument, model_name: &str, object_name: &str) -> u16 {
+        let model = document
+            .models
+            .iter()
+            .find(|model| match model {
+                crate::LoadedDocumentModel::Puzzle2d { name, .. }
+                | crate::LoadedDocumentModel::Puzzle3d { name, .. } => name == model_name,
+            })
+            .unwrap_or_else(|| panic!("missing model {model_name}"));
+        match model {
+            crate::LoadedDocumentModel::Puzzle2d { game, .. } => game
+                .object_labels
+                .iter()
+                .find_map(|(id, label)| (label == object_name).then_some(id.0)),
+            crate::LoadedDocumentModel::Puzzle3d { game, .. } => game
+                .object_labels
+                .iter()
+                .find_map(|(id, label)| (label == object_name).then_some(id.0)),
+        }
+        .unwrap_or_else(|| panic!("missing object {object_name} in model {model_name}"))
+    }
+
     #[test]
-    fn resolves_grid2d_and_grid3d_through_one_semantic_owner() {
+    fn resolves_identity_drafts_and_novel_layer_combinations_for_both_dimensions() {
         let document = document();
+        let floor = object_id(&document, "board2", "Floor");
+        let player = object_id(&document, "board2", "Player");
+        let box_object = object_id(&document, "board2", "Box");
+        let floor3 = object_id(&document, "board3", "Floor3");
+        let player3 = object_id(&document, "board3", "Player3");
+        let box3 = object_id(&document, "board3", "Box3");
         let grid2d = EditorDraftState::Grid2d(EditorDraftLevel2d {
             size: EditorDraftSize2d {
                 width: 2,
@@ -252,11 +295,11 @@ levels demo3 of board3 {
             cells: vec![
                 EditorDraftCell2d {
                     position: EditorDraftPosition2d { x: 0, y: 0 },
-                    symbol: "P".to_string(),
+                    object_ids: vec![player, floor],
                 },
                 EditorDraftCell2d {
                     position: EditorDraftPosition2d { x: 1, y: 0 },
-                    symbol: ".".to_string(),
+                    object_ids: vec![box_object, floor],
                 },
             ],
         });
@@ -269,11 +312,11 @@ levels demo3 of board3 {
             cells: vec![
                 EditorDraftCell3d {
                     position: EditorDraftPosition3d { x: 0, y: 0, z: 0 },
-                    symbol: "P".to_string(),
+                    object_ids: vec![player3, floor3],
                 },
                 EditorDraftCell3d {
                     position: EditorDraftPosition3d { x: 0, y: 0, z: 1 },
-                    symbol: ".".to_string(),
+                    object_ids: vec![box3, floor3],
                 },
             ],
         });
@@ -284,11 +327,7 @@ levels demo3 of board3 {
             panic!("expected grid2d state");
         };
         assert_eq!((two_d.width, two_d.height), (2, 1));
-        assert_eq!(two_d.slots.len(), 4);
-        assert_ne!(two_d.slots[0], 0);
-        assert_ne!(two_d.slots[1], 0);
-        assert_ne!(two_d.slots[2], 0);
-        assert_eq!(two_d.slots[3], 0);
+        assert_eq!(two_d.slots, vec![floor, player, floor, box_object]);
 
         let RuntimeStateSnapshot::ThreeD(three_d) =
             resolve_editor_draft(&document, "board3", 0, &grid3d).unwrap()
@@ -296,11 +335,7 @@ levels demo3 of board3 {
             panic!("expected grid3d state");
         };
         assert_eq!((three_d.width, three_d.depth, three_d.height), (1, 1, 2));
-        assert_eq!(three_d.slots.len(), 4);
-        assert_ne!(three_d.slots[0], 0);
-        assert_ne!(three_d.slots[1], 0);
-        assert_ne!(three_d.slots[2], 0);
-        assert_eq!(three_d.slots[3], 0);
+        assert_eq!(three_d.slots, vec![floor3, player3, floor3, box3]);
     }
 
     #[test]
@@ -322,7 +357,7 @@ levels demo3 of board3 {
     }
 
     #[test]
-    fn rejects_symbols_not_owned_by_the_compiled_level() {
+    fn rejects_unknown_object_identities() {
         let draft = EditorDraftState::Grid3d(EditorDraftLevel3d {
             size: EditorDraftSize3d {
                 width: 1,
@@ -331,15 +366,63 @@ levels demo3 of board3 {
             },
             cells: vec![EditorDraftCell3d {
                 position: EditorDraftPosition3d { x: 0, y: 0, z: 0 },
-                symbol: "X".to_string(),
+                object_ids: vec![u16::MAX],
             }],
         });
         assert_eq!(
             resolve_editor_draft(&document(), "board3", 0, &draft),
-            Err(
-                "editor draft cell references symbol `X` not defined by compiled level 0"
-                    .to_string()
-            )
+            Err("editor draft cell (0,0,0) references unknown object 65535".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_object_identities_that_compete_for_one_layer() {
+        let document = document();
+        let player3 = object_id(&document, "board3", "Player3");
+        let box3 = object_id(&document, "board3", "Box3");
+        let (first, second) = if player3 < box3 {
+            (player3, box3)
+        } else {
+            (box3, player3)
+        };
+        let draft = EditorDraftState::Grid3d(EditorDraftLevel3d {
+            size: EditorDraftSize3d {
+                width: 1,
+                depth: 1,
+                height: 1,
+            },
+            cells: vec![EditorDraftCell3d {
+                position: EditorDraftPosition3d { x: 0, y: 0, z: 0 },
+                object_ids: vec![second, first],
+            }],
+        });
+        assert_eq!(
+            resolve_editor_draft(&document, "board3", 0, &draft),
+            Err(format!(
+                "editor draft cell (0,0,0) references objects {first} and {second} on compiled layer 1"
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_object_identity_without_using_input_order() {
+        let document = document();
+        let floor = object_id(&document, "board2", "Floor");
+        let draft = EditorDraftState::Grid2d(EditorDraftLevel2d {
+            size: EditorDraftSize2d {
+                width: 1,
+                height: 1,
+            },
+            cells: vec![EditorDraftCell2d {
+                position: EditorDraftPosition2d { x: 0, y: 0 },
+                object_ids: vec![floor, floor],
+            }],
+        });
+        assert_eq!(
+            resolve_editor_draft(&document, "board2", 0, &draft),
+            Err(format!(
+                "editor draft cell (0,0) references object {floor} more than once"
+            ))
         );
     }
 }

@@ -36,14 +36,14 @@ pub struct EditorDraftPosition3d {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EditorDraftCell2d {
     pub position: EditorDraftPosition2d,
-    pub symbol: String,
+    pub object_ids: Vec<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EditorDraftCell3d {
     pub position: EditorDraftPosition3d,
-    pub symbol: String,
+    pub object_ids: Vec<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

@@ -25,6 +25,12 @@ read the more specific crate `AGENTS.md` when present.
   rendering, catalog resolution, and playback lifecycle.
 - `audio_worklet`: the dedicated browser audio-thread Rust renderer. Its
   adjacent JavaScript is generated binding/processor transport only.
+- `authoring`: presentation-neutral editor values such as draft dimensions,
+  positions, and compiled object identities. It does not own source syntax,
+  runtime materialization, rendering, or browser behavior.
+- `editor_preview_contract`: typed browser commands and observations for the
+  shared editor Bevy surface. It carries editor identities but owns no language
+  or runtime semantics.
 - `web_audio`: WebAudio device submission and capability feedback over resolved
   audio assets and typed commands.
 - `scene`: shared presentation/flow metadata and layout/component contracts.

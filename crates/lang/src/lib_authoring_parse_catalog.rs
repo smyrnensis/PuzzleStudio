@@ -1099,7 +1099,7 @@ fn project_level_products(
             )
             .ok()
             .and_then(|_| resolved_catalog.char_objects.get(&legend.ch))
-            .map(|objects| projected_level_object_names(objects, &resolved_catalog))
+            .cloned()
         };
         shared_resolution.insert(legend.ch, resolved);
     }
@@ -1121,21 +1121,35 @@ fn project_level_products(
                 rows: level.lines.iter().map(|line| line.text.clone()).collect(),
                 shared_legends: shared_legends
                     .iter()
-                    .map(|legend| crate::surface::SurfaceLevelLegendProduct {
-                        symbol: legend.ch,
-                        selectors: legend.selectors.clone(),
-                        objects: shared_resolution.get(&legend.ch).cloned().flatten(),
+                    .map(|legend| {
+                        let objects = shared_resolution.get(&legend.ch).cloned().flatten();
+                        crate::surface::SurfaceLevelLegendProduct {
+                            symbol: legend.ch,
+                            selectors: legend.selectors.clone(),
+                            objects: objects.as_deref().map(|objects| {
+                                projected_level_object_names(objects, &resolved_catalog)
+                            }),
+                            object_ids: objects
+                                .as_deref()
+                                .map(projected_level_object_ids),
+                        }
                     })
                     .collect(),
                 local_legends: level
                     .legends
                     .iter()
-                    .map(|legend| crate::surface::SurfaceLevelLegendProduct {
-                        symbol: legend.ch,
-                        selectors: legend.selectors.clone(),
-                        objects: local_resolution
-                            .get(&legend.ch)
-                            .map(|objects| projected_level_object_names(objects, &resolved_catalog)),
+                    .map(|legend| {
+                        let objects = local_resolution.get(&legend.ch);
+                        crate::surface::SurfaceLevelLegendProduct {
+                            symbol: legend.ch,
+                            selectors: legend.selectors.clone(),
+                            objects: objects.map(|objects| {
+                                projected_level_object_names(objects, &resolved_catalog)
+                            }),
+                            object_ids: objects.map(|objects| {
+                                projected_level_object_ids(objects)
+                            }),
+                        }
                     })
                     .collect(),
             }
@@ -1153,6 +1167,10 @@ fn projected_level_object_names(objects: &[ObjectId], catalog: &Catalog) -> Vec<
                 .expect("every catalog object has a public label")
         })
         .collect()
+}
+
+fn projected_level_object_ids(objects: &[ObjectId]) -> Vec<u16> {
+    objects.iter().map(|object| object.0).collect()
 }
 
 fn project_syntax_semantics(
