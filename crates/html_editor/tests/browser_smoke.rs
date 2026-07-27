@@ -34,6 +34,11 @@ fn compact_index_controls_stay_vertically_centered() {
 }
 
 #[test]
+fn preview_iframe_uses_its_final_raster_geometry() {
+    run_editor_browser_smoke(&["--preview-final-raster-only"]);
+}
+
+#[test]
 fn level_selection_waits_for_current_revision_entries() {
     run_editor_browser_smoke(&["--level-selection-revision-only"]);
 }

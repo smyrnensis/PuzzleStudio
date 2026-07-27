@@ -1,24 +1,8 @@
-// 3D level editor source roundtrip and runtime bridge. Rendering stays in puzzle3_component.js.
-let level3dRuntimeFrameKey = "";
-let level3dRuntimeFrameDocumentLoaded = false;
-let level3dRuntimeFrameRuntimeReady = false;
-let level3dRuntimeFrameFailure = null;
-let level3dRuntimeFrameProgress = [];
-let level3dLayerFrameKey = "";
-let level3dLayerFrameLoaded = false;
-let solverPreviewFrame = null;
-let solverPreviewFrameKey = "";
-let solverPreviewFrameLoaded = false;
+// 3D level authoring controls. Valid state rendering and hit testing are Rust-owned.
 let level3dLayerHover = null;
-let level3dLayerRendererView = null;
-let level3dStageOverlay = null;
-let level3dStageHit = null;
-let level3dStageRendererView = null;
-let level3dLayerPaintDrag = null;
 let level3dPreviewScrubDrag = null;
 let level3dSliceScrubDrag = null;
 let level3dPlaytestActive = false;
-let level3dPlaytestSnapshot = null;
 let level3dPreviewCameraState = null;
 let level3dPreviewOrigin = { x: 0, y: 0, z: 0 };
 let level3dSurfaceResizeFrame = 0;
@@ -33,10 +17,6 @@ const LEVEL3D_FRAME_GAP = 12;
 const LEVEL3D_SLICE_SCRUB_STEP_PX = 18;
 const LEVEL3D_CAMERA_MIN_PITCH_DEGREES = -90;
 const LEVEL3D_CAMERA_MAX_PITCH_DEGREES = 90;
-const LEVEL3D_PREVIEW_SURFACE_MESSAGE = "PuzzleStudioPreviewSurfaceUpdate";
-const LEVEL3D_PREVIEW_SURFACE_KIND = "puzzle3-level";
-const LEVEL3D_PREVIEW_SURFACE_MODE = "isolated";
-const LEVEL3D_MODEL_COMPONENT_PREVIEW_MESSAGE = "PuzzleStudioRenderPuzzle3ModelComponent";
 const LEVEL3D_EMPTY_CHAR = ".";
 const LEVEL3D_LEGEND_CHAR_CANDIDATES = "@$%&?!~^:;_+-*/XYZUVWQRSTABCDEFGHIJKLMNOPabcdefghijklmnopqrstuvw0123456789";
 let level3d = {
@@ -83,10 +63,11 @@ function renderLevel3dBuilder() {
   renderLevel3dLayerPalette();
   renderLevel3dPreviewControls();
   renderLevel3dLayerControls();
-  renderLevel3dLayerBoard();
+  if (!previewBuild?.html) {
+    renderLevel3dLayerBoard();
+  }
   renderLevel3dSourcePreview();
   renderLevel3dRuntime();
-  renderLevel3dStageOverlay();
   updateLevel3dPlaytestControls();
 }
 
@@ -133,7 +114,6 @@ function setLevel3dViewMode(mode) {
     return;
   }
   level3dViewMode = nextMode;
-  level3dStageHit = null;
   level3dLayerHover = null;
   syncLevel3dViewMode();
   scheduleLevel3dSurfaceResize();
@@ -319,7 +299,6 @@ function clearLoadedLevel3dState(source, document = level3dSourceDocument()) {
     sourceKey: "",
     sourceDocumentId: document?.id || "",
   };
-  level3dStageHit = null;
 }
 
 function sourceLevel3dPaletteEntries(source) {
@@ -413,14 +392,19 @@ function normalizedLevel3dLegendEntries(entries) {
     unique.push({
       char: ch,
       objects: Array.isArray(entry.objects) ? entry.objects.filter(Boolean) : [],
+      objectIds: Array.isArray(entry.objectIds)
+        ? entry.objectIds.filter((id) => Number.isInteger(id) && id > 0)
+        : [],
       temporary: entry.temporary === true,
     });
     chars.add(ch);
   }
   if (!unique.some((entry) => entry.objects.length === 0)) {
-    unique.unshift({ char: LEVEL3D_EMPTY_CHAR, objects: [] });
+    unique.unshift({ char: LEVEL3D_EMPTY_CHAR, objects: [], objectIds: [] });
   }
-  return unique.length ? unique : [{ char: LEVEL3D_EMPTY_CHAR, objects: [] }];
+  return unique.length
+    ? unique
+    : [{ char: LEVEL3D_EMPTY_CHAR, objects: [], objectIds: [] }];
 }
 
 function level3dEmptyChar(entries = level3d.palette) {
@@ -493,9 +477,7 @@ function resizeLevel3dWidth(nextWidth, options = {}) {
   syncLevel3dSizeControls();
   renderLevel3dLayerBoard();
   renderLevel3dSourcePreview();
-  level3dStageHit = null;
-  renderLevel3dStageOverlay();
-  refreshLevel3dRuntimePreviews();
+  renderLevel3dRuntime();
   pushVisualEditUndoSnapshot("level3d", before);
   if (options.status !== false) {
     setLevel3dActionStatus(`Width ${width}`, "is-ok");
@@ -543,9 +525,7 @@ function resizeLevel3dDepth(nextDepth, options = {}) {
   syncLevel3dSizeControls();
   renderLevel3dLayerBoard();
   renderLevel3dSourcePreview();
-  level3dStageHit = null;
-  renderLevel3dStageOverlay();
-  refreshLevel3dRuntimePreviews();
+  renderLevel3dRuntime();
   pushVisualEditUndoSnapshot("level3d", before);
   if (options.status !== false) {
     setLevel3dActionStatus(`Depth ${depth}`, "is-ok");
@@ -594,9 +574,7 @@ function resizeLevel3dHeight(nextHeight, options = {}) {
   syncLevel3dSizeControls();
   renderLevel3dLayerBoard();
   renderLevel3dSourcePreview();
-  level3dStageHit = null;
-  renderLevel3dStageOverlay();
-  refreshLevel3dRuntimePreviews();
+  renderLevel3dRuntime();
   pushVisualEditUndoSnapshot("level3d", before);
   if (options.status !== false) {
     setLevel3dActionStatus(`Height ${height}`, "is-ok");
@@ -894,10 +872,12 @@ function level3dSourceEntries(source) {
         legend: contract.legend.map((legend) => ({
           char: legend.symbol,
           objects: legend.objects || [],
+          objectIds: legend.objectIds || [],
         })),
         localLegends: (contract.localLegends || []).map((legend) => ({
           symbol: legend.symbol,
           selectors: legend.selectors || [],
+          objectIds: legend.objectIds || [],
         })),
       };
     });
@@ -929,12 +909,10 @@ function selectLevel3dPaletteEntry(entry) {
   if (!entry || level3dPlaytestActive) return false;
   setLevel3dStageResizeMode(null);
   level3d.selectedChar = entry.char;
-  level3dStageHit = null;
   renderLevel3dPalette();
   renderLevel3dLayerPalette();
   renderLevel3dLayerBoard();
-  renderLevel3dLayerOverlay();
-  renderLevel3dStageOverlay();
+  renderLevel3dRuntime();
   return true;
 }
 
@@ -1229,11 +1207,10 @@ function level3dLayerResizeModeButton(mode) {
     `;
   button.addEventListener("click", () => {
     setLevel3dStageResizeMode(level3dStageResizeMode() === mode ? null : mode);
-    level3dStageHit = null;
     renderLevel3dPalette();
     renderLevel3dLayerPalette();
     syncLevel3dLayerResizeControls();
-    renderLevel3dStageOverlay();
+    renderLevel3dRuntime();
   });
   return button;
 }
@@ -1376,10 +1353,9 @@ function level3dEditModeButton(mode) {
   button.addEventListener("click", () => {
     setLevel3dStageResizeMode(null);
     setLevel3dEditMode(mode);
-    level3dStageHit = null;
     renderLevel3dPalette();
     renderLevel3dLayerPalette();
-    renderLevel3dStageOverlay();
+    renderLevel3dRuntime();
   });
   return button;
 }
@@ -1417,8 +1393,7 @@ function toggleLevel3dFrameVisibility() {
   level3d.previewFrames = !level3d.previewFrames;
   renderLevel3dPalette();
   renderLevel3dLayerPalette();
-  renderLevel3dStageOverlay();
-  refreshLevel3dRuntimePreviews();
+  renderLevel3dRuntime();
   return true;
 }
 
@@ -1459,10 +1434,9 @@ function level3dStageResizeModeButton({ mode, className, label, ariaLabel, icon 
   button.innerHTML = icon;
   button.addEventListener("click", () => {
     setLevel3dStageResizeMode(level3dStageResizeMode() === mode ? null : mode);
-    level3dStageHit = null;
     renderLevel3dPalette();
     renderLevel3dLayerPalette();
-    renderLevel3dStageOverlay();
+    renderLevel3dRuntime();
   });
   return button;
 }
@@ -1616,12 +1590,10 @@ function renderLevel3dLayerBoard() {
   if (!level3d.slices.length) {
     level3dLayerBoard.classList.add("is-empty");
     level3dLayerBoard.replaceChildren();
-    renderLevel3dLayerOverlay();
     return;
   }
   level3dLayerBoard.classList.remove("is-empty");
   renderLevel3dLayerGrid();
-  renderLevel3dLayerOverlay();
 }
 
 function level3dLayerCellSize(width, depth) {
@@ -1926,7 +1898,7 @@ function setLevel3dLayer(value) {
   level3dLayerHover = null;
   renderLevel3dLayerControls();
   renderLevel3dLayerBoard();
-  renderLevel3dStageOverlay();
+  renderLevel3dRuntime();
 }
 
 function moveLevel3dLayer(delta) {
@@ -1949,9 +1921,7 @@ function insertLevel3dSlice(relative) {
   renderLevel3dLayerControls();
   renderLevel3dLayerBoard();
   renderLevel3dSourcePreview();
-  level3dStageHit = null;
-  renderLevel3dStageOverlay();
-  refreshLevel3dRuntimePreviews();
+  renderLevel3dRuntime();
   pushVisualEditUndoSnapshot("level3d", before);
   setLevel3dActionStatus(`Added slice ${insertIndex + 1}`, "is-ok");
   return true;
@@ -2027,48 +1997,6 @@ function finishLevel3dSliceScrub(pointerId = null) {
   }
 }
 
-function level3dLayerCellFromPointer(event) {
-  const position = level3dLayerPositionFromEvent(event);
-  return position ? { position } : null;
-}
-
-function paintLevel3dLayerHoverCell() {
-  if (!level3dLayerHover) {
-    return false;
-  }
-  return level3d.layerFillActive
-    ? bucketFillLevel3dLayerFromPosition(level3dLayerHover)
-    : paintLevel3dCellAtPosition(level3dLayerHover);
-}
-
-function startLevel3dLayerPaint(event) {
-  if (level3dPlaytestActive) {
-    level3dLayerBoard?.focus();
-    return;
-  }
-  if (event.button !== 0) {
-    return;
-  }
-  const cell = level3dLayerCellFromPointer(event);
-  if (!cell) {
-    return;
-  }
-  event.preventDefault();
-  level3dLayerBoard?.focus();
-  if (level3d.layerFillActive) {
-    withVisualEditHistory("level3d", () => bucketFillLevel3dLayerFromPosition(cell.position));
-    return;
-  }
-  level3dLayerPaintDrag = {
-    pointerId: event.pointerId,
-    lastKey: "",
-    beforeSnapshot: visualEditSnapshot("level3d"),
-    changed: false,
-  };
-  level3dLayerBoard?.setPointerCapture?.(event.pointerId);
-  continueLevel3dLayerPaint(event);
-}
-
 function bucketFillLevel3dLayerFromPosition(position) {
   if (level3dPlaytestActive || !level3dPositionInBounds(position)) {
     return false;
@@ -2111,48 +2039,6 @@ function bucketFillLevel3dLayerFromPosition(position) {
   return true;
 }
 
-function continueLevel3dLayerPaint(event) {
-  const cell = level3dLayerCellFromPointer(event);
-  if (!cell) {
-    if (level3dLayerHover) {
-      level3dLayerHover = null;
-      renderLevel3dLayerOverlay();
-    }
-    return;
-  }
-  const hoverKey = `${cell.position.x},${cell.position.y},${cell.position.z}`;
-  const previousHoverKey = level3dLayerHover
-    ? `${level3dLayerHover.x},${level3dLayerHover.y},${level3dLayerHover.z}`
-    : "";
-  level3dLayerHover = cell.position;
-  if (hoverKey !== previousHoverKey) {
-    renderLevel3dLayerOverlay();
-  }
-  if (!level3dLayerPaintDrag || event.pointerId !== level3dLayerPaintDrag.pointerId) {
-    return;
-  }
-  if (hoverKey === level3dLayerPaintDrag.lastKey) {
-    return;
-  }
-  level3dLayerPaintDrag.lastKey = hoverKey;
-  if (paintLevel3dCellAtPosition(cell.position)) {
-    level3dLayerPaintDrag.changed = true;
-  }
-}
-
-function stopLevel3dLayerPaint(event) {
-  if (!level3dLayerPaintDrag || event.pointerId !== level3dLayerPaintDrag.pointerId) {
-    return;
-  }
-  if (level3dLayerBoard?.hasPointerCapture?.(event.pointerId)) {
-    level3dLayerBoard.releasePointerCapture(event.pointerId);
-  }
-  if (level3dLayerPaintDrag.changed) {
-    pushVisualEditUndoSnapshot("level3d", level3dLayerPaintDrag.beforeSnapshot);
-  }
-  level3dLayerPaintDrag = null;
-}
-
 function resizeLevel3dLayerEdge(edge, mode = level3dStageResizeMode() || "expand") {
   const normalizedMode = mode === "shrink" ? "shrink" : "expand";
   const delta = normalizedMode === "shrink" ? -1 : 1;
@@ -2190,9 +2076,7 @@ function transformLevel3dLayerCells({ nextWidth, nextDepth, mapCell, message }) 
   syncLevel3dSizeControls();
   renderLevel3dLayerBoard();
   renderLevel3dSourcePreview();
-  level3dStageHit = null;
-  renderLevel3dStageOverlay();
-  refreshLevel3dRuntimePreviews();
+  renderLevel3dRuntime();
   pushVisualEditUndoSnapshot("level3d", before);
   setLevel3dActionStatus(`${message} all slices`, "is-ok");
   return true;
@@ -2288,8 +2172,7 @@ function paintLevel3dCellAtPosition(position, ch = level3d.selectedChar) {
   slice[row] = `${current.slice(0, x)}${nextChar}${current.slice(x + 1)}`;
   renderLevel3dSourcePreview();
   renderLevel3dLayerBoard();
-  renderLevel3dStageOverlay();
-  refreshLevel3dRuntimePreviews();
+  renderLevel3dRuntime();
   return true;
 }
 
@@ -2487,76 +2370,93 @@ function loadLevel3dSourceDefinition(entry, source, options = {}) {
 }
 
 function renderLevel3dRuntime() {
-  if (!level3dRuntimeFrame) {
-    renderLevel3dStageOverlay();
-    return;
-  }
-  const update = level3dRuntimePreviewUpdate();
-  if (!previewBuild?.html || !update) {
-    showBlankLevel3dRuntimeFrame(level3dRuntimeFrame);
-    level3dRuntimeFrameDocumentLoaded = false;
-    level3dRuntimeFrameRuntimeReady = false;
-    level3dRuntimeFrameFailure = null;
-    level3dRuntimeFrameProgress = [];
-    level3dRuntimeFrameKey = "";
-    level3dStageRendererView = null;
+  const exportData = previewBuild?.exportData;
+  if (!previewBuild?.html || !exportData || !level3d.slices.length) {
     setLevel3dActionStatus(previewBuild?.html ? "Load a 3D level first" : "Run Preview first", "");
     return;
   }
-  const key = `${activePreviewDocument()?.id || ""}:${previewBuild?.html.length}:${currentEditableLevelIndex()}`;
-  if (level3dRuntimeFrameKey !== key) {
-    const previousFrame = level3dRuntimeFrame;
-    const nextFrame = previousFrame.cloneNode(false);
-    previousFrame.replaceWith(nextFrame);
-    level3dRuntimeFrame = nextFrame;
-    level3dRuntimeFrameDocumentLoaded = false;
-    level3dRuntimeFrameRuntimeReady = false;
-    level3dRuntimeFrameFailure = null;
-    level3dRuntimeFrameProgress = [];
-    level3dStageRendererView = null;
-    level3dRuntimeFrameKey = key;
-    nextFrame.addEventListener("load", () => {
-      if (level3dRuntimeFrame !== nextFrame || level3dRuntimeFrameKey !== key) {
-        return;
+  const layer = level3dViewMode === "layer";
+  const surfaceId = layer ? "level-authoring-layer" : "level-authoring-stage";
+  const host = layer
+    ? level3dLayerBoard
+    : level3dBuilder?.querySelector(".level3d-frame-surface");
+  const selected = level3dSelectedEntry();
+  const resize = level3dStageResizeMode();
+  const interaction = level3dPlaytestActive
+    ? { kind: "play" }
+    : resize
+      ? { kind: "resize", mode: resize }
+      : {
+        kind: "paint",
+        operation: selected?.objects?.length
+          ? (level3dEditMode() === "add" ? "add" : "replace")
+          : "erase",
+        };
+  const camera = layer
+    ? level3dLayerCamera()
+    : level3dPreviewCamera(level3dRuntimeSnapshot());
+  const origin = level3dPreviewOriginState();
+  const cells = [];
+  for (let z = 0; z < level3d.slices.length; z += 1) {
+    for (let y = 0; y < level3d.depth; y += 1) {
+      const row = String(level3d.slices[z]?.[y] || "")
+        .padEnd(level3d.width, level3dEmptyChar())
+        .slice(0, level3d.width);
+      for (let x = 0; x < level3d.width; x += 1) {
+        const entry = level3d.palette.find((candidate) => candidate.char === row[x]);
+        const objectIds = Array.isArray(entry?.objectIds) ? [...entry.objectIds] : [];
+        cells.push({ position: { x, y, z }, objectIds });
       }
-      level3dRuntimeFrameDocumentLoaded = true;
-      sendLevel3dSnapshotToRuntime();
-    }, { once: true });
-    nextFrame.srcdoc = level3dRuntimePreviewDocument(update);
-    return;
+    }
   }
-  sendLevel3dSnapshotToRuntime();
-  sendLevel3dLayerSnapshotToRuntime();
+  const payload = {
+    model: editorModelName(exportData),
+    levelIndex: currentEditableLevelIndex(exportData),
+    draft: {
+      kind: "grid3d",
+      level: {
+        size: { width: level3d.width, depth: level3d.depth, height: level3d.height },
+        cells,
+      },
+    },
+    presentation: {
+      surface: { surfaceId, interaction },
+      renderer: {
+        kind: "grid3d",
+        sliceZ: layer ? currentLevel3dLayerZ() : null,
+        hiddenLayers: [],
+        camera: {
+          projection: camera.projection,
+          yawDegrees: camera.yawDegrees,
+          pitchDegrees: camera.pitchDegrees,
+          rollDegrees: camera.rollDegrees,
+          zoom: camera.zoom,
+        },
+        view: { target: { x: origin.x, y: origin.y, z: origin.z } },
+        settings: {
+          gridVisible: level3d.previewFrames,
+          occupiedCellFrames: level3d.previewFrames,
+          stageFrame: level3d.previewFrames,
+        },
+      },
+    },
+  };
+  queueEditorRuntimeDisplay({
+    host,
+    role: "authoring",
+    surfaceId,
+    kind: "hydrateDraft",
+    payload,
+    key: `draft:${surfaceId}:${JSON.stringify(payload)}`,
+    onError: (error) => setLevel3dActionStatus(
+      `3D level display failed: ${userFacingRuntimeError(error)}`,
+      "is-error",
+    ),
+  });
 }
 
 function sendLevel3dSnapshotToRuntime() {
-  if (!level3dRuntimeFrameDocumentLoaded || !level3dRuntimeFrame?.contentWindow) {
-    return;
-  }
-  const update = level3dRuntimePreviewUpdate();
-  if (!update) {
-    showBlankLevel3dRuntimeFrame(level3dRuntimeFrame);
-    level3dRuntimeFrameDocumentLoaded = false;
-    level3dRuntimeFrameRuntimeReady = false;
-    level3dRuntimeFrameFailure = null;
-    level3dRuntimeFrameKey = "";
-    return;
-  }
-  level3dRuntimeFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), "*");
-}
-
-function refreshLevel3dRuntimePreviews() {
-  level3dStageRendererView = null;
-  if (!level3dRuntimeFrameDocumentLoaded || !level3dRuntimeFrame?.contentWindow) {
-    renderLevel3dRuntime();
-  } else {
-    sendLevel3dSnapshotToRuntime();
-  }
-  if (!level3dLayerFrameLoaded || !level3dLayerFrame?.contentWindow) {
-    renderLevel3dLayerRuntime();
-  } else {
-    sendLevel3dLayerSnapshotToRuntime();
-  }
+  renderLevel3dRuntime();
 }
 
 async function startLevel3dPlaytest() {
@@ -2572,22 +2472,17 @@ async function startLevel3dPlaytest() {
   if (!exportData) {
     return;
   }
-  const snapshot = level3dRuntimeSnapshot();
-  if (!previewBuild?.html || !snapshot) {
+  if (!previewBuild?.html || !level3d.slices.length) {
     setLevel3dActionStatus("Load a 3D level first", "is-error");
     return;
   }
   if (typeof clearSolutionPreview === "function") {
     clearSolutionPreview();
   }
-  level3dPlaytestSnapshot = level3dNormalizePlaytestSnapshot(snapshot);
   level3dPlaytestActive = true;
-  level3dStageHit = null;
   setLevel3dViewMode("stage");
   updateLevel3dPlaytestControls();
-  renderLevel3dStageOverlay();
-  refreshLevel3dRuntimePreviews();
-  requestLevel3dPlaytestState();
+  renderLevel3dRuntime();
   focusLevel3dPlaytestTarget();
   requestAnimationFrame(focusLevel3dPlaytestTarget);
   setLevel3dActionStatus("Playing 3D level", "is-ok");
@@ -2599,12 +2494,9 @@ function stopLevel3dPlaytest(options = {}) {
     return;
   }
   level3dPlaytestActive = false;
-  level3dPlaytestSnapshot = null;
-  level3dStageHit = null;
   updateLevel3dPlaytestControls();
-  renderLevel3dStageOverlay();
   if (options.syncPreview !== false) {
-    refreshLevel3dRuntimePreviews();
+    renderLevel3dRuntime();
   }
   setLevel3dActionStatus("Stopped 3D level play", "");
 }
@@ -2663,40 +2555,24 @@ function updateLevel3dPlaytestControls() {
 }
 
 function focusLevel3dPlaytestTarget() {
-  if (level3dStageOverlay) {
-    level3dStageOverlay.focus?.({ preventScroll: true });
-    return;
-  }
-  level3dStageCanvas?.focus?.({ preventScroll: true });
+  editorRuntimeControllers.get("level-authoring-stage")?.surface.focus?.({ preventScroll: true });
 }
 
 function level3dPlaytestFrameWindow() {
-  if (level3dRuntimeFrame) {
-    return level3dRuntimeFrameRuntimeReady ? level3dRuntimeFrame.contentWindow : null;
-  }
-  return previewFrame?.contentWindow || null;
-}
-
-function requestLevel3dPlaytestState() {
-  const target = level3dPlaytestFrameWindow();
-  if (!target) {
-    return false;
-  }
-  target.postMessage({ type: "PuzzleStudioRequestPuzzle3State" }, "*");
-  return true;
+  const controller = editorRuntimeControllers.get("level-authoring-stage");
+  return controller?.ready ? controller.frame?.contentWindow || null : null;
 }
 
 function sendLevel3dPlaytestKey(event) {
   if (!level3dPlaytestActive) {
     return false;
   }
-  const target = level3dPlaytestFrameWindow();
-  if (!target) {
+  const controller = editorRuntimeControllers.get("level-authoring-stage");
+  if (!controller?.ready || !controller.frame?.contentWindow) {
     setLevel3dActionStatus("3D play runtime is not ready", "is-error");
     return false;
   }
-  target.postMessage({
-    type: "PuzzleStudioKey",
+  postEditorPreviewCommand("syntheticKey", {
     key: event.key,
     code: event.code,
     repeat: event.repeat,
@@ -2704,210 +2580,11 @@ function sendLevel3dPlaytestKey(event) {
     ctrlKey: event.ctrlKey,
     metaKey: event.metaKey,
     shiftKey: event.shiftKey,
-  }, "*");
+    trace: false,
+  }, controller.frame);
   event.preventDefault();
   event.stopPropagation();
   return true;
-}
-
-function handleLevel3dPlaytestStateMessage(event) {
-  if (!level3dPlaytestActive || event.data?.type !== "PuzzleStudioPuzzle3State") {
-    return;
-  }
-  const source = String(event.data.source || "");
-  if (source && source !== level3dModelPreviewComponent().source) {
-    return;
-  }
-  level3dPlaytestSnapshot = level3dNormalizePlaytestSnapshot(event.data.snapshot);
-  renderLevel3dStageOverlay();
-  sendLevel3dLayerSnapshotToRuntime();
-}
-
-function level3dNormalizePlaytestSnapshot(snapshot) {
-  const next = JSON.parse(JSON.stringify(snapshot || {}));
-  next.__kind = "puzzle3d";
-  const levelCount = Array.isArray(next.levels) && next.levels.length ? next.levels.length : 1;
-  const levelIndex = Math.max(0, Math.min(levelCount - 1, Math.trunc(Number(next.levelIndex) || 0)));
-  next.levelIndex = levelIndex;
-  const size = next.size || next.levels?.[levelIndex]?.size || {};
-  const cells = Array.isArray(next.cells)
-    ? JSON.parse(JSON.stringify(next.cells))
-    : JSON.parse(JSON.stringify(next.levels?.[levelIndex]?.cells || []));
-  next.size = { ...size };
-  next.cells = cells;
-  if (!Array.isArray(next.levels) || !next.levels.length) {
-    next.levels = [{
-      name: level3dNameInput?.value || "level 1",
-      label: level3dNameInput?.value || "Level 1",
-      size: { ...next.size },
-      cells,
-    }];
-    next.levelIndex = 0;
-  } else if (next.levels[levelIndex]) {
-    next.levels[levelIndex] = {
-      ...next.levels[levelIndex],
-      size: { ...next.size },
-      cells,
-    };
-  }
-  return next;
-}
-
-function renderLevel3dLayerRuntime() {
-  if (!level3dLayerFrame) {
-    return;
-  }
-  const update = level3dLayerRuntimePreviewUpdate();
-  if (!previewBuild?.html || !update) {
-    showBlankLevel3dRuntimeFrame(level3dLayerFrame);
-    level3dLayerFrameLoaded = false;
-    level3dLayerFrameKey = "";
-    return;
-  }
-  const key = `${activePreviewDocument()?.id || ""}:puzzle3-layer-renderer:${currentLevel3dLayerZ()}`;
-  if (level3dLayerFrameKey !== key) {
-    level3dLayerFrameLoaded = false;
-    level3dLayerRendererView = null;
-    level3dLayerFrameKey = key;
-    level3dLayerFrame.addEventListener("load", () => {
-      level3dLayerFrameLoaded = true;
-      sendLevel3dLayerSnapshotToRuntime();
-    }, { once: true });
-    level3dLayerFrame.srcdoc = level3dRuntimePreviewDocument(update);
-    return;
-  }
-  sendLevel3dLayerSnapshotToRuntime();
-}
-
-function sendLevel3dLayerSnapshotToRuntime() {
-  if (!level3dLayerFrameLoaded || !level3dLayerFrame?.contentWindow) {
-    return;
-  }
-  const update = level3dLayerRuntimePreviewUpdate();
-  if (!update) {
-    showBlankLevel3dRuntimeFrame(level3dLayerFrame);
-    level3dLayerFrameLoaded = false;
-    level3dLayerFrameKey = "";
-    return;
-  }
-  level3dLayerFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), "*");
-}
-
-function level3dRuntimePreviewUpdate() {
-  const exportData = previewBuild?.exportData;
-  const snapshot = level3dRuntimeSnapshot();
-  if (!snapshot && !isPuzzle3dExport(exportData)) {
-    return null;
-  }
-  if (!snapshot) {
-    return null;
-  }
-  const levelCount = Array.isArray(snapshot.levels) && snapshot.levels.length ? snapshot.levels.length : 1;
-  const levelIndex = Math.max(0, Math.min(levelCount - 1, Math.trunc(Number(snapshot.levelIndex) || 0)));
-  const levelEntry = snapshot.levels?.[levelIndex] || {};
-  const size = snapshot.size || levelEntry.size || exportData?.size;
-  const cells = Array.isArray(snapshot.cells)
-    ? snapshot.cells
-    : Array.isArray(levelEntry.cells)
-      ? levelEntry.cells
-      : exportData?.cells || [];
-  return {
-    levelIndex,
-    level: {
-      name: levelEntry.name || level3dNameInput?.value || "level 1",
-      label: levelEntry.label || levelEntry.name || level3dNameInput?.value || "Level 1",
-      size: size ? { ...size } : undefined,
-      cells: JSON.parse(JSON.stringify(cells)),
-    },
-    resources: level3dRuntimePreviewResources(snapshot),
-    camera: level3dRuntimePreviewCamera(snapshot),
-    view: level3dRuntimePreviewView(snapshot),
-    settings: level3dPreviewSettings(snapshot.render || {}),
-    component: level3dModelPreviewComponent(),
-    componentEmbed: true,
-  };
-}
-
-function level3dRuntimePreviewCamera(source) {
-  const camera = level3dPreviewCamera(source);
-  return {
-    projection: camera.projection,
-    yawDegrees: camera.yawDegrees,
-    pitchDegrees: camera.pitchDegrees,
-    rollDegrees: camera.rollDegrees,
-    zoom: camera.zoom,
-  };
-}
-
-function level3dRuntimePreviewView(source) {
-  const camera = level3dPreviewCamera(source);
-  const origin = level3dPreviewOriginState();
-  return {
-    zoom: camera.zoom,
-    target: {
-      x: origin.x,
-      y: origin.y,
-      z: origin.z,
-    },
-  };
-}
-
-function level3dLayerRuntimePreviewUpdate() {
-  const snapshot = level3dLayerRuntimeSnapshot();
-  if (!snapshot) {
-    return null;
-  }
-  return {
-    levelIndex: snapshot.levelIndex || 0,
-    level: {
-      name: snapshot.levels?.[snapshot.levelIndex || 0]?.name || level3dNameInput?.value || "layer",
-      label: snapshot.levels?.[snapshot.levelIndex || 0]?.label || level3dNameInput?.value || "Layer",
-      size: { ...(snapshot.size || {}) },
-      cells: JSON.parse(JSON.stringify(snapshot.cells || [])),
-    },
-    resources: level3dRuntimePreviewResources(snapshot),
-    camera: snapshot.render?.camera,
-    settings: snapshot.render || {},
-    component: level3dModelPreviewComponent(),
-    componentEmbed: true,
-  };
-}
-
-function level3dPreviewSurfaceMessage(update) {
-  return {
-    type: LEVEL3D_PREVIEW_SURFACE_MESSAGE,
-    kind: LEVEL3D_PREVIEW_SURFACE_KIND,
-    mode: LEVEL3D_PREVIEW_SURFACE_MODE,
-    component: update.component,
-    componentEmbed: update.componentEmbed === true,
-    payload: level3dPreviewSurfacePayload(update),
-  };
-}
-
-function level3dPreviewSurfacePayload(update = {}) {
-  return {
-    levelIndex: update.levelIndex,
-    level: update.level,
-    resources: update.resources,
-    camera: update.camera,
-    view: update.view,
-    settings: update.settings || {},
-  };
-}
-
-function level3dModelPreviewComponent() {
-  const model = String(previewBuild?.exportData?.modelName || "").trim();
-  if (!model) {
-    throw new Error("3D level preview is missing its typed model identity.");
-  }
-  return {
-    kind: "puzzle3",
-    source: {
-      model,
-      component: "__editor_level3d_preview__",
-      source: model,
-    },
-  };
 }
 
 function level3dRuntimePreviewResources(exportData = previewBuild?.exportData) {
@@ -2999,525 +2676,6 @@ function level3dLayerSettings(settings = {}) {
   };
 }
 
-function renderLevel3dLayerOverlay() {
-  if (!(level3dLayerOverlay instanceof HTMLCanvasElement) || !level3dLayerBoard) {
-    return;
-  }
-  if (level3dLayerBoard.classList.contains("is-grid-board")) {
-    const ctx = level3dLayerOverlay.getContext("2d");
-    if (ctx) {
-      ctx.clearRect(0, 0, level3dLayerOverlay.width, level3dLayerOverlay.height);
-    }
-    return;
-  }
-  const metrics = level3dScaledSurfaceMetrics(level3dLayerOverlay);
-  const scale = window.devicePixelRatio || 1;
-  const width = Math.max(1, Math.floor(metrics.width * scale));
-  const height = Math.max(1, Math.floor(metrics.height * scale));
-  if (level3dLayerOverlay.width !== width || level3dLayerOverlay.height !== height) {
-    level3dLayerOverlay.width = width;
-    level3dLayerOverlay.height = height;
-  }
-  const ctx = level3dLayerOverlay.getContext("2d");
-  if (!ctx) {
-    return;
-  }
-  ctx.setTransform(scale, 0, 0, scale, 0, 0);
-  ctx.clearRect(0, 0, metrics.width, metrics.height);
-  drawLevel3dLayerHover(ctx, metrics.width, metrics.height);
-}
-
-function drawLevel3dLayerHover(ctx, width, height) {
-  if (!level3dLayerHover || !level3dPositionInBounds(level3dLayerHover)) {
-    return;
-  }
-  const points = level3dLayerCellScreenPoints(level3dLayerHover, width, height);
-  if (!points?.length) {
-    return;
-  }
-  ctx.save();
-  ctx.fillStyle = level3dSelectedEntry()?.objects?.length
-    ? level3dEditorThemeColor("--accent", 0.18)
-    : level3dEditorThemeColor("--danger", 0.16);
-  ctx.strokeStyle = level3dSelectedEntry()?.objects?.length
-    ? level3dEditorThemeColor("--accent", 0.88)
-    : level3dEditorThemeColor("--danger", 0.88);
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(points[0].x, points[0].y);
-  for (const point of points.slice(1)) {
-    ctx.lineTo(point.x, point.y);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-}
-
-function level3dLayerCellScreenPoints(position, width, height) {
-  const footprint = level3dLayerCellFootprint(position);
-  if (!footprint) {
-    return null;
-  }
-  const view = level3dLayerTopDownView(width, height);
-  return footprint.points.map((point) => level3dLayerFootprintPointToScreen(point, view, width, height));
-}
-
-function level3dLayerPositionFromEvent(event) {
-  if (!level3dLayerBoard) {
-    return null;
-  }
-  const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest?.(".level3d-layer-cell");
-  if (cell && level3dLayerBoard.contains(cell)) {
-    const position = {
-      x: Math.trunc(Number(cell.dataset.x) || 0),
-      y: Math.trunc(Number(cell.dataset.y) || 0),
-      z: Math.trunc(Number(cell.dataset.z) || currentLevel3dLayerZ()),
-    };
-    return level3dPositionInBounds(position) ? position : null;
-  }
-  const surface = level3dLayerOverlay instanceof HTMLCanvasElement
-    ? level3dLayerOverlay
-    : (level3dLayerFrame || level3dLayerBoard);
-  const point = level3dEventPointInScaledSurface(event, surface);
-  return level3dLayerPositionAt(point.x, point.y, point.width, point.height);
-}
-
-function level3dLayerPositionAt(x, y, width, height) {
-  const view = level3dLayerTopDownView(width, height);
-  if (!view.cellFootprints?.length) {
-    return null;
-  }
-  const pointer = level3dLayerScreenPointToFootprint({ x, y }, view, width, height);
-  for (const footprint of view.cellFootprints) {
-    if (!level3dPointInPolygon(pointer, footprint.points)) {
-      continue;
-    }
-    const position = {
-      x: footprint.position.x,
-      y: footprint.position.y,
-      z: currentLevel3dLayerZ(),
-    };
-    return level3dPositionInBounds(position) ? position : null;
-  }
-  return null;
-}
-
-function level3dLayerCellFootprint(position) {
-  if (!level3dLayerRendererView?.cellFootprintMap) {
-    return null;
-  }
-  return level3dLayerRendererView.cellFootprintMap.get(`${position.x},${position.y}`) || null;
-}
-
-function level3dLayerUsesRuntimeScreenFootprints(view) {
-  return view?.coordinateSpace === "canvas-css-px";
-}
-
-function level3dLayerScreenPointToFootprint(point, view, width, height) {
-  if (level3dLayerUsesRuntimeScreenFootprints(view)) {
-    const sourceWidth = Math.max(1, Number(view.width) || 1);
-    const sourceHeight = Math.max(1, Number(view.height) || 1);
-    const viewportWidth = Math.max(1, Number(view.viewport?.width) || Number(view.canvasRect?.width) || sourceWidth);
-    const viewportHeight = Math.max(1, Number(view.viewport?.height) || Number(view.canvasRect?.height) || sourceHeight);
-    const targetWidth = Math.max(1, Number(width) || viewportWidth);
-    const targetHeight = Math.max(1, Number(height) || viewportHeight);
-    const canvasRect = level3dLayerRuntimeCanvasRect(view, viewportWidth, viewportHeight);
-    const viewportPoint = {
-      x: Number(point.x) * viewportWidth / targetWidth,
-      y: Number(point.y) * viewportHeight / targetHeight,
-    };
-    return {
-      x: (viewportPoint.x - canvasRect.x) * sourceWidth / canvasRect.width,
-      y: (viewportPoint.y - canvasRect.y) * sourceHeight / canvasRect.height,
-    };
-  }
-  const transform = level3dLayerViewTransform(view, width, height);
-  return {
-    x: (Number(point.x) - transform.offsetX) / transform.scale,
-    y: (Number(point.y) - transform.offsetY) / transform.scale,
-  };
-}
-
-function level3dLayerFootprintPointToScreen(point, view, width, height) {
-  if (level3dLayerUsesRuntimeScreenFootprints(view)) {
-    const sourceWidth = Math.max(1, Number(view.width) || 1);
-    const sourceHeight = Math.max(1, Number(view.height) || 1);
-    const viewportWidth = Math.max(1, Number(view.viewport?.width) || Number(view.canvasRect?.width) || sourceWidth);
-    const viewportHeight = Math.max(1, Number(view.viewport?.height) || Number(view.canvasRect?.height) || sourceHeight);
-    const targetWidth = Math.max(1, Number(width) || viewportWidth);
-    const targetHeight = Math.max(1, Number(height) || viewportHeight);
-    const canvasRect = level3dLayerRuntimeCanvasRect(view, viewportWidth, viewportHeight);
-    const viewportPoint = {
-      x: canvasRect.x + Number(point.x) * canvasRect.width / sourceWidth,
-      y: canvasRect.y + Number(point.y) * canvasRect.height / sourceHeight,
-    };
-    return {
-      x: viewportPoint.x * targetWidth / viewportWidth,
-      y: viewportPoint.y * targetHeight / viewportHeight,
-    };
-  }
-  const transform = level3dLayerViewTransform(view, width, height);
-  return level3dLayerTransformViewPoint(point, transform);
-}
-
-function level3dLayerRuntimeCanvasRect(view, viewportWidth, viewportHeight) {
-  const rect = view?.canvasRect || {};
-  const width = Math.max(1, Number(rect.width) || Number(view?.width) || viewportWidth || 1);
-  const height = Math.max(1, Number(rect.height) || Number(view?.height) || viewportHeight || 1);
-  return {
-    x: Number.isFinite(Number(rect.x)) ? Number(rect.x) : 0,
-    y: Number.isFinite(Number(rect.y)) ? Number(rect.y) : 0,
-    width,
-    height,
-  };
-}
-
-function level3dLayerTransformViewPoint(point, transform) {
-  return {
-    x: transform.offsetX + point.x * transform.scale,
-    y: transform.offsetY + point.y * transform.scale,
-  };
-}
-
-function level3dPointInPolygon(point, polygon) {
-  if (!Array.isArray(polygon) || polygon.length < 3) {
-    return false;
-  }
-  let inside = false;
-  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
-    const a = polygon[index];
-    const b = polygon[previous];
-    if (!level3dPointOnSegment(point, a, b)) {
-      const crosses = (a.y > point.y) !== (b.y > point.y)
-        && point.x < ((b.x - a.x) * (point.y - a.y)) / ((b.y - a.y) || 0.000001) + a.x;
-      if (crosses) {
-        inside = !inside;
-      }
-    } else {
-      return true;
-    }
-  }
-  return inside;
-}
-
-function level3dPointOnSegment(point, a, b) {
-  const cross = (point.y - a.y) * (b.x - a.x) - (point.x - a.x) * (b.y - a.y);
-  if (Math.abs(cross) > 0.001) {
-    return false;
-  }
-  const dot = (point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y);
-  if (dot < -0.001) {
-    return false;
-  }
-  const lengthSquared = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
-  return dot <= lengthSquared + 0.001;
-}
-
-function level3dLayerViewTransform(view, width, height) {
-  const targetWidth = Math.max(1, width || view.width || 1);
-  const targetHeight = Math.max(1, height || view.height || 1);
-  const sourceWidth = Math.max(1, Number(view.width) || targetWidth);
-  const sourceHeight = Math.max(1, Number(view.height) || targetHeight);
-  const scale = Math.max(0.0001, Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight));
-  return {
-    scale,
-    offsetX: (targetWidth - sourceWidth * scale) / 2,
-    offsetY: (targetHeight - sourceHeight * scale) / 2,
-  };
-}
-
-function level3dLayerTopDownView(width, height) {
-  if (level3dLayerRendererView) {
-    return level3dLayerRendererView;
-  }
-  const gridWidth = Math.max(1, Math.trunc(Number(level3d.width) || 1));
-  const gridDepth = Math.max(1, Math.trunc(Number(level3d.depth) || 1));
-  const margin = 18;
-  const availableWidth = Math.max(1, width - margin * 2);
-  const availableHeight = Math.max(1, height - margin * 2);
-  return {
-    width,
-    height,
-    centerX: (gridWidth - 1) / 2,
-    centerY: (gridDepth - 1) / 2,
-    originX: width / 2,
-    originY: height / 2,
-    scale: Math.max(0.0001, Math.min(availableWidth / gridWidth, availableHeight / gridDepth)),
-  };
-}
-
-function handleLevel3dLayerRendererViewMessage(event) {
-  if (event.source !== level3dLayerFrame?.contentWindow) {
-    return;
-  }
-  if (event.data?.type !== "PuzzleStudioPuzzle3View") {
-    return;
-  }
-  const view = event.data.view || {};
-  const scale = Number(view.scale);
-  const width = Number(view.width);
-  const height = Number(view.height);
-  if (!Number.isFinite(scale) || scale <= 0 || !Number.isFinite(width) || !Number.isFinite(height)) {
-    return;
-  }
-  const cellFootprints = level3dNormalizeLayerCellFootprints(view.cellFootprints);
-  level3dLayerRendererView = {
-    width: Math.max(1, width),
-    height: Math.max(1, height),
-    coordinateSpace: view.coordinateSpace === "canvas-css-px" ? "canvas-css-px" : "",
-    viewport: {
-      width: Math.max(1, Number(view.viewport?.width) || width),
-      height: Math.max(1, Number(view.viewport?.height) || height),
-    },
-    canvasRect: {
-      x: Number(view.canvasRect?.x) || 0,
-      y: Number(view.canvasRect?.y) || 0,
-      width: Math.max(1, Number(view.canvasRect?.width) || width),
-      height: Math.max(1, Number(view.canvasRect?.height) || height),
-    },
-    originX: Number(view.originX) || 0,
-    originY: Number(view.originY) || 0,
-    scale,
-    centerX: Number(view.center?.x) || 0,
-    centerY: Number(view.center?.y) || 0,
-    cellFootprints,
-    cellFootprintMap: new Map(cellFootprints.map((footprint) => [
-      `${footprint.position.x},${footprint.position.y}`,
-      footprint,
-    ])),
-  };
-  renderLevel3dLayerOverlay();
-}
-
-function handleLevel3dStageRendererViewMessage(event) {
-  if (event.source !== level3dRuntimeFrame?.contentWindow) {
-    return;
-  }
-  if (event.data?.type !== "PuzzleStudioPuzzle3View") {
-    return;
-  }
-  const normalized = level3dNormalizeRuntimeProjectionView(event.data.view);
-  if (!normalized) {
-    return;
-  }
-  level3dStageRendererView = normalized;
-  renderLevel3dStageOverlay();
-}
-
-function handleLevel3dRuntimeLifecycleMessage(event) {
-  if (event.source !== level3dRuntimeFrame?.contentWindow) {
-    return;
-  }
-  if (event.data?.type === "PuzzleStudioPreviewRuntimeReady") {
-    level3dRuntimeFrameRuntimeReady = true;
-    level3dRuntimeFrameFailure = null;
-    return;
-  }
-  if (event.data?.type !== "PuzzleStudioPreviewRuntimeError") {
-    return;
-  }
-  level3dRuntimeFrameRuntimeReady = false;
-  level3dRuntimeFrameFailure = {
-    label: String(event.data.label || "runtime failed"),
-    message: String(event.data.message || "unknown error"),
-  };
-  setLevel3dActionStatus(
-    `3D preview ${level3dRuntimeFrameFailure.label}: ${level3dRuntimeFrameFailure.message}`,
-    "is-error",
-  );
-}
-
-function handleLevel3dRuntimeProgressMessage(event) {
-  if (
-    event.source !== level3dRuntimeFrame?.contentWindow
-    || event.data?.type !== "PuzzleStudioLevel3dFrameProgress"
-  ) {
-    return;
-  }
-  level3dRuntimeFrameProgress = [
-    ...level3dRuntimeFrameProgress,
-    {
-      stage: String(event.data.stage || ""),
-      detail: String(event.data.detail || ""),
-    },
-  ].slice(-20);
-}
-
-function level3dNormalizeRuntimeProjectionView(view) {
-  const scale = Number(view?.scale);
-  const width = Number(view?.width);
-  const height = Number(view?.height);
-  if (!Number.isFinite(scale) || scale <= 0 || !Number.isFinite(width) || !Number.isFinite(height)) {
-    return null;
-  }
-  return {
-    width: Math.max(1, width),
-    height: Math.max(1, height),
-    coordinateSpace: view.coordinateSpace === "canvas-css-px" ? "canvas-css-px" : "",
-    viewport: {
-      width: Math.max(1, Number(view.viewport?.width) || width),
-      height: Math.max(1, Number(view.viewport?.height) || height),
-    },
-    canvasRect: {
-      x: Number(view.canvasRect?.x) || 0,
-      y: Number(view.canvasRect?.y) || 0,
-      width: Math.max(1, Number(view.canvasRect?.width) || width),
-      height: Math.max(1, Number(view.canvasRect?.height) || height),
-    },
-    originX: Number(view.originX) || 0,
-    originY: Number(view.originY) || 0,
-    scale,
-    center: {
-      x: Number(view.center?.x) || 0,
-      y: Number(view.center?.y) || 0,
-      z: Number(view.center?.z) || 0,
-    },
-    camera: {
-      yawDegrees: Number(view.camera?.yawDegrees ?? 0),
-      pitchDegrees: Number(view.camera?.pitchDegrees ?? 35),
-      rollDegrees: Number(view.camera?.rollDegrees ?? 0),
-      zoom: 1,
-    },
-    threeProjection: level3dNormalizeThreeProjection(view.threeProjection),
-  };
-}
-
-function level3dNormalizeThreeProjection(raw) {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const size = raw.size || {};
-  const target = raw.target || {};
-  const width = Math.max(1, Math.trunc(Number(size.width) || level3d.width || 1));
-  const depth = Math.max(1, Math.trunc(Number(size.depth) || level3d.depth || 1));
-  const height = Math.max(1, Math.trunc(Number(size.height) || level3d.height || 1));
-  const distance = Number(raw.distance);
-  const visibleHeight = Number(raw.visibleHeight);
-  return {
-    size: { width, depth, height },
-    target: {
-      x: Number(target.x) || 0,
-      y: Number(target.y) || 0,
-      z: Number(target.z) || 0,
-    },
-    distance: Number.isFinite(distance) && distance > 0 ? distance : 1,
-    visibleHeight: Number.isFinite(visibleHeight) && visibleHeight > 0 ? visibleHeight : 1,
-    fovDegrees: Number(raw.fovDegrees) || 34,
-    aspect: Math.max(0.01, Number(raw.aspect) || 1),
-    projection: String(raw.projection || "").toLowerCase() === "orthographic" ? "orthographic" : "perspective",
-  };
-}
-
-function level3dNormalizeLayerCellFootprints(raw) {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  const footprints = [];
-  for (const footprint of raw) {
-    const position = {
-      x: Math.trunc(Number(footprint?.position?.x) || 0),
-      y: Math.trunc(Number(footprint?.position?.y) || 0),
-    };
-    const points = Array.isArray(footprint?.points)
-      ? footprint.points
-          .map((point) => ({
-            x: Number(point?.x),
-            y: Number(point?.y),
-          }))
-          .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
-      : [];
-    if (points.length >= 3) {
-      footprints.push({ position, points });
-    }
-  }
-  return footprints;
-}
-
-function ensureLevel3dStageOverlay() {
-  if (level3dStageCanvas instanceof HTMLCanvasElement) {
-    if (level3dStageOverlay !== level3dStageCanvas) {
-      level3dStageOverlay = level3dStageCanvas;
-    }
-    if (!level3dStageCanvas.dataset.level3dBound) {
-      level3dStageCanvas.dataset.level3dBound = "true";
-      level3dStageCanvas.addEventListener("pointermove", handleLevel3dStagePointerMove);
-      level3dStageCanvas.addEventListener("pointerleave", () => {
-        level3dStageHit = null;
-        renderLevel3dStageOverlay();
-      });
-      level3dStageCanvas.addEventListener("pointerdown", handleLevel3dStagePointerDown);
-      level3dStageCanvas.addEventListener("keydown", handleLevel3dStageKeydown);
-    }
-    return level3dStageCanvas;
-  }
-  if (!level3dRuntimeFrame?.parentElement) {
-    return null;
-  }
-  if (level3dStageOverlay && level3dStageOverlay.parentElement === level3dRuntimeFrame.parentElement) {
-    return level3dStageOverlay;
-  }
-  const overlay = document.createElement("canvas");
-  overlay.className = "level3d-stage-overlay";
-  overlay.tabIndex = 0;
-  overlay.setAttribute("aria-label", "3D placement surface");
-  overlay.addEventListener("pointermove", handleLevel3dStagePointerMove);
-  overlay.addEventListener("pointerleave", () => {
-    level3dStageHit = null;
-    renderLevel3dStageOverlay();
-  });
-  overlay.addEventListener("pointerdown", handleLevel3dStagePointerDown);
-  overlay.addEventListener("keydown", handleLevel3dStageKeydown);
-  level3dRuntimeFrame.parentElement.append(overlay);
-  level3dStageOverlay = overlay;
-  return overlay;
-}
-
-function renderLevel3dStageOverlay() {
-  const overlay = ensureLevel3dStageOverlay();
-  if (!overlay) {
-    return;
-  }
-  const resizeMode = level3dStageResizeMode();
-  overlay.classList.toggle("is-stage-resize-mode", Boolean(resizeMode));
-  overlay.classList.toggle("is-stage-expand-mode", resizeMode === "expand");
-  overlay.classList.toggle("is-stage-shrink-mode", resizeMode === "shrink");
-  const metrics = level3dScaledSurfaceMetrics(overlay);
-  const scale = window.devicePixelRatio || 1;
-  const width = Math.max(1, Math.floor(metrics.width * scale));
-  const height = Math.max(1, Math.floor(metrics.height * scale));
-  if (overlay.width !== width || overlay.height !== height) {
-    overlay.width = width;
-    overlay.height = height;
-  }
-  const ctx = overlay.getContext("2d");
-  if (!ctx) {
-    return;
-  }
-  ctx.setTransform(scale, 0, 0, scale, 0, 0);
-  ctx.clearRect(0, 0, metrics.width, metrics.height);
-  if (!level3dStageHit?.polygon?.length) {
-    return;
-  }
-  if (level3dIsStageResizeHit(level3dStageHit)) {
-    drawLevel3dStageResizeHint(ctx, level3dStageHit, metrics.width, metrics.height);
-    return;
-  }
-  ctx.save();
-  ctx.lineJoin = "round";
-  ctx.fillStyle = level3dSelectedEntry()?.objects?.length
-    ? level3dEditorThemeColor("--accent", 0.28)
-    : level3dEditorThemeColor("--danger", 0.24);
-  ctx.strokeStyle = level3dSelectedEntry()?.objects?.length
-    ? level3dEditorThemeColor("--accent", 0.96)
-    : level3dEditorThemeColor("--danger", 0.96);
-  ctx.lineWidth = 2;
-  drawLevel3dPolygonPath(ctx, level3dStageHit.polygon);
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-}
-
 function scheduleLevel3dSurfaceResize() {
   if (level3dSurfaceResizeFrame) {
     return;
@@ -3526,305 +2684,9 @@ function scheduleLevel3dSurfaceResize() {
     level3dSurfaceResizeFrame = 0;
     syncLevel3dFrameLayout();
     if (!level3dBuilder?.hidden) {
-      renderLevel3dLayerBoard();
+      renderLevel3dRuntime();
     }
-    level3dStageRendererView = null;
-    level3dLayerRendererView = null;
-    renderLevel3dStageOverlay();
-    renderLevel3dLayerOverlay();
-    level3dRuntimeFrame?.contentWindow?.postMessage({ type: "PuzzleStudioResize" }, "*");
-    level3dLayerFrame?.contentWindow?.postMessage({ type: "PuzzleStudioResize" }, "*");
   });
-}
-
-function handleLevel3dStagePointerMove(event) {
-  if (level3dPlaytestActive) {
-    if (level3dStageHit) {
-      level3dStageHit = null;
-      renderLevel3dStageOverlay();
-    }
-    return;
-  }
-  const hit = level3dStageHitFromEvent(event);
-  if (level3dStageHitKey(hit) === level3dStageHitKey(level3dStageHit)) {
-    return;
-  }
-  level3dStageHit = hit;
-  renderLevel3dStageOverlay();
-}
-
-function handleLevel3dStagePointerDown(event) {
-  if (level3dPlaytestActive) {
-    level3dStageOverlay?.focus();
-    return;
-  }
-  if (event.button !== 0) {
-    return;
-  }
-  const hit = level3dStageHitFromEvent(event);
-  if (!hit) {
-    return;
-  }
-  event.preventDefault();
-  level3dStageOverlay?.focus();
-  level3dStageHit = hit;
-  applyLevel3dStageHit(hit);
-}
-
-function handleLevel3dStageKeydown(event) {
-  if (level3dPlaytestActive) {
-    sendLevel3dPlaytestKey(event);
-    return;
-  }
-  if ((event.key !== "Enter" && event.key !== " ") || !level3dStageHit) {
-    return;
-  }
-  event.preventDefault();
-  applyLevel3dStageHit(level3dStageHit);
-}
-
-function applyLevel3dStageHit(hit) {
-  if (level3dIsStageResizeHit(hit)) {
-    applyLevel3dStageResizeHit(hit);
-    return;
-  }
-  const selected = level3dSelectedEntry();
-  const selectedChar = selected?.char || level3d.selectedChar || level3dEmptyChar();
-  const target = level3dStagePaintTarget(hit, selected);
-  if (!target) {
-    return;
-  }
-  if (withVisualEditHistory("level3d", () => paintLevel3dCellAtPosition(target, selectedChar))) {
-    level3dStageHit = null;
-    setLevel3dActionStatus(level3dCellLabel(selectedChar), "is-ok");
-    renderLevel3dStageOverlay();
-  }
-}
-
-function level3dStagePaintTarget(hit, selected = level3dSelectedEntry()) {
-  if (!hit) {
-    return null;
-  }
-  if (!selected?.objects?.length) {
-    return hit.remove || null;
-  }
-  return level3dEditMode() === "add"
-    ? hit.place || null
-    : hit.replace || hit.remove || hit.place || null;
-}
-
-function level3dIsStageResizeHit(hit) {
-  return hit?.mode === "expand"
-    || hit?.mode === "shrink"
-    || hit?.kind?.startsWith("expand-")
-    || hit?.kind?.startsWith("shrink-");
-}
-
-function applyLevel3dStageResizeHit(hit) {
-  const mode = hit?.mode || (hit?.kind?.startsWith("shrink-") ? "shrink" : "expand");
-  const delta = mode === "shrink" ? -1 : 1;
-  const edge = hit?.resizeEdge || hit?.edge;
-  if (hit?.dimension === "width" || hit?.kind?.endsWith("-width")) {
-    resizeLevel3dWidth((level3d.width || 1) + delta, { edge: edge || "right" });
-    return;
-  }
-  if (hit?.dimension === "depth" || hit?.kind?.endsWith("-depth")) {
-    resizeLevel3dDepth((level3d.depth || 1) + delta, { edge: edge || "back" });
-    return;
-  }
-  if (hit?.dimension === "height" || hit?.kind?.endsWith("-height")) {
-    resizeLevel3dHeight((level3d.height || 1) + delta, { edge: edge || "top" });
-  }
-}
-
-function showBlankLevel3dRuntimeFrame(frame) {
-  if (!frame) {
-    return;
-  }
-  frame.srcdoc = level3dBlankRuntimeDocument();
-}
-
-function level3dBlankRuntimeDocument() {
-  if (typeof emptyPreviewDocument === "function") {
-    return emptyPreviewDocument();
-  }
-  return "<!doctype html><html><head><meta charset=\"utf-8\"></head><body></body></html>";
-}
-
-function level3dRuntimePreviewDocument(update) {
-  const html = editorPreviewDocument(previewBuild?.html);
-  const payload = level3dPreviewSurfaceMessage(update);
-  const json = JSON.stringify(payload)
-    .replace(/</g, "\\u003c")
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029");
-  const seedScript = `<script id="puzzle-studio-initial-model-preview">
-(() => {
-  const report = (stage, detail = "") => window.parent?.postMessage({
-    type: "PuzzleStudioLevel3dFrameProgress",
-    stage,
-    detail: String(detail || ""),
-  }, "*");
-  window.addEventListener("error", (event) => {
-    window.parent?.postMessage({
-      type: "PuzzleStudioPreviewRuntimeError",
-      label: "isolated preview script failed",
-      message: String(event.error?.stack || event.error?.message || event.message || "unknown error"),
-    }, "*");
-  });
-  window.addEventListener("unhandledrejection", (event) => {
-    window.parent?.postMessage({
-      type: "PuzzleStudioPreviewRuntimeError",
-      label: "isolated preview promise failed",
-      message: String(event.reason?.message || event.reason || "unknown error"),
-    }, "*");
-  });
-  const update = ${json};
-  window.PuzzleStudioInitialPreviewSurface = update;
-  report("seed-installed");
-  window.PuzzleStudioModelComponentPreviewFixture = function(source, incoming = update) {
-    const next = JSON.parse(JSON.stringify(source || {}));
-    const payload = incoming.payload || incoming;
-    const resources = payload.resources || incoming.resources || incoming;
-    if (resources.layerCount != null) {
-      next.layerCount = Math.max(1, Math.trunc(Number(resources.layerCount) || 1));
-    }
-    if (resources.objects && typeof resources.objects === "object") {
-      next.objects = JSON.parse(JSON.stringify(resources.objects));
-    }
-    if (resources.visuals && typeof resources.visuals === "object") {
-      next.visuals = JSON.parse(JSON.stringify(resources.visuals));
-    }
-    const level = payload.level || incoming.level || {};
-    const size = level.size || payload.size || incoming.size || next.size || {};
-    const cells = Array.isArray(level.cells) ? level.cells : Array.isArray(payload.cells) ? payload.cells : Array.isArray(incoming.cells) ? incoming.cells : next.cells || [];
-    const rawLevelIndex = payload.levelIndex ?? incoming.levelIndex ?? next.levelIndex ?? 0;
-    const levels = Array.isArray(next.levels) && next.levels.length ? next.levels : [{}];
-    const levelIndex = Math.max(0, Math.min(levels.length - 1, Math.trunc(Number(rawLevelIndex) || 0)));
-    const target = levels[levelIndex] || {};
-    levels[levelIndex] = {
-      ...target,
-      name: level.name || target.name || "level 1",
-      label: level.label || target.label || level.name || target.name || "Level 1",
-      size: { ...size },
-      cells: JSON.parse(JSON.stringify(cells)),
-    };
-    next.levels = levels;
-    next.levelIndex = levelIndex;
-    next.size = { ...size };
-    next.cells = JSON.parse(JSON.stringify(cells));
-    const view = payload.view || incoming.view || {};
-    if (payload.view || incoming.view) {
-      next.view = JSON.parse(JSON.stringify({
-        zoom: view.zoom,
-        target: view.target,
-      }));
-    }
-    const settings = payload.settings || incoming.settings;
-    if (settings) {
-      next.render = { ...(next.render || {}), ...JSON.parse(JSON.stringify(settings)) };
-    }
-    const camera = payload.camera || incoming.camera;
-    if (camera) {
-      next.render = {
-        ...(next.render || {}),
-        camera: JSON.parse(JSON.stringify(camera)),
-      };
-    }
-    const sceneName = incoming.scene || "__editor_model_preview__";
-    next.scenes = [{
-      name: sceneName,
-      components: [incoming.component || { kind: "puzzle3", source: "__editor_model_preview__" }],
-    }];
-    next.surface = {
-      root: sceneName,
-      focus: sceneName,
-      components: [{
-        id: sceneName,
-        definition: sceneName,
-        placement: "root",
-        visibility: "visible",
-        modal: false,
-      }],
-    };
-    return next;
-  };
-  let fixtureValue = typeof window.Puzzle3DFixture === "undefined"
-    ? undefined
-    : window.PuzzleStudioModelComponentPreviewFixture(window.Puzzle3DFixture, update);
-  Object.defineProperty(window, "Puzzle3DFixture", {
-    configurable: true,
-    get() {
-      return fixtureValue;
-    },
-    set(value) {
-      fixtureValue = window.PuzzleStudioModelComponentPreviewFixture(value, update);
-    },
-  });
-})();
-<\/script>`;
-  const bootScript = `<script id="puzzle-studio-initial-model-preview-boot">
-(() => {
-  const update = window.PuzzleStudioInitialPreviewSurface;
-  window.parent?.postMessage({
-    type: "PuzzleStudioLevel3dFrameProgress",
-    stage: "boot-start",
-    detail: "",
-  }, "*");
-  if (!update || update.type !== "${LEVEL3D_PREVIEW_SURFACE_MESSAGE}") {
-    return;
-  }
-  if (window.PuzzleStudioInitialPreviewSurfaceConsumed === true) {
-    return;
-  }
-  if (typeof window.applyPuzzleStudioPreviewSurfaceUpdate === "function") {
-    const applied = window.applyPuzzleStudioPreviewSurfaceUpdate(update);
-    window.parent?.postMessage({
-      type: "PuzzleStudioLevel3dFrameProgress",
-      stage: "surface-applied",
-      detail: String(applied),
-    }, "*");
-    return;
-  }
-  if (typeof window.loadSnapshotData !== "function") {
-    return;
-  }
-  const source = typeof window.PuzzleStudioModelComponentPreviewFixture === "function"
-    ? window.PuzzleStudioModelComponentPreviewFixture(window.Puzzle3DFixture || {}, update)
-    : JSON.parse(JSON.stringify(window.Puzzle3DFixture || {}));
-  window.loadSnapshotData(source, { scene: source.scenes[0].name, preferPuzzleScene: false });
-})();
-<\/script>`;
-  let next = html;
-  if (next.includes("</head>")) {
-    next = next.replace("</head>", `${seedScript}\n  </head>`);
-  } else if (next.includes("<body")) {
-    next = next.replace("<body", `${seedScript}\n<body`);
-  } else {
-    next = `${seedScript}\n${next}`;
-  }
-  if (next.includes("</body>")) {
-    return next.replace("</body>", `${bootScript}\n  </body>`);
-  }
-  return `${next}\n${bootScript}`;
-}
-
-function level3dStageHitFromEvent(event) {
-  const overlay = ensureLevel3dStageOverlay();
-  if (!overlay) {
-    return null;
-  }
-  const point = level3dEventPointInScaledSurface(event, overlay);
-  return level3dStageHitAt(point.x, point.y, point.width, point.height);
-}
-
-function level3dStageHitKey(hit) {
-  if (!hit) {
-    return "";
-  }
-  const place = hit.place ? `${hit.place.x},${hit.place.y},${hit.place.z}` : "";
-  const remove = hit.remove ? `${hit.remove.x},${hit.remove.y},${hit.remove.z}` : "";
-  return `${hit.mode || ""}:${hit.kind}:${hit.edge || ""}:${place}:${remove}`;
 }
 
 function level3dSelectedEntry() {
@@ -3835,9 +2697,6 @@ function level3dSelectedEntry() {
 }
 
 function level3dRuntimeSnapshot() {
-  if (level3dPlaytestActive && level3dPlaytestSnapshot) {
-    return level3dSnapshotWithPreviewGrid(level3dPlaytestSnapshot);
-  }
   const exportData = previewBuild?.exportData;
   if (!isPuzzle3dExport(exportData)) {
     return null;
@@ -3882,232 +2741,6 @@ function level3dEditedSnapshotAppliesToLevel(exportData = previewBuild?.exportDa
     return true;
   }
   return Boolean(levelEntry.name && level3dNameInput?.value && levelEntry.name === level3dNameInput.value);
-}
-
-function showPuzzle3dSolutionPreview(solution) {
-  const steps = Array.isArray(solution.steps) ? solution.steps : [];
-  if (!steps.length) {
-    setLevelSolveStatus("Solved, but no steps were returned", "is-error");
-    return;
-  }
-  const snapshot = puzzle3dSolutionStepSnapshot(steps[0]);
-  if (!snapshot) {
-    setLevelSolveStatus("3D solution steps did not include scene data", "is-error");
-    return;
-  }
-  levelSolutionPreview = {
-    kind: "puzzle3d",
-    steps,
-    moves: solutionMoves(solution),
-    index: 0,
-    snapshot,
-  };
-  updateSolutionControls();
-  renderSolverRuntimePreview();
-  setLevelSolveStatus(solution.depth ? `Solved in ${solution.depth} moves` : "Already solved", "is-ok");
-}
-
-function setPuzzle3dSolutionStep(index) {
-  if (!levelSolutionPreview || levelSolutionPreview.kind !== "puzzle3d") {
-    return;
-  }
-  const nextIndex = Math.max(0, Math.min(levelSolutionPreview.steps.length - 1, index));
-  levelSolutionPreview.index = nextIndex;
-  levelSolutionPreview.snapshot = puzzle3dSolutionStepSnapshot(levelSolutionPreview.steps[nextIndex]);
-  updateSolutionControls();
-  renderSolverRuntimePreview();
-}
-
-function renderSolverRuntimePreview() {
-  if (!solverBoardViewport || !previewBuild?.html) {
-    clearSolverRuntimePreview();
-    return false;
-  }
-  const snapshot = puzzle3dSnapshotForSolverPreview();
-  const update = level3dPreviewUpdateFromSnapshot(snapshot);
-  if (!update) {
-    clearSolverRuntimePreview();
-    return false;
-  }
-  if (!solverPreviewFrame) {
-    solverPreviewFrame = document.createElement("iframe");
-    solverPreviewFrame.className = "solver-preview-frame";
-    solverPreviewFrame.title = "3D solution preview";
-    solverPreviewFrame.sandbox = "allow-scripts";
-    solverPreviewFrame.scrolling = "no";
-    solverBoardViewport.append(solverPreviewFrame);
-  }
-  solverBoardViewport.classList.add("is-puzzle3d");
-  if (solverBoard) {
-    solverBoard.hidden = true;
-  }
-  const key = `${activePreviewDocument()?.id || ""}:${previewBuild?.html.length}:solver-preview`;
-  if (solverPreviewFrameKey !== key) {
-    solverPreviewFrameLoaded = false;
-    solverPreviewFrameKey = key;
-    solverPreviewFrame.addEventListener("load", () => {
-      solverPreviewFrameLoaded = true;
-      sendSolverPreviewToRuntime();
-    }, { once: true });
-    solverPreviewFrame.srcdoc = level3dRuntimePreviewDocument(update);
-    return true;
-  }
-  sendSolverPreviewToRuntime();
-  return true;
-}
-
-function clearSolverRuntimePreview() {
-  if (solverPreviewFrame) {
-    solverPreviewFrame.remove();
-  }
-  solverPreviewFrame = null;
-  solverPreviewFrameKey = "";
-  solverPreviewFrameLoaded = false;
-  solverBoardViewport?.classList.remove("is-puzzle3d");
-  if (solverBoard) {
-    solverBoard.hidden = false;
-  }
-}
-
-function sendSolverPreviewToRuntime() {
-  if (!solverPreviewFrameLoaded || !solverPreviewFrame?.contentWindow) {
-    return;
-  }
-  const snapshot = puzzle3dSnapshotForSolverPreview();
-  const update = level3dPreviewUpdateFromSnapshot(snapshot);
-  if (!update) {
-    return;
-  }
-  solverPreviewFrame.contentWindow.postMessage(level3dPreviewSurfaceMessage(update), "*");
-}
-
-function puzzle3dSnapshotForSolverPreview() {
-  if (levelSolutionPreview?.kind === "puzzle3d") {
-    return levelSolutionPreview.snapshot
-      || puzzle3dSolutionStepSnapshot(levelSolutionPreview.steps?.[levelSolutionPreview.index || 0]);
-  }
-  if (solverObservationPreview?.kind === "puzzle3d") {
-    return solverObservationPreview.snapshot || null;
-  }
-  if (typeof puzzle3dSnapshotForActiveSolverTask === "function") {
-    return puzzle3dSnapshotForActiveSolverTask();
-  }
-  return level3dRuntimeSnapshot();
-}
-
-function level3dPreviewUpdateFromSnapshot(snapshot) {
-  if (!snapshot) {
-    return null;
-  }
-  const levelCount = Array.isArray(snapshot.levels) && snapshot.levels.length ? snapshot.levels.length : 1;
-  const levelIndex = Math.max(0, Math.min(levelCount - 1, Math.trunc(Number(snapshot.levelIndex) || 0)));
-  const levelEntry = snapshot.levels?.[levelIndex] || {};
-  const size = snapshot.size || levelEntry.size || {};
-  const cells = Array.isArray(snapshot.cells)
-    ? snapshot.cells
-    : Array.isArray(levelEntry.cells)
-      ? levelEntry.cells
-      : [];
-  const resources = level3dRuntimePreviewResources(snapshot);
-  return {
-    levelIndex,
-    level: {
-      name: levelEntry.name || level3dNameInput?.value || "level 1",
-      label: levelEntry.label || levelEntry.name || level3dNameInput?.value || "Level 1",
-      size: size ? { ...size } : undefined,
-      cells: level3dCellsWithObjectDescriptors(cells, resources.objects),
-    },
-    resources,
-    camera: level3dRuntimePreviewCamera(snapshot),
-    view: level3dRuntimePreviewView(snapshot),
-    settings: level3dPreviewSettings(snapshot.render || {}),
-    component: level3dModelPreviewComponent(),
-    componentEmbed: true,
-  };
-}
-
-function level3dCellsWithObjectDescriptors(cells, objects = {}) {
-  const descriptors = new Map();
-  for (const descriptor of Object.values(objects || {})) {
-    if (!descriptor) {
-      continue;
-    }
-    if (descriptor.id != null) {
-      descriptors.set(`id:${Number(descriptor.id)}`, descriptor);
-    }
-    if (descriptor.name) {
-      descriptors.set(`name:${descriptor.name}`, descriptor);
-    }
-  }
-  return (cells || []).map((cell) => ({
-    ...JSON.parse(JSON.stringify(cell || {})),
-    objects: (cell?.objects || []).map((object) => {
-      const descriptor = descriptors.get(`id:${Number(object?.id)}`)
-        || descriptors.get(`name:${object?.name || ""}`)
-        || {};
-      return {
-        ...JSON.parse(JSON.stringify(descriptor)),
-        ...JSON.parse(JSON.stringify(object || {})),
-        visual: object?.visual ?? descriptor.visual ?? null,
-        layer: object?.layer ?? descriptor.layer ?? null,
-      };
-    }),
-  }));
-}
-
-function puzzle3dSolutionStepSnapshot(step) {
-  const base = levelSolutionPreview?.snapshot
-    || (() => {
-      const previous = levelSolutionPreview;
-      levelSolutionPreview = null;
-      const snapshot = level3dRuntimeSnapshot();
-      levelSolutionPreview = previous;
-      return snapshot;
-    })()
-    || previewBuild?.exportData
-    || {};
-  let scene = step?.scene;
-  const state = step?.state;
-  if (scene?.kind !== "puzzle3d" && state?.kind === "puzzle3d") {
-    const width = Math.max(1, Math.trunc(Number(state.width) || 1));
-    const depth = Math.max(1, Math.trunc(Number(state.depth) || 1));
-    const height = Math.max(1, Math.trunc(Number(state.height) || 1));
-    const layerCount = Math.max(1, Math.trunc(Number(state.layerCount) || 1));
-    const cells = new Map();
-    for (let slotIndex = 0; slotIndex < (state.slots || []).length; slotIndex += 1) {
-      const id = Number(state.slots[slotIndex]) || 0;
-      if (!id) continue;
-      const layer = slotIndex % layerCount;
-      const cellIndex = Math.floor(slotIndex / layerCount);
-      const x = cellIndex % width;
-      const y = Math.floor(cellIndex / width) % depth;
-      const z = Math.floor(cellIndex / (width * depth));
-      if (z >= height) continue;
-      const key = `${x},${y},${z}`;
-      const cell = cells.get(key) || { position: { x, y, z }, objects: [] };
-      cell.objects.push({ id, layer });
-      cells.set(key, cell);
-    }
-    scene = {
-      kind: "puzzle3d",
-      size: { width, depth, height },
-      layerCount,
-      cells: Array.from(cells.values()),
-    };
-  }
-  if (scene?.kind !== "puzzle3d") {
-    return null;
-  }
-  const snapshot = JSON.parse(JSON.stringify(base));
-  snapshot.__kind = "puzzle3d";
-  snapshot.size = { ...(scene.size || snapshot.size || {}) };
-  snapshot.cells = JSON.parse(JSON.stringify(scene.cells || []));
-  snapshot.layerCount = scene.layerCount || snapshot.layerCount;
-  if (Array.isArray(snapshot.levels) && Number.isInteger(snapshot.levelIndex) && snapshot.levels[snapshot.levelIndex]) {
-    snapshot.levels[snapshot.levelIndex].size = { ...snapshot.size };
-    snapshot.levels[snapshot.levelIndex].cells = JSON.parse(JSON.stringify(snapshot.cells));
-  }
-  return snapshot;
 }
 
 function level3dSnapshotWithPreviewGrid(snapshot) {
@@ -4241,303 +2874,6 @@ function level3dObjectDescriptor(name, exportData = previewBuild?.exportData) {
   return { name, visual: name };
 }
 
-function level3dStageHitAt(x, y, width, height) {
-  const snapshot = level3dRuntimeSnapshot();
-  if (!snapshot || !level3d.slices.length) {
-    return null;
-  }
-  const view = level3dStagePreviewView(snapshot, width, height);
-  const resizeMode = level3dStageResizeMode();
-  if (resizeMode) {
-    const resizeFaces = level3dStageResizeFaces(snapshot, view, resizeMode);
-    return resizeFaces.find((face) => pointInLevel3dPolygon({ x, y }, face.polygon))
-      || nearestLevel3dStageResizeFace({ x, y }, resizeFaces, view);
-  }
-  const faces = level3dUsablePlacementFaces(level3dPlacementFaces(snapshot, view));
-  faces.sort((left, right) => level3dPrimitiveOrder(right) - level3dPrimitiveOrder(left));
-  return faces.find((face) => pointInLevel3dPolygon({ x, y }, face.polygon))
-    || nearestLevel3dPlacementFace({ x, y }, faces, view);
-}
-
-function level3dUsablePlacementFaces(faces) {
-  const selected = level3dSelectedEntry();
-  if (!selected?.objects?.length) {
-    return faces.filter((face) => face.remove);
-  }
-  if (level3dEditMode() === "add") {
-    return faces.filter((face) => face.place);
-  }
-  return faces.filter((face) => face.replace);
-}
-
-function level3dPlacementFaces(snapshot, view) {
-  const occupied = new Set((snapshot.cells || [])
-    .filter((cell) => cell.objects?.length)
-    .map((cell) => level3dVoxelKey(cell.position.x, cell.position.y, cell.position.z)));
-  const faces = [];
-  const directions = [
-    { side: "xNeg", normal: { x: -1, y: 0, z: 0 }, delta: { x: -1, y: 0, z: 0 } },
-    { side: "xPos", normal: { x: 1, y: 0, z: 0 }, delta: { x: 1, y: 0, z: 0 } },
-    { side: "yNeg", normal: { x: 0, y: -1, z: 0 }, delta: { x: 0, y: -1, z: 0 } },
-    { side: "yPos", normal: { x: 0, y: 1, z: 0 }, delta: { x: 0, y: 1, z: 0 } },
-    { side: "zNeg", normal: { x: 0, y: 0, z: -1 }, delta: { x: 0, y: 0, z: -1 } },
-    { side: "zPos", normal: { x: 0, y: 0, z: 1 }, delta: { x: 0, y: 0, z: 1 } },
-  ];
-
-  for (const cell of snapshot.cells || []) {
-    if (!cell.objects?.length) {
-      continue;
-    }
-    for (const face of directions) {
-      if (level3dDirectionDepth(face.normal, snapshot.render?.camera) <= 0) {
-        continue;
-      }
-      const place = {
-        x: Number(cell.position.x) + face.delta.x,
-        y: Number(cell.position.y) + face.delta.y,
-        z: Number(cell.position.z) + face.delta.z,
-      };
-      if (!level3dPositionInBounds(place) || occupied.has(level3dVoxelKey(place.x, place.y, place.z))) {
-        continue;
-      }
-      faces.push(level3dPlacementFace(face.side, cell.position, view, {
-        kind: "occupied",
-        place,
-        replace: { ...cell.position },
-        remove: { ...cell.position },
-      }));
-    }
-  }
-
-  for (let y = 0; y < Math.max(1, level3d.depth || 1); y += 1) {
-    for (let x = 0; x < Math.max(1, level3d.width || 1); x += 1) {
-      const place = { x, y, z: 0 };
-      if (occupied.has(level3dVoxelKey(x, y, 0))) {
-        continue;
-      }
-      faces.push(level3dPlacementFace("zPos", { x, y, z: -1 }, view, {
-        kind: "floor",
-        place,
-        remove: null,
-      }));
-    }
-  }
-  return faces;
-}
-
-function level3dExpansionFaces(snapshot, view) {
-  return level3dStageResizeFaces(snapshot, view, "expand");
-}
-
-function level3dStageResizeFaces(snapshot, view, mode = "expand") {
-  const size = snapshot?.size || {};
-  const width = Math.max(1, Math.trunc(Number(size.width) || level3d.width || 1));
-  const depth = Math.max(1, Math.trunc(Number(size.depth) || level3d.depth || 1));
-  const height = Math.max(1, Math.trunc(Number(size.height) || level3d.height || 1));
-  const faces = level3dStageResizeSliceSpecs(width, depth, height, mode)
-    .filter((spec) => mode === "expand" || level3dCanShrinkDimension(spec.dimension, { width, depth, height }))
-    .map((spec) => level3dStageResizeFace(spec.faceCorners, view, {
-      kind: `${mode}-${spec.dimension}`,
-      mode,
-      dimension: spec.dimension,
-      axis: spec.axis,
-      edge: spec.edge,
-      resizeEdge: spec.resizeEdge,
-      frameBounds: spec.frameBounds,
-    }));
-  faces.sort((left, right) => level3dPrimitiveOrder(right) - level3dPrimitiveOrder(left));
-  return faces;
-}
-
-function level3dStageResizeSliceSpecs(width, depth, height, mode) {
-  const expand = mode === "expand";
-  return [
-    {
-      dimension: "width",
-      axis: "x",
-      edge: "left",
-      resizeEdge: "left",
-      faceCorners: expand
-        ? level3dBoundsBottomFace({ x0: -1.5, x1: -0.5, y0: -0.5, y1: depth - 0.5, z: -0.5 })
-        : level3dBoundsSideFace("xNeg", { x: -0.5, y0: -0.5, y1: depth - 0.5, z0: -0.5, z1: height - 0.5 }),
-      frameBounds: level3dResizeSliceFrameBounds({ width, depth, height }, "width", "left", mode),
-    },
-    {
-      dimension: "width",
-      axis: "x",
-      edge: "right",
-      resizeEdge: "right",
-      faceCorners: expand
-        ? level3dBoundsBottomFace({ x0: width - 0.5, x1: width + 0.5, y0: -0.5, y1: depth - 0.5, z: -0.5 })
-        : level3dBoundsSideFace("xPos", { x: width - 0.5, y0: -0.5, y1: depth - 0.5, z0: -0.5, z1: height - 0.5 }),
-      frameBounds: level3dResizeSliceFrameBounds({ width, depth, height }, "width", "right", mode),
-    },
-    {
-      dimension: "depth",
-      axis: "y",
-      edge: "front",
-      resizeEdge: "front",
-      faceCorners: expand
-        ? level3dBoundsBottomFace({ x0: -0.5, x1: width - 0.5, y0: -1.5, y1: -0.5, z: -0.5 })
-        : level3dBoundsSideFace("yNeg", { y: -0.5, x0: -0.5, x1: width - 0.5, z0: -0.5, z1: height - 0.5 }),
-      frameBounds: level3dResizeSliceFrameBounds({ width, depth, height }, "depth", "front", mode),
-    },
-    {
-      dimension: "depth",
-      axis: "y",
-      edge: "back",
-      resizeEdge: "back",
-      faceCorners: expand
-        ? level3dBoundsBottomFace({ x0: -0.5, x1: width - 0.5, y0: depth - 0.5, y1: depth + 0.5, z: -0.5 })
-        : level3dBoundsSideFace("yPos", { y: depth - 0.5, x0: -0.5, x1: width - 0.5, z0: -0.5, z1: height - 0.5 }),
-      frameBounds: level3dResizeSliceFrameBounds({ width, depth, height }, "depth", "back", mode),
-    },
-    {
-      dimension: "height",
-      axis: "z",
-      edge: "down",
-      resizeEdge: "bottom",
-      faceCorners: level3dBoundsHorizontalFace({ x0: -0.5, x1: width - 0.5, y0: -0.5, y1: depth - 0.5, z: expand ? -1.5 : -0.5 }),
-      frameBounds: level3dResizeSliceFrameBounds({ width, depth, height }, "height", "down", mode),
-    },
-    {
-      dimension: "height",
-      axis: "z",
-      edge: "up",
-      resizeEdge: "top",
-      faceCorners: level3dBoundsHorizontalFace({ x0: -0.5, x1: width - 0.5, y0: -0.5, y1: depth - 0.5, z: expand ? height + 0.5 : height - 0.5 }),
-      frameBounds: level3dResizeSliceFrameBounds({ width, depth, height }, "height", "up", mode),
-    },
-  ];
-}
-
-function level3dCanShrinkDimension(dimension, size) {
-  if (dimension === "width") {
-    return size.width > 1;
-  }
-  if (dimension === "depth") {
-    return size.depth > 1;
-  }
-  if (dimension === "height") {
-    return size.height > 1;
-  }
-  return false;
-}
-
-function level3dStageResizeFace(corners, view, metadata) {
-  const projected = corners.map((corner) => level3dProjectPoint(corner, view));
-  return {
-    ...metadata,
-    polygon: projected.map(({ x, y }) => ({ x, y })),
-    center: projected.reduce(
-      (total, point) => ({ x: total.x + point.x / projected.length, y: total.y + point.y / projected.length }),
-      { x: 0, y: 0 },
-    ),
-    depth: projected.reduce((total, point) => total + point.depth, 0) / projected.length,
-    order: level3dGridOrder(level3dFaceCenter(corners), view.camera),
-  };
-}
-
-function level3dBoundsBottomFace({ x0, x1, y0, y1, z }) {
-  return [{ x: x0, y: y0, z }, { x: x1, y: y0, z }, { x: x1, y: y1, z }, { x: x0, y: y1, z }];
-}
-
-function level3dBoundsHorizontalFace({ x0, x1, y0, y1, z }) {
-  return [{ x: x0, y: y0, z }, { x: x1, y: y0, z }, { x: x1, y: y1, z }, { x: x0, y: y1, z }];
-}
-
-function level3dBoundsSideFace(side, bounds) {
-  if (side === "xNeg") {
-    return [
-      { x: bounds.x, y: bounds.y0, z: bounds.z0 },
-      { x: bounds.x, y: bounds.y0, z: bounds.z1 },
-      { x: bounds.x, y: bounds.y1, z: bounds.z1 },
-      { x: bounds.x, y: bounds.y1, z: bounds.z0 },
-    ];
-  }
-  if (side === "xPos") {
-    return [
-      { x: bounds.x, y: bounds.y0, z: bounds.z1 },
-      { x: bounds.x, y: bounds.y0, z: bounds.z0 },
-      { x: bounds.x, y: bounds.y1, z: bounds.z0 },
-      { x: bounds.x, y: bounds.y1, z: bounds.z1 },
-    ];
-  }
-  if (side === "yNeg") {
-    return [
-      { x: bounds.x0, y: bounds.y, z: bounds.z0 },
-      { x: bounds.x1, y: bounds.y, z: bounds.z0 },
-      { x: bounds.x1, y: bounds.y, z: bounds.z1 },
-      { x: bounds.x0, y: bounds.y, z: bounds.z1 },
-    ];
-  }
-  return [
-    { x: bounds.x0, y: bounds.y, z: bounds.z1 },
-    { x: bounds.x1, y: bounds.y, z: bounds.z1 },
-    { x: bounds.x1, y: bounds.y, z: bounds.z0 },
-    { x: bounds.x0, y: bounds.y, z: bounds.z0 },
-  ];
-}
-
-function level3dResizeSliceFrameBounds(size, dimension, edge, mode = "shrink") {
-  return mode === "expand"
-    ? level3dExpandedSliceFrameBounds(size, dimension, edge)
-    : level3dSliceFrameBounds(size, dimension, edge);
-}
-
-function level3dExpandedSliceFrameBounds(size, dimension, edge) {
-  const bounds = level3dFullStageBounds(size);
-  if (dimension === "width" && edge === "left") {
-    bounds.x1 = bounds.x0;
-    bounds.x0 -= 1;
-  } else if (dimension === "width" && edge === "right") {
-    bounds.x0 = bounds.x1;
-    bounds.x1 += 1;
-  } else if (dimension === "depth" && (edge === "front" || edge === "forward")) {
-    bounds.y1 = bounds.y0;
-    bounds.y0 -= 1;
-  } else if (dimension === "depth" && (edge === "back" || edge === "backward")) {
-    bounds.y0 = bounds.y1;
-    bounds.y1 += 1;
-  } else if (dimension === "height" && edge === "down") {
-    bounds.z1 = bounds.z0;
-    bounds.z0 -= 1;
-  } else if (dimension === "height" && edge === "up") {
-    bounds.z0 = bounds.z1;
-    bounds.z1 += 1;
-  }
-  return bounds;
-}
-
-function level3dSliceFrameBounds(size, dimension, edge) {
-  const bounds = level3dFullStageBounds(size);
-  if (dimension === "width" && edge === "left") {
-    bounds.x1 = bounds.x0 + 1;
-  } else if (dimension === "width" && edge === "right") {
-    bounds.x0 = bounds.x1 - 1;
-  } else if (dimension === "depth" && (edge === "front" || edge === "forward")) {
-    bounds.y1 = bounds.y0 + 1;
-  } else if (dimension === "depth" && (edge === "back" || edge === "backward")) {
-    bounds.y0 = bounds.y1 - 1;
-  } else if (dimension === "height" && edge === "down") {
-    bounds.z1 = bounds.z0 + 1;
-  } else if (dimension === "height" && edge === "up") {
-    bounds.z0 = bounds.z1 - 1;
-  }
-  return bounds;
-}
-
-function level3dFullStageBounds(size) {
-  return {
-    x0: -0.5,
-    x1: Math.max(1, Number(size?.width) || 1) - 0.5,
-    y0: -0.5,
-    y1: Math.max(1, Number(size?.depth) || 1) - 0.5,
-    z0: -0.5,
-    z1: Math.max(1, Number(size?.height) || 1) - 0.5,
-  };
-}
-
 function level3dPlacementFace(side, position, view, metadata, zOffset = 0) {
   const corners = level3dCellFaceCorners(side, {
     x: Number(position.x),
@@ -4555,42 +2891,6 @@ function level3dPlacementFace(side, position, view, metadata, zOffset = 0) {
     depth: projected.reduce((total, point) => total + point.depth, 0) / projected.length,
     order: level3dGridOrder(level3dFaceCenter(corners), view.camera),
   };
-}
-
-function nearestLevel3dPlacementFace(point, faces, view) {
-  let nearest = null;
-  let nearestDistance = Infinity;
-  for (const face of faces) {
-    const dx = point.x - face.center.x;
-    const dy = point.y - face.center.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance < nearestDistance) {
-      nearest = face;
-      nearestDistance = distance;
-    }
-  }
-  const tolerance = Math.max(64, Math.min(140, (view.scale || 1) * 1.1));
-  return nearestDistance <= tolerance ? nearest : null;
-}
-
-function nearestLevel3dExpansionFace(point, faces, view) {
-  return nearestLevel3dStageResizeFace(point, faces, view);
-}
-
-function nearestLevel3dStageResizeFace(point, faces, view) {
-  let nearest = null;
-  let nearestDistance = Infinity;
-  for (const face of faces) {
-    const dx = point.x - face.center.x;
-    const dy = point.y - face.center.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance < nearestDistance) {
-      nearest = face;
-      nearestDistance = distance;
-    }
-  }
-  const tolerance = Math.max(72, Math.min(190, (view.scale || 1) * 1.35));
-  return nearestDistance <= tolerance ? nearest : null;
 }
 
 function level3dCellFaceCorners(side, position) {
@@ -4805,140 +3105,6 @@ function level3dFrameEdgeKey(a, b) {
   const first = `${a.x},${a.y},${a.z}`;
   const second = `${b.x},${b.y},${b.z}`;
   return first < second ? `${first}|${second}` : `${second}|${first}`;
-}
-
-function drawLevel3dExpansionHint(ctx, hit, width, height) {
-  drawLevel3dStageResizeHint(ctx, hit, width, height);
-}
-
-function drawLevel3dStageResizeHint(ctx, hit, width, height) {
-  const snapshot = level3dRuntimeSnapshot();
-  if (!snapshot) {
-    return;
-  }
-  const mode = hit?.mode || (hit?.kind?.startsWith("shrink-") ? "shrink" : "expand");
-  const view = level3dStagePreviewView(snapshot, width, height);
-  const ghostFace = level3dStageResizeFaces(snapshot, view, mode)
-    .find((face) => face.kind === hit.kind && face.edge === hit.edge);
-  const isShrink = mode === "shrink";
-  ctx.save();
-  ctx.lineJoin = "round";
-  ctx.fillStyle = isShrink
-    ? level3dEditorThemeColor("--danger", 0.14)
-    : level3dEditorThemeColor("--accent", 0.12);
-  ctx.strokeStyle = isShrink
-    ? level3dEditorThemeColor("--danger", 0.72)
-    : level3dEditorThemeColor("--accent", 0.62);
-  ctx.lineWidth = 1.5;
-  if (ghostFace?.polygon?.length) {
-    drawLevel3dPolygonPath(ctx, ghostFace.polygon);
-    ctx.fill();
-    ctx.stroke();
-  }
-  const edges = level3dStageResizeFrameEdges(snapshot?.size || {}, hit);
-  const lines = edges.map((edge) => {
-    const from = level3dProjectPoint(edge.from, view);
-    const to = level3dProjectPoint(edge.to, view);
-    return {
-      from,
-      to,
-      order: level3dGridOrder(level3dMidpoint3(edge.from, edge.to), view.camera),
-      depth: (from.depth + to.depth) / 2,
-    };
-  }).sort((left, right) => level3dPrimitiveOrder(left) - level3dPrimitiveOrder(right));
-  ctx.setLineDash([7, 5]);
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = isShrink
-    ? level3dEditorThemeColor("--danger", 0.82)
-    : level3dEditorThemeColor("--accent", 0.72);
-  for (const line of lines) {
-    ctx.beginPath();
-    ctx.moveTo(line.from.x, line.from.y);
-    ctx.lineTo(line.to.x, line.to.y);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function level3dStageResizeFrameEdges(size, hit) {
-  if (hit?.frameBounds) {
-    return level3dFrameEdgesFromBounds(hit.frameBounds);
-  }
-  return level3dExpandedFrameEdges(size, hit?.kind, hit?.edge || "right");
-}
-
-function level3dExpandedFrameEdges(size, kind, edge) {
-  const width = Math.max(1, Number(size?.width) || level3d.width || 1);
-  const depth = Math.max(1, Number(size?.depth) || level3d.depth || 1);
-  const height = Math.max(1, Number(size?.height) || level3d.height || 1);
-  const x0 = kind === "expand-width" && edge === "left" ? -1.5 : -0.5;
-  const x1 = kind === "expand-width" && edge === "right" ? width + 0.5 : width - 0.5;
-  const y0 = kind === "expand-depth" && (edge === "front" || edge === "forward") ? -1.5 : -0.5;
-  const y1 = kind === "expand-depth" && (edge === "back" || edge === "backward") ? depth + 0.5 : depth - 0.5;
-  const z0 = kind === "expand-height" && (edge === "bottom" || edge === "down") ? -1.5 : -0.5;
-  const z1 = kind === "expand-height" && (edge === "top" || edge === "up") ? height + 0.5 : height - 0.5;
-  return level3dFrameEdgesFromBounds({
-    x0,
-    x1,
-    y0,
-    y1,
-    z0,
-    z1,
-  });
-}
-
-function level3dFrameEdgesFromBounds(bounds) {
-  const corners = {
-    leftBackBottom: { x: bounds.x0, y: bounds.y0, z: bounds.z0 },
-    rightBackBottom: { x: bounds.x1, y: bounds.y0, z: bounds.z0 },
-    rightFrontBottom: { x: bounds.x1, y: bounds.y1, z: bounds.z0 },
-    leftFrontBottom: { x: bounds.x0, y: bounds.y1, z: bounds.z0 },
-    leftBackTop: { x: bounds.x0, y: bounds.y0, z: bounds.z1 },
-    rightBackTop: { x: bounds.x1, y: bounds.y0, z: bounds.z1 },
-    rightFrontTop: { x: bounds.x1, y: bounds.y1, z: bounds.z1 },
-    leftFrontTop: { x: bounds.x0, y: bounds.y1, z: bounds.z1 },
-  };
-  return [
-    { from: corners.leftBackBottom, to: corners.rightBackBottom },
-    { from: corners.rightBackBottom, to: corners.rightFrontBottom },
-    { from: corners.rightFrontBottom, to: corners.leftFrontBottom },
-    { from: corners.leftFrontBottom, to: corners.leftBackBottom },
-    { from: corners.leftBackTop, to: corners.rightBackTop },
-    { from: corners.rightBackTop, to: corners.rightFrontTop },
-    { from: corners.rightFrontTop, to: corners.leftFrontTop },
-    { from: corners.leftFrontTop, to: corners.leftBackTop },
-    { from: corners.leftBackBottom, to: corners.leftBackTop },
-    { from: corners.rightBackBottom, to: corners.rightBackTop },
-    { from: corners.rightFrontBottom, to: corners.rightFrontTop },
-    { from: corners.leftFrontBottom, to: corners.leftFrontTop },
-  ];
-}
-
-function level3dStageViewOptions() {
-  return { padding: 0.56 };
-}
-
-function level3dStagePreviewView(snapshot, width, height) {
-  const runtimeView = level3dStageRendererViewForSurface(snapshot, width, height);
-  return runtimeView || level3dPreviewView(snapshot, width, height, level3dStageViewOptions());
-}
-
-function level3dStageRendererViewForSurface(snapshot, width, height) {
-  if (!level3dStageRendererView || level3dStageRendererView.coordinateSpace !== "canvas-css-px") {
-    return null;
-  }
-  const size = snapshot?.size || {};
-  const sameSize = Math.max(1, Math.trunc(Number(size.width) || 1)) === Math.max(1, Math.trunc(Number(level3d.width) || 1))
-    && Math.max(1, Math.trunc(Number(size.depth) || 1)) === Math.max(1, Math.trunc(Number(level3d.depth) || 1))
-    && Math.max(1, Math.trunc(Number(size.height) || 1)) === Math.max(1, Math.trunc(Number(level3d.height) || 1));
-  if (!sameSize) {
-    return null;
-  }
-  return {
-    ...level3dStageRendererView,
-    surfaceWidth: Math.max(1, Number(width) || level3dStageRendererView.viewport.width),
-    surfaceHeight: Math.max(1, Number(height) || level3dStageRendererView.viewport.height),
-  };
 }
 
 function level3dObjectPreviewFaces(position, object, snapshot, view) {
@@ -5578,9 +3744,7 @@ function resetLevel3dPreviewView() {
   }
   resetLevel3dPreviewState(previewBuild?.exportData);
   renderLevel3dPreviewControls();
-  level3dStageHit = null;
-  renderLevel3dStageOverlay();
-  refreshLevel3dRuntimePreviews();
+  renderLevel3dRuntime();
   setLevel3dActionStatus("Reset 3D preview view", "is-ok");
 }
 
@@ -5752,9 +3916,7 @@ function setLevel3dPreviewValue(kind, value, options = {}) {
     origin.z = level3dClampNumber(value, -128, 128);
   }
   renderLevel3dPreviewControls();
-  level3dStageHit = null;
-  renderLevel3dStageOverlay();
-  refreshLevel3dRuntimePreviews();
+  renderLevel3dRuntime();
 }
 
 function level3dPreviewScrubScale(kind) {
@@ -5899,23 +4061,6 @@ level3dSliceScrub?.addEventListener("pointercancel", stopLevel3dSliceScrub);
 window.addEventListener("pointerup", stopLevel3dSliceScrub, true);
 window.addEventListener("pointercancel", stopLevel3dSliceScrub, true);
 window.addEventListener("blur", () => finishLevel3dSliceScrub());
-level3dLayerBoard?.addEventListener("pointerdown", startLevel3dLayerPaint);
-level3dLayerBoard?.addEventListener("pointermove", continueLevel3dLayerPaint);
-level3dLayerBoard?.addEventListener("pointerup", stopLevel3dLayerPaint);
-level3dLayerBoard?.addEventListener("pointercancel", stopLevel3dLayerPaint);
-level3dLayerBoard?.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter" && event.key !== " ") {
-    return;
-  }
-  if (withVisualEditHistory("level3d", paintLevel3dLayerHoverCell)) {
-    event.preventDefault();
-    event.stopPropagation();
-  }
-});
-level3dLayerBoard?.addEventListener("pointerleave", () => {
-  level3dLayerHover = null;
-  renderLevel3dLayerOverlay();
-});
 document.querySelectorAll("[data-level3d-layer-edge]").forEach((button) => {
   button.addEventListener("click", () => {
     const mode = level3dStageResizeMode();
@@ -5925,11 +4070,6 @@ document.querySelectorAll("[data-level3d-layer-edge]").forEach((button) => {
     resizeLevel3dLayerEdge(button.dataset.level3dLayerEdge, mode);
   });
 });
-window.addEventListener("message", handleLevel3dLayerRendererViewMessage);
-window.addEventListener("message", handleLevel3dStageRendererViewMessage);
-window.addEventListener("message", handleLevel3dRuntimeLifecycleMessage);
-window.addEventListener("message", handleLevel3dRuntimeProgressMessage);
-window.addEventListener("message", handleLevel3dPlaytestStateMessage);
 window.addEventListener("resize", scheduleLevel3dSurfaceResize);
 document.addEventListener("keydown", (event) => {
   const tagName = event.target?.tagName || "";

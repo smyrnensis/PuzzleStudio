@@ -76,7 +76,7 @@ fn main() {
         fs::read_to_string(manifest_dir.join("static/editor.css")).expect("read static/editor.css");
 
     let mut failures = Vec::new();
-    if editor_js.contains("ResizeObserver(syncPreviewViewportScale)") {
+    if editor_js.contains("ResizeObserver(syncPreviewViewportGeometry)") {
         failures.push("preview ResizeObserver reintroduces iframe sizing feedback");
     }
     if editor_js.contains("updatePreviewFrameLayout(event.data.layout)")
@@ -87,10 +87,11 @@ fn main() {
     if editor_js.contains("puzzle-studio-editor-preview-layout-script") {
         failures.push("preview layout injection script must stay removed");
     }
-    if !editor_js.contains("function fitPreviewViewportSize(")
-        || !editor_js.contains("previewAspectForScene(")
+    if !editor_js.contains("fitEditorAspectFrame(available, previewViewportAspect)")
+        || !editor_js.contains("setPreviewViewportAspect(event.data.aspectRatio)")
+        || editor_js.contains("previewAspectForScene(")
     {
-        failures.push("editor preview viewport must preserve the compiled game scene aspect");
+        failures.push("editor preview viewport must consume the Rust-resolved scene aspect");
     }
     if editor_js.contains("const viewportWidth = availableWidth || previewVirtualWidth") {
         failures.push("editor preview iframe must not inherit the pane aspect");
@@ -99,13 +100,17 @@ fn main() {
         failures
             .push("preview iframe swap must show the loaded frame before removing the old frame");
     }
-    if !editor_css.contains("transform: scale(var(--preview-scale))") {
-        failures.push("editor preview must fit the fixed iframe viewport as a whole");
+    if editor_css.contains("transform: scale(var(--preview-scale))")
+        || editor_css.contains("--preview-virtual-width")
+        || editor_css.contains("--preview-virtual-height")
+        || editor_js.contains("--preview-scale")
+        || editor_js.contains("--preview-virtual-width")
+        || editor_js.contains("--preview-virtual-height")
+    {
+        failures.push("editor preview must render at its final iframe CSS size");
     }
-    if editor_js.contains(
-        "previewFrameWrap.style.setProperty(\"--preview-virtual-width\", `${viewportWidth}px`)",
-    ) {
-        failures.push("editor preview virtual size must not inherit the pane size");
+    if !editor_css.contains(".preview-frame {\n  width: 100%;\n  height: 100%;") {
+        failures.push("editor preview iframe must occupy the fitted viewport directly");
     }
     if editor_css.contains("transform: scale(var(--board-scale))") {
         failures.push("editor level/solver boards must not use fractional CSS scaling");

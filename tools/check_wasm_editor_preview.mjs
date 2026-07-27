@@ -118,7 +118,7 @@ const workspaceDocuments = [{ path: "game.puzzle", source }];
 const workspace = new WasmWorkspaceSession(workspaceDocuments);
 const workspaceBuild = JSON.parse(workspace.compile_preview("game.puzzle"));
 if (
-  !workspaceBuild.html.includes('editorPreview\\":true')
+  !workspaceBuild.html.includes("startEditorPreview")
   || workspaceBuild.documentMetadata?.title !== build.documentMetadata.title
   || workspaceBuild.models?.board?.kind !== "puzzle2d"
 ) {
@@ -252,11 +252,14 @@ if (
   throw new Error(`typed solver state violated the committed-state contract: ${JSON.stringify(solvedState)}`);
 }
 const required = [
-  'editorPreview\\":true',
   "window.PuzzleRuntimeWasmLoader",
   "PuzzleStudioRuntimeAssetRequest",
   "PuzzleStudioRuntimeAssetResponse",
-  "Editor preview requires its WASM session runtime; /api requests are unavailable in the preview iframe.",
+  "startEditorPreview",
+  "dispatchEditorPreviewCommand",
+  "PuzzleStudioEditorPreviewCommand",
+  "PuzzleStudioEditorPreviewObservation",
+  "Editor preview requires a concrete parent origin.",
 ];
 
 for (const token of required) {
@@ -301,15 +304,26 @@ if (
   throw new Error(`spatial preview typed build is invalid: ${JSON.stringify(puzzle3Build)}`);
 }
 for (const token of [
-  "window.Puzzle3DFrameFixtures = JSON.parse(",
-  "WasmStandaloneSession",
-  "window.Puzzle3Component",
+  "startEditorPreview",
+  "dispatchEditorPreviewCommand",
   "window.PuzzleRuntimeWasmLoader",
 ]) {
   if (!puzzle3Html.includes(token)) {
     throw new Error(
       `generated spatial editor preview is missing required runtime contract: ${token}\n${puzzle3Html.slice(0, 800)}`,
     );
+  }
+}
+for (const token of [
+  "window.Puzzle3DFrameFixtures",
+  "WasmStandaloneSession",
+  "window.Puzzle3Component",
+  "renderer.js",
+  "standalone.js",
+  "app.js",
+]) {
+  if (puzzle3Html.includes(token)) {
+    throw new Error(`generated spatial editor preview retained legacy presentation: ${token}`);
   }
 }
 

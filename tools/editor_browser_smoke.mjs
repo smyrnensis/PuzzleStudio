@@ -28,6 +28,8 @@ let levelSelectionRevisionOnly = false;
 let indexControlLayoutOnly = false;
 let initialPreviewOnly = false;
 let visualClipFillOnly = false;
+let previewFinalRasterOnly = false;
+let solverBevyOnly = false;
 
 if (isDirectInvocation) {
   args = parseArgs(process.argv.slice(2));
@@ -50,6 +52,8 @@ if (isDirectInvocation) {
   indexControlLayoutOnly = Boolean(args.indexControlLayoutOnly);
   initialPreviewOnly = Boolean(args.initialPreviewOnly);
   visualClipFillOnly = Boolean(args.visualClipFillOnly);
+  previewFinalRasterOnly = Boolean(args.previewFinalRasterOnly);
+  solverBevyOnly = Boolean(args.solverBevyOnly);
 }
 
 const failures = [];
@@ -85,6 +89,14 @@ async function main() {
       await editorLoads(page);
       if (initialPreviewOnly) {
         await initialPreviewStartsRuntime(page);
+        return;
+      }
+      if (previewFinalRasterOnly) {
+        await previewIframeUsesFinalRasterGeometry(page);
+        return;
+      }
+      if (solverBevyOnly) {
+        await solverStepsRenderThroughBevy(page);
         return;
       }
       if (indexControlLayoutOnly) {
@@ -170,7 +182,7 @@ async function main() {
         await editorLoads(page);
         await visual3dBucketFillRespectsActiveClip(page);
       });
-    } else if (!initialPreviewOnly && !sourceInputOnly && !sourceEditingCommandsOnly && !sourceSelectionOnly && !sourceOptionDragOnly && !sourceOccurrenceSelectionOnly && !levelSelectionRevisionOnly && !visualSelectionRevisionOnly && !importFileOnly) {
+    } else if (!initialPreviewOnly && !previewFinalRasterOnly && !solverBevyOnly && !sourceInputOnly && !sourceEditingCommandsOnly && !sourceSelectionOnly && !sourceOptionDragOnly && !sourceOccurrenceSelectionOnly && !levelSelectionRevisionOnly && !visualSelectionRevisionOnly && !importFileOnly) {
       await withEditorServer(fixture3d, async (server) => {
         await page.navigate(server.url);
         await editorLoads(page);
@@ -402,6 +414,140 @@ async function visualAnimationIndexControlStaysCentered(page) {
   await page.assertNoErrors("visual animation index control layout");
 }
 
+async function previewIframeUsesFinalRasterGeometry(page) {
+  await page.waitForTop(
+    `document.querySelector("#previewFrame")?.getClientRects().length > 0`,
+    "editor preview iframe geometry",
+  );
+  const geometry = await page.evaluateTop(`(() => {
+    const play = document.querySelector("#playPreview");
+    const wrap = document.querySelector("#previewFrameWrap");
+    const viewport = document.querySelector("#previewViewport");
+    const frame = document.querySelector("#previewFrame");
+    if (!play || !wrap || !viewport || !frame) {
+      throw new Error("preview geometry elements are incomplete");
+    }
+    const frameRect = frame.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    return {
+      frameWidth: frameRect.width,
+      frameHeight: frameRect.height,
+      layoutWidth: frame.offsetWidth,
+      layoutHeight: frame.offsetHeight,
+      viewportWidth: viewportRect.width,
+      viewportHeight: viewportRect.height,
+      transforms: [play, wrap, viewport, frame].map((element) => getComputedStyle(element).transform),
+    };
+  })()`);
+  assert.ok(geometry.frameWidth > 0 && geometry.frameHeight > 0, "preview iframe must be visible");
+  assert.ok(
+    Math.abs(geometry.frameWidth - geometry.layoutWidth) < 0.01
+      && Math.abs(geometry.frameHeight - geometry.layoutHeight) < 0.01,
+    `preview iframe layout and final raster rect diverged: ${JSON.stringify(geometry)}`,
+  );
+  assert.ok(
+    Math.abs(geometry.frameWidth - geometry.viewportWidth) < 0.01
+      && Math.abs(geometry.frameHeight - geometry.viewportHeight) < 0.01,
+    `preview iframe must occupy the fitted viewport directly: ${JSON.stringify(geometry)}`,
+  );
+  assert.deepEqual(geometry.transforms, ["none", "none", "none", "none"]);
+}
+
+async function solverStepsRenderThroughBevy(page) {
+  await page.waitForTop(
+    `Boolean(previewRuntimeReady && previewSession?.buildId === previewBuild?.id)`,
+    "stable compiled preview runtime",
+    { timeoutMs: 90_000 },
+  );
+  await clickTop(page, "#solverModeButton");
+  await page.waitForTop(
+    `Boolean(document.querySelector("#solverPanel") && !document.querySelector("#solverPanel").hidden)`,
+    "solver pane",
+  );
+  await page.waitForTop(
+    `Boolean(document.querySelector("#solverLevelSelect")?.options.length > 1)`,
+    "solver level choices",
+    { timeoutMs: 30_000 },
+  );
+  const selection = await page.evaluateTop(`(() => {
+    const build = preparedPreviewSolverBuild();
+    if (activeSolverTask) {
+      return { selected: true };
+    }
+    return {
+      selected: selectSolverLevel(0),
+      previewBuildId: previewBuild?.id,
+      previewSessionBuildId: previewSession?.buildId,
+      preparedBuildIds: Array.from(solverPreparedByBuildId.keys()),
+      preparedBuildId: build?.id,
+      prepared: build?.solverPrepared,
+      levels: build?.exportData?.levels?.length,
+      task: activeSolverTask,
+    };
+  })()`);
+  assert.equal(selection.selected, true, `solver level selection must create a typed solver task: ${JSON.stringify(selection)}`);
+  try {
+    await page.waitForTop(
+      `(() => {
+        const panel = document.querySelector("#solverPanel");
+        const surface = document.querySelector("#editorRuntimeSurface");
+        return panel && !panel.hidden
+          && surface?.parentElement?.id === "solverBoard"
+          && surface.dataset.runtimeReady === "true"
+          && Number(surface.dataset.commandId) > 0
+          && !surface.dataset.pendingCommandId;
+      })()`,
+      "solver Bevy runtime hydration",
+      { timeoutMs: 30_000 },
+    );
+  } catch (error) {
+    const diagnostic = await page.evaluateTop(`(() => {
+      const panel = document.querySelector("#solverPanel");
+      const surface = document.querySelector("#editorRuntimeSurface");
+      return {
+        panelHidden: panel?.hidden,
+        parentId: surface?.parentElement?.id,
+        surfaceHidden: surface?.hidden,
+        dataset: { ...surface?.dataset },
+        task: activeSolverTask,
+        status: document.querySelector("#levelSolveStatus")?.textContent,
+      };
+    })()`);
+    throw new Error(`${error.message}\nDiagnostics: ${JSON.stringify(diagnostic)}\nErrors: ${JSON.stringify(page.pageErrors)}`);
+  }
+  const initial = await page.evaluateTop(`(() => {
+    const board = document.querySelector("#solverBoard");
+    const surface = document.querySelector("#editorRuntimeSurface");
+    return {
+      commandId: Number(surface?.dataset.commandId || 0),
+      revision: Number(surface?.dataset.revision || 0),
+      iframeCount: board?.querySelectorAll("iframe.editor-runtime-frame").length || 0,
+      legacyCellCount: board?.querySelectorAll(".cell, .board-canvas").length || 0,
+    };
+  })()`);
+  assert.equal(initial.iframeCount, 1, "solver must mount one Bevy runtime iframe");
+  assert.equal(initial.legacyCellCount, 0, "solver must not paint runtime cells in the editor DOM");
+
+  await clickTop(page, "#solveLevelButton");
+  await page.waitForTop(
+    `Boolean(levelSolutionPreview?.steps?.length > 1 && !document.querySelector("#solutionNextButton")?.disabled)`,
+    "solver solution steps",
+    { timeoutMs: 30_000 },
+  );
+  await clickTop(page, "#solutionNextButton");
+  await page.waitForTop(
+    `(() => {
+      const surface = document.querySelector("#editorRuntimeSurface");
+      return Number(surface?.dataset.commandId || 0) > ${initial.commandId}
+        && Number(surface?.dataset.revision || 0) > ${initial.revision}
+        && !surface?.dataset.pendingCommandId;
+    })()`,
+    "solver Bevy solution step commit",
+    { timeoutMs: 30_000 },
+  );
+  await page.assertNoErrors("solver Bevy runtime playback");
+}
+
 async function visual3dIndexControlStaysCentered(page) {
   await clickTop(page, "#visualDimension3dButton");
   await clickTop(page, "#visualModeButton");
@@ -507,7 +653,7 @@ async function waitForVisualEditorSourceTarget(page, stateName, label) {
 async function editorLoads(page) {
   await page.waitForTop(
     `Boolean(
-      document.querySelector("#sourceEditor")
+      document.querySelector("#sourceEditorMount")
       && document.querySelector("#previewFrame")
       && document.querySelector("#runButton")
       && document.querySelector("#editModeButton")
@@ -515,7 +661,7 @@ async function editorLoads(page) {
     "editor shell"
   );
   await page.waitForTop(
-    `Boolean(document.querySelector("#sourceEditor")?.value.includes("puzzle"))`,
+    `Boolean(typeof sourceEditorDocumentValue === "function" && sourceEditorDocumentValue().includes("puzzle"))`,
     "editor source load",
     { timeoutMs: 20_000 }
   );
@@ -3415,6 +3561,14 @@ function parseArgs(argv) {
     }
     if (arg === "--initial-preview-only") {
       parsed.initialPreviewOnly = true;
+      continue;
+    }
+    if (arg === "--preview-final-raster-only") {
+      parsed.previewFinalRasterOnly = true;
+      continue;
+    }
+    if (arg === "--solver-bevy-only") {
+      parsed.solverBevyOnly = true;
       continue;
     }
     if (arg === "--visual-selection-revision-only") {

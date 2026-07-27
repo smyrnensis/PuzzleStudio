@@ -2331,7 +2331,7 @@ function loadEmbeddedDocument(index) {
     void syncPaneModesFromFocusedPuzzleSource({ switchOpenPane: true, loadFirst: false })
       .catch((error) => setEditorStatus(userFacingRuntimeError(error), "is-error"));
   }
-  syncPreviewViewportAspect();
+  setPreviewViewportAspect(null);
   runButton.disabled = !previewDocument;
   setActiveLevelIndex(0);
   resetPreviewLog(previewDocument ? "Run preview to compile." : "No game entry for preview.");
