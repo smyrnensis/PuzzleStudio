@@ -10,18 +10,23 @@ path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-puzzle-assets = { path = "../assets" }
-puzzle-audio = { path = "../audio" }
-puzzle-game-runtime = { path = "../game_runtime", features = ["editor-debug"] }
+bevy = { version = "0.19", default-features = false, features = ["2d", "3d", "ui"] }
+puzzle-bevy-player = { path = "../bevy_player", features = ["editor-debug"] }
 puzzle-player-bootstrap = { path = "../player_bootstrap" }
-puzzle-presentation = { path = "../presentation" }
 puzzle-presentation-json = { path = "../presentation_json" }
-puzzle-runtime-contract = { path = "../runtime_contract" }
-puzzle-session-contract = { path = "../session_contract" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wasm-bindgen = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
-puzzle-web-audio = { path = "../web_audio" }
-wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "CustomEvent",
+    "CustomEventInit",
+    "Document",
+    "Element",
+    "EventTarget",
+    "HtmlCanvasElement",
+    "Window",
+    "console",
+] }

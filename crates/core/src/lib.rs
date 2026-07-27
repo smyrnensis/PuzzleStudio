@@ -26,7 +26,7 @@ pub use grid_transition::{
     GridProgramBoundarySnapshot, GridProgramSegmentTrace, GridRuleFiring, GridRuleFiringSummary,
     GridTransitionError, GridTransitionOutcome, GridTransitionSummaryOutcome, ProgramContinuation,
     TransitionCommand, count_pattern_matches, eval_condition_kind, flattened_rules,
-    has_pattern_match, transition_outcome, transition_program,
+    has_pattern_match, replay_rule_firing_states, transition_outcome, transition_program,
     transition_program_continuation_segment_trace, transition_program_outcome,
     transition_program_segment_trace, transition_program_sequence_outcome,
     transition_program_sequence_summary_outcome, transition_program_sequence_without_input_outcome,

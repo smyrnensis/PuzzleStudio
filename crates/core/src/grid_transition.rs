@@ -64,6 +64,28 @@ pub struct GridRuleFiring<const D: usize> {
 }
 pub type GridRuleFiringSummary = RuleFiring<RuleId, ()>;
 
+/// Replays a captured firing sequence through one execution scratch space and
+/// returns the committed state after each firing.
+///
+/// Keeping one scratch space is essential: transient mark operations can
+/// affect later firings even though marks are intentionally absent from the
+/// committed state and editor hydration snapshot.
+pub fn replay_rule_firing_states<const D: usize, Size: GridSize<D>>(
+    game: &GridCompiledGame<D>,
+    initial: &GridState<D, Size>,
+    firings: &[GridRuleFiring<D>],
+) -> Result<Vec<GridState<D, Size>>, GridPatchError<D>> {
+    let mut execution = GridExecutionState::new(initial.clone());
+    let mut states = Vec::with_capacity(firings.len());
+    for firing in firings {
+        firing
+            .patch
+            .apply_execution_in_place(game, &mut execution)?;
+        states.push(execution.committed().clone());
+    }
+    Ok(states)
+}
+
 #[derive(Clone, Default)]
 struct GridExecutionEffects {
     commands: Vec<TransitionCommand>,

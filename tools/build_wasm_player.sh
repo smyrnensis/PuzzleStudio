@@ -82,7 +82,7 @@ if ! grep -q "export function startStandalonePlayer" crates/html_play/static/was
   exit 1
 fi
 
-if grep -Eq "WasmStandaloneSession|dispatch\\(action_json\\)|snapshot\\(\\)|presentation_frame|presentation_event_consumed|progress_storage_key|progress_storage_save_version|apply_command_name|apply_input_name|apply_audio_command" crates/html_play/static/wasm_player/puzzle_wasm_player.js; then
+if grep -Eq "WasmStandaloneSession|startEditorPreview|dispatchEditorPreviewCommand|dispatch\\(action_json\\)|snapshot\\(\\)|presentation_frame|presentation_event_consumed|progress_storage_key|progress_storage_save_version|apply_command_name|apply_input_name|apply_audio_command" crates/html_play/static/wasm_player/puzzle_wasm_player.js; then
   echo "generated player WASM bindings still expose the legacy JSON session bridge" >&2
   exit 1
 fi
