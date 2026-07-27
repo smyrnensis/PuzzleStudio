@@ -402,6 +402,7 @@ fn materialize_levels(
                 pack: level.pack.clone(),
                 puzzle: model.name.clone(),
                 initial_state,
+                legend: local,
                 regions: Vec::new(),
                 program,
                 level_start_program,

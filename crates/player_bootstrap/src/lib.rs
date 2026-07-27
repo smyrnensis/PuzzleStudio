@@ -11,6 +11,25 @@ pub struct DecodedStandalonePlayerExport {
     progress_storage: StandaloneProgressStorage,
 }
 
+pub struct DecodedEditorPreviewExport {
+    player: DecodedStandalonePlayerExport,
+    document: puzzle_lang::LoadedDocument,
+}
+
+impl DecodedEditorPreviewExport {
+    pub fn into_parts(
+        self,
+    ) -> (
+        RuntimeSession,
+        Arc<DecodedVisualImageCatalog>,
+        StandaloneProgressStorage,
+        puzzle_lang::LoadedDocument,
+    ) {
+        let (runtime, visual_images, progress_storage) = self.player.into_parts();
+        (runtime, visual_images, progress_storage, self.document)
+    }
+}
+
 impl DecodedStandalonePlayerExport {
     pub fn into_parts(
         self,
@@ -74,6 +93,22 @@ pub fn decode_standalone_player_export(
 ) -> Result<DecodedStandalonePlayerExport, PlayerBootstrapError> {
     let export: StandaloneRuntimeExport<puzzle_lang::LoadedDocument> =
         serde_json::from_str(export_json).map_err(PlayerBootstrapError::InvalidExport)?;
+    decode_standalone_player_export_value(export)
+}
+
+pub fn decode_editor_preview_export(
+    export_json: &str,
+) -> Result<DecodedEditorPreviewExport, PlayerBootstrapError> {
+    let export: StandaloneRuntimeExport<puzzle_lang::LoadedDocument> =
+        serde_json::from_str(export_json).map_err(PlayerBootstrapError::InvalidExport)?;
+    let document = export.runtime_loaded_document.clone();
+    let player = decode_standalone_player_export_value(export)?;
+    Ok(DecodedEditorPreviewExport { player, document })
+}
+
+fn decode_standalone_player_export_value(
+    export: StandaloneRuntimeExport<puzzle_lang::LoadedDocument>,
+) -> Result<DecodedStandalonePlayerExport, PlayerBootstrapError> {
     let expected =
         puzzle_lang::loaded_document_presentation_manifest(&export.runtime_loaded_document)
             .map_err(|error| PlayerBootstrapError::VisualImageManifest(error.to_string()))?
