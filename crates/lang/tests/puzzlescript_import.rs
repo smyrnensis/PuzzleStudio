@@ -1891,6 +1891,12 @@ LEGEND
 P = Player
 # = Wall
 
+======
+SOUNDS
+======
+
+SFX1 123456
+
 ================
 COLLISIONLAYERS
 ================

@@ -1,7 +1,7 @@
 const title = "Microban 3D"
 const author = "Levels by David Skinner"
 
-theme = "puzzlescript"
+theme = puzzlescript
 
 puzzle sokoban {
 dimension = 3

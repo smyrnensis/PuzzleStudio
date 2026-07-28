@@ -4,10 +4,11 @@ Use `theme` to set presentation colors. Themes expose only `background_color`,
 alpha instead of introducing extra theme colors.
 
 ```puzzle
-theme clean {
-accent_color #2f7d62
-background_color #f7f5ef
-text_color #1d2522
+theme = clean
+theme {
+accent_color = #2f7d62
+background_color = #f7f5ef
+text_color = #1d2522
 }
 ```
 

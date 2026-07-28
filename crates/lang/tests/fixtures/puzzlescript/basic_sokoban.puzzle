@@ -15,7 +15,7 @@ start playing
 }
 }
 
-theme = "puzzlescript"
+theme = puzzlescript
 
 puzzle main {
 layers {

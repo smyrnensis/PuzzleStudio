@@ -232,6 +232,35 @@ fn resolve_model_sound_triggers(
         .collect()
 }
 
+fn validate_model_sound_specs(
+    triggers: &[ModelSoundTriggerSpec],
+    operations: &[ModelOperationSoundSpec],
+    sounds: &SoundsDef,
+) -> Result<(), DiagnosticReport> {
+    let declared_sfx = sounds
+        .sfx
+        .iter()
+        .map(|sound| sound.name.as_str())
+        .collect::<HashSet<_>>();
+    for (name, source) in triggers
+        .iter()
+        .map(|spec| (&spec.sfx_name, &spec.source))
+        .chain(
+            operations
+                .iter()
+                .map(|spec| (&spec.sfx_name, &spec.source)),
+        )
+    {
+        if !declared_sfx.contains(name.as_str()) {
+            return Err(parse_error(
+                source,
+                &format!("unknown sfx sound reference `{name}`"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn model_sound_selector_error(
     error: DiagnosticReport,
     spec: &ModelSoundTriggerSpec,

@@ -1,8 +1,8 @@
 const title = "Microban 3D"
 const author = "Levels by David Skinner"
 
+theme = puzzlescript
 theme {
-preset = "puzzlescript"
 background_color = #ffffff
 text_color = #000
 }

@@ -120,6 +120,12 @@ adapter、ゲームでも同じ意味にならないなら、generic な構文�
 具体的な block、definition、binding、inline 記法は `AUTHORING_SYNTAX.md` が所有し、
 parser/editor の構造契約は `SOURCE_ANALYSIS_CONTRACT.md` が所有する。
 
+definition の値種別も owner schema が決める。schema が列挙する閉じた選択肢は bare
+atom、作者が宣言・参照する名前は identifier、自由な文字列は quoted string とする。
+bare atom の意味は key と owner scope によって決まり、同じ綴りを言語全体の予約語には
+しない。parser、補完、highlight、diagnostic、lowering は同じ schema metadata を読み、
+consumer が source text から値種別や enum domain を再推定してはならない。
+
 新しい機能は、既存の構文パターン、所有者境界、lowering 規則、component contract、
 lifecycle の一例として説明できるべきである。特定の名前や adapter だけが一般概念を
 迂回する分岐、似た機能ごとに増える小さな専用言語、表示結果から作者が書いていない

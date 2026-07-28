@@ -1,7 +1,7 @@
 const title = "Microban"
 const author = "Levels by David Skinner"
 
-theme = "puzzlescript"
+theme = puzzlescript
 
 scene level_select {
 layout {

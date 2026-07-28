@@ -19,8 +19,8 @@ choice "Level Select" -> goto level_select
 }
 }
 
+theme = puzzlescript
 theme {
-preset = "puzzlescript"
 background_color = #654
 }
 
@@ -1395,7 +1395,7 @@ up [ BlackBox JointUTag | ] -> [ BlackBox BlackJointU | BlackJointAboveEdge ]
 [ > player no box ] -> [ player ]
 [ > player box ] -> [ > player > box ]
 [ > player joint ] -> [ > player > joint ]
-[ > push no FallFlag | push ] -> [ > push | > push ] sfx sfx3
+[ > push no FallFlag | push ] -> [ > push | > push ]
 left [ box jointL | directions box ] -> [ directions box directions jointL | directions box ]
 right [ box jointR | directions box ] -> [ directions box directions jointR | directions box ]
 up [ box jointU | directions box ] -> [ directions box directions jointU | directions box ]

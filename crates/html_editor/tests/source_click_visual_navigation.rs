@@ -68,3 +68,21 @@ fn visual3d_roundtrip_keeps_parser_owned_prelude_rows() {
             .contains("sourcePreludeRows: cloneVisualEditValue(visual3d.sourcePreludeRows || [])")
     );
 }
+
+#[test]
+fn visual_loaders_surface_parser_owned_contract_diagnostics() {
+    let contract_error = function_body(
+        EDITOR_VISUAL_SOURCE,
+        "function visualSourceContractError(contract) {",
+        "function visualPaletteEntrySourceToken(entry) {",
+    );
+    let visual3d_loader = function_body(
+        EDITOR_VISUAL3D_SOURCE,
+        "function loadVisual3dSourceTarget(target, options = {}) {",
+        "function visual3dTargetPayload(target) {",
+    );
+
+    assert!(contract_error.contains("Array.isArray(contract.diagnostics)"));
+    assert!(contract_error.contains("return diagnostic;"));
+    assert!(visual3d_loader.contains("visualSourceContractError(target.sourceVisual)"));
+}

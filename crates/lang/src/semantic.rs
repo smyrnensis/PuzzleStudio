@@ -117,7 +117,7 @@ win -> sfx clear
     fn classifies_authoring_schema_surface_tokens() {
         let source = r#"
 const title = authoring_schema_semantics
-theme = "clean"
+theme = clean
 puzzle main {
 render {
 tween = true
@@ -620,7 +620,7 @@ facing = left right
     fn classifies_theme_state_and_condition_contexts() {
         let source = r#"
 const title = semantic_contexts
-theme = "clean"
+theme = clean
 var count = 1
 
 scene playing {
@@ -629,7 +629,7 @@ if board.win_conditions -> goto title
 }
 "#;
         let tokens = semantic_tokens(source);
-        let theme_start = source.find("\"clean\"").unwrap() + 1;
+        let theme_start = source.find("clean").unwrap();
         let count_start = source.find("count").unwrap();
         let win_start = source.find("win_conditions").unwrap();
         let path_win_start = source.rfind("win_conditions").unwrap();
@@ -661,8 +661,8 @@ if board.win_conditions -> goto title
         let source = r##"
 const title = authoring_schema_semantics
 
+theme = clean
 theme {
-preset = "clean"
 background_color = #112233
 }
 
@@ -675,7 +675,8 @@ undo -> sfx clear
 }
 
 input_buffer {
-queue_during_wait = false
+busy_input = queue
+queued_presentation = skip
 }
 
 assets {
@@ -689,7 +690,7 @@ actor = Player
 render {
 tween_duration = 64ms
 grid {
-type = "all_cells"
+type = all_cells
 }
 }
 }
@@ -702,7 +703,7 @@ yaw = 90
 interactive_look = true
 }
 grid {
-type = "occupied_cells"
+type = occupied_cells
 }
 pixelate {
 enabled = true
@@ -720,7 +721,6 @@ smoothing = false
             })
         };
 
-        assert!(has("preset", SemanticKind::Setting));
         assert!(has("clean", SemanticKind::Theme));
         assert!(has("sfx", SemanticKind::Keyword));
         assert!(has("clear", SemanticKind::Asset));
@@ -746,8 +746,10 @@ smoothing = false
         assert!(has("clear01", SemanticKind::String));
         assert!(has("volume", SemanticKind::Setting));
         assert!(has("0.5", SemanticKind::Number));
-        assert!(has("queue_during_wait", SemanticKind::Setting));
-        assert!(has("false", SemanticKind::Literal));
+        assert!(has("busy_input", SemanticKind::Setting));
+        assert!(has("queue", SemanticKind::Literal));
+        assert!(has("queued_presentation", SemanticKind::Setting));
+        assert!(has("skip", SemanticKind::Literal));
         assert!(has("visuals/player.png", SemanticKind::String));
         assert!(has("tween_duration", SemanticKind::Setting));
         assert!(has("64ms", SemanticKind::Number));

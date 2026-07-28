@@ -511,13 +511,13 @@ The examples differ only at the model slot initializer and model window componen
 
 開始 scene は top-level の明示順で決める。`scene` に加えて `puzzle` が生成する同名 scene もその宣言位置で数え、最初の scene を開く。title scene を既定表示にするには、その `scene` を model 宣言より前に置く。adapter は `title` という名前や puzzle component の有無から開始 scene を上書きしない。
 
-2D puzzle の renderer 初期値は puzzle 内の `render` が所有する。現時点では `grid { occupied_cells }` / `grid { all_cells }` を受け付け、前者は object が存在する cell、後者は空 cell を含む全 cell の外周を表示する読み取り補助として扱う。これは floor、collision、rule、win condition、level data には影響しない。省略時は表示しない。
+2D puzzle の renderer 初期値は puzzle 内の `render` が所有する。現時点では `grid { type = occupied_cells }` / `grid { type = all_cells }` を受け付け、前者は object が存在する cell、後者は空 cell を含む全 cell の外周を表示する読み取り補助として扱う。これは floor、collision、rule、win condition、level data には影響しない。省略時は表示しない。
 
 ```txt
 puzzle sokoban {
 render {
 grid {
-occupied_cells
+type = occupied_cells
 }
 }
 }
@@ -536,7 +536,9 @@ yaw = 53
 pitch = 56
 color = #ffffff
 }
-grid occupied_cells
+grid {
+type = occupied_cells
+}
 viewport {
 zoomscreen 7 7
 focus Player
@@ -557,13 +559,13 @@ Scene layout は `puzzle` を固定 4:3 display として扱う。`puzzle` compo
 
 3D model `rules` では `set yaw = <deg>` / `set pitch = <deg>` / `set zoom = <n>` を view-state emission として書ける。`reset_camera` は camera view を `render { camera { ... } }` の初期値に戻す。これらは `sfx` と同じく rule 発火に付随する presentation command であり、puzzle state、solver key、win condition には入らない。
 
-`grid { occupied_cells }` は object が存在する cell の外周 edge を表示する preview/debug 用の読み取り補助である。これは floor や volume を追加するものではなく、puzzle state、collision、win condition、level data には影響しない。省略時は表示しない。
+`grid { type = occupied_cells }` は object が存在する cell の外周 edge を表示する preview/debug 用の読み取り補助である。`occupied_cells` は grid schema が所有する bare enum value である。これは floor や volume を追加するものではなく、puzzle state、collision、win condition、level data には影響しない。省略時は表示しない。
 
 `render { shade }` は visual voxel の面ごとの明暗付けを有効にする renderer 設定である。これは puzzle state、visual voxel data、collision、win condition には影響しない。省略時も on。
 
 `pixelate` / `pixelate scale=4` は Three.js の描画解像度を `scale` 分の1にし、nearest-neighbor で表示サイズへ拡大する。省略時の `scale` は `4`。`smoothing` は低解像度描画時の WebGL antialiasing を制御する。省略時は pixel 化しない。
 
-3D object は、その `puzzle` model に属する `visuals` に同名 visual が定義されている場合だけ voxel visual を描く。visual 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
+3D object は、その `puzzle` model に属する `visuals` に同名 visual が定義されている場合だけ voxel visual を描く。visual 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid { type = occupied_cells }` などの debug 表示を使う。
 
 visual は2D/3D共通の時間 × Z × Y × X model を持つ。ASCIIの列、行、layerはそれぞれcanonical game座標の +X（right）、+Y（back）、+Z（down）へ進む。slice 1は最初のASCII layerで、slice番号も同じ +Z 順に増える。2D visual は depth 1 の特殊例である。`>` だけの行が次の animation frame、`-` だけの行が同じ frame 内の次の +Z layer を表し、shape 内に空行は許さない。3D visual も2Dと同じ `visuals` entry、palette、`shapes` table、`shape =` propertyを使う。resource の dimension は `visuals` keyword ではなく、`of <model>` または所有する `puzzle` / `puzzle` model から決定する。2D owner では `-` を明示的に拒否する。色だけなら2Dでは単色 cell、3Dでは1x1x1 filled cubeになる。
 
@@ -579,7 +581,9 @@ progress save version 2 は level name ではなく公開 `level.id` を `levels
 
 `sounds { ... }` は top-level の音源定義。`sfx <name> { seed = <seed>; type = <type>; volume = <gain> }` と `music <name> { seed = <seed>; height = <0..1>; bars = <8|16|32|64>; bpm = <40..180>; volume = <gain> }` を持つ。`volume` は 0 以上の gain multiplier で、1 より大きい値は増幅として扱われる。scene は component definition の authoring 名であり、runtime の surface は一つの root と順序付きの content / overlay instance、各 instance の visibility、input focus を持つ。`goto` はrootを置換して履歴を破棄し、`enter` / `back` はroot navigation historyを操作する。root置換は以前のinstanceをすべてunmountし、`present`で作られた一意IDのstateも破棄する。`create` は安定IDを持つhidden overlay instanceとそのstateを作り、`show` / `hide` / `toggle` はmount済みinstanceのvisibilityだけを操作し、`focus` はvisible instanceへのinput routingだけを操作する。`delete` はnon-root instanceとstateを削除する。`move <component> first|last|before <anchor>|after <anchor>` はrootより上の表示順序を操作する。`present <definition>(<property> = <expr>, ...) [as content|overlay] [await <event>]` はrootの上へ一意IDと独立stateを持つvisible instanceを追加するprimitiveで、awaited instanceはdefinition-owned eventを受けるまでmodal input targetとなる。`message <expr>` は登録済み`standard.message` definitionに対する `present standard.message(text = <expr>) as overlay await dismiss` のsugarであり、時間waitは暗黙に追加しない。`wait [duration]` は独立したtimeline waitで、`wait`単体は`default_wait_time`を使う。game progressは `clear_game_progress`、`set current_level = <level>`、`clear current_level`、`set level.cleared = true|false`、`reset persistent_vars` で明示的に操作する。scene直下のlifecycle blockは `on_scene_start { ... }`、puzzle lifecycle blockは `on_level_start` / `on_level_clear` が所有する。複数effectはblockに一行ずつ書く。
 
-`theme = "<preset>"` / `theme { ... }` は top-level の表示 theme metadata。theme は singleton config であり、preset は `theme { preset = "clean" }` のように quoted string で選ぶ。`clean` などの preset 名は作者定義 symbol ではなく builtin preset catalog の値である。theme block の canonical entry は `<setting> = <value>`。公開色は `accent_color`、`background_color`、`text_color` の 3 つだけである。UI の線、選択状態、panel、popup、盤面背景は HTML adapter の preset がこの 3 色の alpha だけで作り、別の実色を持たない。追加の非色設定は `ui_font`、`title_font`、`control_radius`、`panel_radius`。これらは HTML adapter が `--accent` / `--bg` / `--ink` などの CSS custom property へ lower し、preset CSS の値を上書きする。theme は `puzzle-core` の state、rule、transition には入らない。複数 theme 宣言は import 後の順序で preset 名または同じ項目を上書きする。theme 未指定時の default theme preset は `"clean"`。標準 preset は `"clean"`、`"terminal"`、`"paper"`、`"pixel"`、`"puzzlescript"`、`"candy"`、`"blueprint"`、`"noir"` で、HTML adapter は対応する CSS preset を同梱する。
+`theme = <preset>` / `theme { ... }` は top-level の表示 theme metadata。theme preset は singleton で、`theme = clean` のように builtin preset catalog の bare enum value を選ぶ。quoted string は受け付けない。theme block は preset を持たず、`<setting> = <value>` の override だけを持つ。公開色は `accent_color`、`background_color`、`text_color` の 3 つだけである。UI の線、選択状態、panel、popup、盤面背景は HTML adapter の preset がこの 3 色の alpha だけで作り、別の実色を持たない。追加の非色設定は `ui_font`、`title_font`、`control_radius`、`panel_radius`。これらは HTML adapter が `--accent` / `--bg` / `--ink` などの CSS custom property へ lower し、preset CSS の値を上書きする。theme は `puzzle-core` の state、rule、transition には入らない。preset 宣言は一度だけで、複数 theme block の同じ項目は import 後の順序で上書きする。theme 未指定時の default theme preset は `clean`。標準 preset は `clean`、`terminal`、`paper`、`pixel`、`puzzlescript`、`candy`、`blueprint`、`noir` で、HTML adapter は対応する CSS preset を同梱する。
+
+`input_buffer` は presentation wait 中の model input policy を所有する。`busy_input = reject` は入力を拒否する。`busy_input = queue` は一件を queue し、`queued_presentation = preserve | skip | accelerate` を必須とする。`accelerate` だけが `min_wait = <duration>` を受け付け、省略値は `50ms`。policy 値は owner schema の bare enum value であり、quoted string は受け付けない。
 
 `assets { ... }` は top-level の外部 file manifest。各行は `"visuals/player.png"` のような game folder からの相対 path で、typed visual / audio contract が参照する静的 file を宣言する。standalone HTML export は宣言された file を埋め込み、puzzle folder 内の未宣言 file は asset として扱わない。表示と挙動の意味論は `theme`、`visuals`、`sounds`、scene/component contract が所有する。
 
@@ -843,7 +847,7 @@ shape mark:kind
 }
 ```
 
-2Dは`translate [world|local] <vec2>`と`rotate [world|local] <angle> [from <angle>]`、3Dは`translate [world|local] <vec3>`と`rotate [world|local] <angle> [from <angle>] [around <direction-or-vec3>]`を使う。3Dで`around`を省略した2D形は、XY平面の回転としてaxisを+Z（`down`）に既定する。`from`は左側のangle expressionから基準angleを引くsugarで、3Dの`Arrow:horizontal { rotate horizontal from front }`はfrontを0度としてright/front/left/backを-90/0/90/-180度へ展開する。2Dの`rotate directions from up`も同じく`rotate (directions - up)`と同じ。world操作はaffine変換へ左合成、local操作は右合成する。主angleを欠く旧`rotate from <angle>`、旧`rotate using`、`offset`、`transform` nodeは受理しない。
+2Dは`translate [world|local] <vec2>`と`rotate [world|local] <angle> [from <angle>]`、3Dは`translate [world|local] <vec3>`と`rotate [world|local] <angle> [from <angle>] [around <direction-or-vec3>]`を使う。数値angleの`from`は左側のangle expressionから基準angleを引く。方向同士の`from`は、展開する方向集合と基準方向が張る座標平面の正の法線をaxisとし、`atan2(axis・(from×to), from・to)`に相当する符号付き角度へloweringする。したがって`rotate directions from up`は2DのXY平面で+Z軸を使い、`rotate xz_plane from up`は3DのXZ平面で+Y軸を使う。集合が平面を一意に定めない場合は`around`を要求する。数値angleで`around`を省略した2D形は、XY平面の回転としてaxisを+Z（`down`）に既定する。world操作はaffine変換へ左合成、local操作は右合成する。主angleを欠く旧`rotate from <angle>`、旧`rotate using`、`offset`、`transform` nodeは受理しない。
 
 cell は visible objects の有限集合。実装は state-slot 方式。
 

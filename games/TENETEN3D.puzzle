@@ -1,7 +1,7 @@
 const title = "TENETEN"
 
+theme = puzzlescript
 theme {
-preset =  "puzzlescript"
 background_color = #8fcf6f
 }
 

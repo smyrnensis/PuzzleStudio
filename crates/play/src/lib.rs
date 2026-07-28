@@ -21,8 +21,9 @@ use puzzle_lang::{
 };
 use puzzle_runtime_contract::{
     AudioCommand, RuntimeAnimationEvent, RuntimeChoiceDirection, RuntimeCoord, RuntimeEffect,
-    RuntimePresentationEvent, RuntimeSceneActionId, RuntimeSceneActionToken, RuntimeVisualSpace,
-    RuntimeVisualState, RuntimeVisualTransform, RuntimeVisualTween,
+    RuntimePresentationEvent, RuntimePresentationWait, RuntimeSceneActionId,
+    RuntimeSceneActionToken, RuntimeVisualSpace, RuntimeVisualState, RuntimeVisualTransform,
+    RuntimeVisualTween,
 };
 use puzzle_scene::{ComponentChoiceCell, component_action_cells, component_choice_cells};
 use serde::{Deserialize, Serialize};
@@ -57,7 +58,8 @@ pub enum SoundEvent {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WaitEvent {
-    Wait { milliseconds: u64 },
+    Duration { milliseconds: u64 },
+    AnimationPublication,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +117,7 @@ pub enum AnimationEvent {
     },
     CantMove {
         name: String,
+        occurrence_id: u64,
         object: ObjectId,
         x: u16,
         y: u16,
@@ -188,12 +191,14 @@ pub fn animation_events_contract<const D: usize>(
             },
             AnimationEvent::CantMove {
                 name,
+                occurrence_id,
                 object,
                 x,
                 y,
                 z,
             } => RuntimeAnimationEvent::CantMove {
                 name: name.clone(),
+                occurrence_id: *occurrence_id,
                 object_id: object.0,
                 position: RuntimeCoord {
                     x: *x,
@@ -216,9 +221,16 @@ pub fn presentation_events_contract<const D: usize>(
                 PresentationEventKind::Sound(sound) => RuntimePresentationEvent::Audio {
                     command: resolve_audio(sound)?,
                 },
-                PresentationEventKind::Wait(WaitEvent::Wait { milliseconds }) => {
+                PresentationEventKind::Wait(WaitEvent::Duration { milliseconds }) => {
                     RuntimePresentationEvent::Wait {
-                        milliseconds: *milliseconds,
+                        completion: RuntimePresentationWait::Duration {
+                            milliseconds: *milliseconds,
+                        },
+                    }
+                }
+                PresentationEventKind::Wait(WaitEvent::AnimationPublication) => {
+                    RuntimePresentationEvent::Wait {
+                        completion: RuntimePresentationWait::AnimationPublication,
                     }
                 }
                 PresentationEventKind::AnimationBatch(animations) => {
@@ -517,7 +529,7 @@ struct GridPendingInput<const D: usize, Size: GridSize<D>> {
     records_trace: bool,
     mode: InputExecutionMode,
     animation_occurrences: AnimationOccurrenceTracker<D>,
-    trace: GridTransitionTrace<D>,
+    trace: Option<GridTransitionTrace<D>>,
 }
 
 #[derive(Clone, Debug)]
@@ -559,10 +571,19 @@ impl<const D: usize> AnimationOccurrenceTracker<D> {
     fn forget(&mut self, key: (GridCoord<D>, ObjectId)) {
         self.active.remove(&key);
     }
+
+    fn identity_for(&mut self, key: (GridCoord<D>, ObjectId)) -> u64 {
+        *self.active.entry(key).or_insert_with(|| {
+            let id = self.next_id;
+            self.next_id += 1;
+            id
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GridPendingInputPhase {
+    LevelStart,
     Rules,
     LevelClear,
 }
@@ -1177,15 +1198,10 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             )));
         }
         self.scene_states.remove(instance);
-        while self.surface.active_modal_component().is_none() {
-            let Some((effect, bindings)) = self.pending_surface_effects.pop_front() else {
-                break;
-            };
-            self.apply_screen_effect(game, &effect, &bindings)?;
-        }
         if self.surface.active_modal_component().is_none() && self.pending_input.is_some() {
             self.run_pending_input(game)?;
         }
+        self.resume_pending_surface_effects(game)?;
         Ok(())
     }
 
@@ -1590,7 +1606,9 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
     }
 
     pub fn is_waiting(&self) -> bool {
-        self.pending_input.is_some() || self.surface.active_modal_component().is_some()
+        self.pending_input.is_some()
+            || self.surface.active_modal_component().is_some()
+            || self.presentation_continuation.is_some()
     }
 
     pub fn presentation_continuation(&self) -> Option<PresentationContinuation> {
@@ -1625,7 +1643,45 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         continuation: PresentationContinuation,
     ) -> Result<(), GridTransitionError<D>> {
         self.validate_presentation_continuation(continuation)?;
-        self.run_pending_input(game)
+        let mut candidate = self.clone();
+        candidate.presentation_continuation = None;
+        if candidate.pending_input.is_some() {
+            candidate.run_pending_input(game)?;
+        }
+        candidate.resume_pending_surface_effects(game)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    fn begin_presentation_continuation(&mut self) {
+        if !self.input_execution_mode.materializes_presentation() {
+            return;
+        }
+        assert!(
+            self.presentation_continuation.is_none(),
+            "one presentation boundary must complete before another begins"
+        );
+        let sequence = self.next_presentation_continuation_sequence;
+        self.next_presentation_continuation_sequence = sequence
+            .checked_add(1)
+            .expect("presentation continuation sequence exhausted");
+        self.presentation_continuation = Some(PresentationContinuation { sequence });
+    }
+
+    fn resume_pending_surface_effects(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+    ) -> Result<(), GridTransitionError<D>> {
+        while !self.is_waiting() {
+            let Some((effect, bindings)) = self.pending_surface_effects.pop_front() else {
+                break;
+            };
+            let later_effects = std::mem::take(&mut self.pending_surface_effects);
+            let result = self.apply_screen_effect(game, &effect, &bindings);
+            self.pending_surface_effects.extend(later_effects);
+            result?;
+        }
+        Ok(())
     }
 
     pub fn last_level_completion(&self) -> Option<&GridLevelCompletion<D, Size>> {
@@ -1785,6 +1841,41 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         self.run_pending_input(game)
     }
 
+    fn pending_program_execution(
+        world: WorldInstanceId,
+        programs: Vec<GridExecutableProgram<D>>,
+        program_input: Option<InputId>,
+        state: GridState<D, Size>,
+        phase: GridPendingInputPhase,
+        mode: InputExecutionMode,
+    ) -> GridPendingInput<D, Size> {
+        GridPendingInput {
+            world,
+            programs,
+            program_index: 0,
+            continuation: None,
+            started: false,
+            program_input,
+            target: None,
+            undo_base_len: 0,
+            turn_start_state: state.clone(),
+            program_start_state: state,
+            semantic_items: Vec::new(),
+            lifecycle_item_base: 0,
+            phase,
+            condition_effect: None,
+            previous_input: None,
+            owns_turn_sfx: false,
+            separate_turn_sfx: false,
+            previous_turn_sfx: None,
+            again_count: 0,
+            records_trace: false,
+            mode,
+            animation_occurrences: AnimationOccurrenceTracker::default(),
+            trace: None,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn segmented_pending_for_input(
         &mut self,
@@ -1817,39 +1908,32 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 .collect();
             let mut start_state = session.state.clone();
             session.apply_persistent_vars(game, &mut start_state);
-            Ok(Some(GridPendingInput {
+            let mut pending = Self::pending_program_execution(
                 world,
                 programs,
-                program_index: 0,
-                continuation: None,
-                started: false,
-                program_input: Some(input),
-                target: target.clone(),
-                undo_base_len: undo_base_len.unwrap_or_else(|| session.history.undo_len()),
-                turn_start_state: start_state.clone(),
-                program_start_state: start_state,
-                semantic_items: Vec::new(),
-                lifecycle_item_base: 0,
-                phase: GridPendingInputPhase::Rules,
-                condition_effect: None,
-                previous_input,
-                owns_turn_sfx,
-                separate_turn_sfx,
-                previous_turn_sfx,
-                again_count,
-                records_trace,
+                Some(input),
+                start_state,
+                GridPendingInputPhase::Rules,
                 mode,
-                animation_occurrences: AnimationOccurrenceTracker::default(),
-                trace: GridTransitionTrace {
-                    input,
-                    target,
-                    progressed: false,
-                    observable: false,
-                    cancelled: false,
-                    commands: Vec::new(),
-                    firings: Vec::new(),
-                },
-            }))
+            );
+            pending.target = target.clone();
+            pending.undo_base_len = undo_base_len.unwrap_or_else(|| session.history.undo_len());
+            pending.previous_input = previous_input;
+            pending.owns_turn_sfx = owns_turn_sfx;
+            pending.separate_turn_sfx = separate_turn_sfx;
+            pending.previous_turn_sfx = previous_turn_sfx;
+            pending.again_count = again_count;
+            pending.records_trace = records_trace;
+            pending.trace = Some(GridTransitionTrace {
+                input,
+                target,
+                progressed: false,
+                observable: false,
+                cancelled: false,
+                commands: Vec::new(),
+                firings: Vec::new(),
+            });
+            Ok(Some(pending))
         })
     }
 
@@ -1934,13 +2018,20 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 &mut pending.animation_occurrences,
             );
             match pending.phase {
+                GridPendingInputPhase::LevelStart => {
+                    self.replace_state_if_changed_without_undo(game, next_state);
+                }
                 GridPendingInputPhase::Rules => {
                     self.replace_state_if_changed(game, next_state);
-                    pending.trace.progressed |= trace.progressed;
-                    pending.trace.observable |= trace.observable;
-                    pending.trace.cancelled |= trace.cancelled;
-                    pending.trace.commands.extend(trace.commands);
-                    pending.trace.firings.extend(trace.firings);
+                    let pending_trace = pending
+                        .trace
+                        .as_mut()
+                        .expect("rule input owns a transition trace");
+                    pending_trace.progressed |= trace.progressed;
+                    pending_trace.observable |= trace.observable;
+                    pending_trace.cancelled |= trace.cancelled;
+                    pending_trace.commands.extend(trace.commands);
+                    pending_trace.firings.extend(trace.firings);
                 }
                 GridPendingInputPhase::LevelClear => {
                     self.replace_state_if_changed_without_undo(game, next_state);
@@ -1952,12 +2043,16 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
 
             if trace.cancelled {
                 match pending.phase {
+                    GridPendingInputPhase::LevelStart => {
+                        pending.semantic_items.clear();
+                        return self.finish_segmented_input(game, pending);
+                    }
                     GridPendingInputPhase::Rules => {
                         self.state = pending.turn_start_state;
                         self.capture_persistent_vars(game, &self.state.clone());
                         self.history.truncate_undo(pending.undo_base_len);
                         if pending.mode.collects_trace() && pending.records_trace {
-                            self.last_transition_trace = Some(pending.trace);
+                            self.last_transition_trace = pending.trace;
                         }
                         if pending.separate_turn_sfx {
                             self.end_separate_turn_sfx_dedup(pending.previous_turn_sfx);
@@ -1978,11 +2073,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             if emitted_wait {
                 self.pending_input = Some(pending);
                 if self.surface.active_modal_component().is_none() {
-                    let sequence = self.next_presentation_continuation_sequence;
-                    self.next_presentation_continuation_sequence = sequence
-                        .checked_add(1)
-                        .expect("presentation continuation sequence exhausted");
-                    self.presentation_continuation = Some(PresentationContinuation { sequence });
+                    self.begin_presentation_continuation();
                 }
                 return Ok(());
             }
@@ -1996,6 +2087,9 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 continue;
             }
             match pending.phase {
+                GridPendingInputPhase::LevelStart => {
+                    return self.finish_segmented_input(game, pending);
+                }
                 GridPendingInputPhase::Rules => {
                     if self.prepare_segmented_level_clear(game, &mut pending)? {
                         continue;
@@ -2083,7 +2177,17 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         mut pending: GridPendingInput<D, Size>,
     ) -> Result<(), GridTransitionError<D>> {
         if pending.mode.collects_trace() && pending.records_trace {
-            self.last_transition_trace = Some(pending.trace.clone());
+            self.last_transition_trace = pending.trace.clone();
+        }
+        if pending.phase == GridPendingInputPhase::LevelStart {
+            self.resolve_turn_effects(
+                game,
+                pending.semantic_items,
+                pending.condition_effect,
+                pending.undo_base_len,
+            )?;
+            self.initial_state = self.state.clone();
+            return Ok(());
         }
         let commands = self.apply_turn_effect_items(game, pending.semantic_items)?;
         let pending_again = self.resolve_turn_commands(game, commands, pending.condition_effect)?;
@@ -2195,13 +2299,17 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                     if milliseconds > 0 {
                         emitted_wait = true;
                         self.push_presentation_event(PresentationEventKind::Wait(
-                            WaitEvent::Wait { milliseconds },
+                            WaitEvent::Duration { milliseconds },
                         ));
                     }
                 }
-                RuleEffect::Runtime(
-                    RuntimeEffect::WaitAnimation | RuntimeEffect::EmitAnimation { .. },
-                ) => {}
+                RuleEffect::Runtime(RuntimeEffect::WaitAnimation) => {
+                    emitted_wait = true;
+                    self.push_presentation_event(PresentationEventKind::Wait(
+                        WaitEvent::AnimationPublication,
+                    ));
+                }
+                RuleEffect::Runtime(RuntimeEffect::EmitAnimation { .. }) => {}
                 RuleEffect::Runtime(RuntimeEffect::PresentComponent {
                     definition,
                     properties,
@@ -2465,11 +2573,15 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                     ));
                 }
                 RuleEffect::Runtime(RuntimeEffect::Wait { milliseconds }) => {
-                    self.push_presentation_event(PresentationEventKind::Wait(WaitEvent::Wait {
-                        milliseconds,
-                    }));
+                    self.push_presentation_event(PresentationEventKind::Wait(
+                        WaitEvent::Duration { milliseconds },
+                    ));
                 }
-                RuleEffect::Runtime(RuntimeEffect::WaitAnimation) => {}
+                RuleEffect::Runtime(RuntimeEffect::WaitAnimation) => {
+                    self.push_presentation_event(PresentationEventKind::Wait(
+                        WaitEvent::AnimationPublication,
+                    ));
+                }
                 RuleEffect::Runtime(RuntimeEffect::EmitAnimation { .. }) => {}
                 RuleEffect::Runtime(RuntimeEffect::PresentComponent {
                     definition,
@@ -3028,6 +3140,11 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         };
         let mut state = self.state.clone();
         self.apply_persistent_vars(game, &mut state);
+        if emit_events && self.input_execution_mode.materializes_presentation() {
+            self.state = state;
+            self.apply_persistent_vars_to_current_world(game);
+            return self.begin_segmented_level_start(game, level_index);
+        }
         let outcome = self.model_level_start_outcome(game, &state, level_index)?;
         if outcome.firings.is_empty() && outcome.commands.is_empty() && outcome.next_state == state
         {
@@ -3055,6 +3172,51 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         Ok(())
     }
 
+    fn begin_segmented_level_start(
+        &mut self,
+        game: &LoadedGridGame<D, Size>,
+        level_index: usize,
+    ) -> Result<(), GridTransitionError<D>> {
+        let local_program = game.level_start_program_for_level(level_index).cloned();
+        let (mut programs, program_input) = if let Some(program) = &game.level_start_program {
+            (vec![program.clone()], None)
+        } else if game.run_rules_on_level_start {
+            (
+                game.programs_for_level(level_index)
+                    .expect("active level has validated program references")
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+                Some(InputId(0)),
+            )
+        } else {
+            (Vec::new(), None)
+        };
+        programs.extend(local_program);
+        if programs.is_empty() {
+            return Ok(());
+        }
+
+        let world = self
+            .execution_world
+            .as_ref()
+            .unwrap_or(&self.routed_world)
+            .clone();
+        let state = self.state.clone();
+        let mut pending = Self::pending_program_execution(
+            world,
+            programs,
+            program_input,
+            state,
+            GridPendingInputPhase::LevelStart,
+            self.input_execution_mode,
+        );
+        pending.undo_base_len = self.history.undo_len();
+        pending.previous_input = self.current_input.clone();
+        self.pending_input = Some(pending);
+        self.run_pending_input(game)
+    }
+
     fn start_current_world(
         &mut self,
         game: &LoadedGridGame<D, Size>,
@@ -3065,7 +3227,13 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
         }
         self.apply_model_level_start(game, emit_events)?;
         self.level_started = true;
-        self.initial_state = self.state.clone();
+        if !self
+            .pending_input
+            .as_ref()
+            .is_some_and(|pending| pending.phase == GridPendingInputPhase::LevelStart)
+        {
+            self.initial_state = self.state.clone();
+        }
         Ok(())
     }
 
@@ -3218,13 +3386,24 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 Ok(())
             }
             SceneEffect::Sequence { effects } => {
-                for effect in effects {
+                for (index, effect) in effects.iter().enumerate() {
                     self.apply_screen_effect_during_turn(
                         game,
                         effect,
                         bindings,
                         pending_next_level,
                     )?;
+                    if self.is_waiting() {
+                        if index + 1 < effects.len() {
+                            self.pending_surface_effects.push_back((
+                                SceneEffect::Sequence {
+                                    effects: effects[index + 1..].to_vec(),
+                                },
+                                bindings.clone(),
+                            ));
+                        }
+                        break;
+                    }
                 }
                 Ok(())
             }
@@ -3696,9 +3875,10 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
                 Ok(())
             }
             SceneEffect::Wait { milliseconds } => {
-                self.push_presentation_event(PresentationEventKind::Wait(WaitEvent::Wait {
+                self.push_presentation_event(PresentationEventKind::Wait(WaitEvent::Duration {
                     milliseconds: milliseconds.unwrap_or(game.default_wait_ms),
                 }));
+                self.begin_presentation_continuation();
                 Ok(())
             }
             SceneEffect::Conditional { condition, effect } => {
@@ -3860,7 +4040,7 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             SceneEffect::Sequence { effects } => {
                 for (index, effect) in effects.iter().enumerate() {
                     self.apply_screen_effect(game, effect, bindings)?;
-                    if self.surface.active_modal_component().is_some() {
+                    if self.is_waiting() {
                         if index + 1 < effects.len() {
                             self.pending_surface_effects.push_back((
                                 SceneEffect::Sequence {
@@ -4638,6 +4818,11 @@ impl<const D: usize, Size: GridSize<D>> GridGameSession<D, Size> {
             return Ok(());
         };
 
+        if self.is_waiting() {
+            self.pending_surface_effects
+                .push_back((effect, HashMap::new()));
+            return Ok(());
+        }
         self.apply_screen_effect(game, &effect, &HashMap::new())
     }
 
@@ -6056,12 +6241,11 @@ fn queued_turn_items_for_firings<const D: usize, Size: GridSize<D>, Firing: Grid
                 continue;
             }
             let effect = if matches!(effect, RuleEffect::Runtime(RuntimeEffect::WaitAnimation)) {
-                let Some(milliseconds) = animation_wait_milliseconds(game, &animation_window)
-                else {
+                if animation_window.is_empty() {
                     continue;
-                };
+                }
                 animation_window.clear();
-                RuntimeEffect::Wait { milliseconds }.into()
+                effect.clone()
             } else {
                 effect.clone()
             };
@@ -6419,10 +6603,12 @@ fn animation_events_for_firing<const D: usize, Size: GridSize<D>>(
                     }
                     if object.0 != 0 {
                         if objects.contains(object) {
+                            let occurrence_id = tracker.identity_for((*position, *object));
                             push_unique_animation(
                                 &mut events,
                                 AnimationEvent::CantMove {
                                     name: name.clone(),
+                                    occurrence_id,
                                     object: *object,
                                     x,
                                     y,
@@ -6434,10 +6620,12 @@ fn animation_events_for_firing<const D: usize, Size: GridSize<D>>(
                     }
                     for candidate in objects {
                         if next_state.has_object_at(&game.game, *position, *candidate) {
+                            let occurrence_id = tracker.identity_for((*position, *candidate));
                             push_unique_animation(
                                 &mut events,
                                 AnimationEvent::CantMove {
                                     name: name.clone(),
+                                    occurrence_id,
                                     object: *candidate,
                                     x,
                                     y,
@@ -6584,27 +6772,6 @@ fn push_segment_animation(
     items.push(QueuedTurnItem::Animation(animation));
 }
 
-fn animation_wait_milliseconds<const D: usize, Size: GridSize<D>>(
-    game: &LoadedGridGame<D, Size>,
-    animations: &[AnimationEvent],
-) -> Option<u64> {
-    animations
-        .iter()
-        .map(|animation| match animation {
-            AnimationEvent::Animation { name, .. } => game
-                .visuals
-                .entries
-                .iter()
-                .find(|visual| visual.name == *name)
-                .and_then(|visual| visual.animation_duration_ms)
-                .unwrap_or(game.default_wait_ms),
-            AnimationEvent::Move { name, .. } | AnimationEvent::CantMove { name, .. } => {
-                animation_duration_milliseconds(game, name)
-            }
-        })
-        .max()
-}
-
 fn game_requires_firing_placements<const D: usize, Size: GridSize<D>>(
     game: &LoadedGridGame<D, Size>,
 ) -> bool {
@@ -6615,16 +6782,6 @@ fn game_requires_firing_placements<const D: usize, Size: GridSize<D>>(
                 RuleEffect::Runtime(RuntimeEffect::EmitAnimation { .. })
             )
         })
-}
-
-fn animation_duration_milliseconds<const D: usize, Size: GridSize<D>>(
-    game: &LoadedGridGame<D, Size>,
-    name: &str,
-) -> u64 {
-    if name == "tween" {
-        return game.animation.tween.interval_ms;
-    }
-    game.default_wait_ms
 }
 
 fn parse_runtime_expr(value: &str) -> Option<SceneExpr> {
@@ -7350,7 +7507,7 @@ A
         assert!(session.is_waiting());
         assert_eq!(
             wait_events(&session.take_presentation_events()),
-            vec![WaitEvent::Wait { milliseconds: 100 }]
+            vec![WaitEvent::Duration { milliseconds: 100 }]
         );
 
         let continuation = session
@@ -7460,6 +7617,9 @@ A
         let loaded = parse_game(
             r#"
 const title = checkpoint_runtime
+sounds {
+sfx locked { seed = locked01; type = hit }
+}
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -7721,10 +7881,7 @@ P
                 z: 0,
             }]
         );
-        assert_eq!(
-            wait_events(&events),
-            [WaitEvent::Wait { milliseconds: 240 }]
-        );
+        assert_eq!(wait_events(&events), [WaitEvent::AnimationPublication]);
     }
 
     #[test]
@@ -8814,6 +8971,9 @@ text "moved"
         let loaded = parse_game(
             r#"
 const title = scene_start_fixture
+sounds {
+music music_name { seed = music01 }
+}
 puzzle default {
 persistent var moves = 0
 
@@ -9138,7 +9298,7 @@ step board
         let presentation_events = session.take_presentation_events();
         assert_eq!(
             wait_events(&presentation_events),
-            vec![WaitEvent::Wait { milliseconds: 1000 }]
+            vec![WaitEvent::Duration { milliseconds: 1000 }]
         );
         assert!(sound_events(&presentation_events).is_empty());
         assert!(session.restart_level(&loaded).is_err());
@@ -9458,7 +9618,7 @@ P
 
         assert_eq!(
             wait_events(&session.take_presentation_events()),
-            vec![WaitEvent::Wait { milliseconds: 25 }]
+            vec![WaitEvent::Duration { milliseconds: 25 }]
         );
     }
 
@@ -9501,11 +9661,11 @@ A
         assert_eq!(fast_session.state(), slow_session.state());
         assert_eq!(
             wait_events(&fast_session.take_presentation_events()),
-            vec![WaitEvent::Wait { milliseconds: 1 }]
+            vec![WaitEvent::Duration { milliseconds: 1 }]
         );
         assert_eq!(
             wait_events(&slow_session.take_presentation_events()),
-            vec![WaitEvent::Wait {
+            vec![WaitEvent::Duration {
                 milliseconds: 10_000
             }]
         );
@@ -9569,8 +9729,11 @@ P.
             let events = session.take_presentation_events();
             presentation_contexts.extend(events.iter().map(|event| event.context.clone()));
             timeline.extend(events.into_iter().map(|event| match event.kind {
-                PresentationEventKind::Wait(WaitEvent::Wait { milliseconds }) => {
+                PresentationEventKind::Wait(WaitEvent::Duration { milliseconds }) => {
                     format!("wait:{milliseconds}")
+                }
+                PresentationEventKind::Wait(WaitEvent::AnimationPublication) => {
+                    "wait:animation_publication".to_string()
                 }
                 PresentationEventKind::AnimationBatch(_) => "animation_batch".to_string(),
                 PresentationEventKind::Sound(SoundEvent::PlaySfx { .. }) => "sfx".to_string(),
@@ -9594,7 +9757,7 @@ P.
                 "component:standard.message",
                 "animation_batch",
                 "sfx",
-                "wait:80"
+                "wait:animation_publication"
             ]
         );
         assert!(
@@ -9735,7 +9898,7 @@ level "first" { P }
         ));
         assert_eq!(
             events[1].kind,
-            PresentationEventKind::Wait(WaitEvent::Wait { milliseconds: 10 })
+            PresentationEventKind::Wait(WaitEvent::Duration { milliseconds: 10 })
         );
         assert!(matches!(
             &events[2].kind,
@@ -9787,7 +9950,7 @@ P.
         let presentation_events = session.take_presentation_events();
         assert_eq!(
             wait_events(&presentation_events),
-            vec![WaitEvent::Wait { milliseconds: 80 }]
+            vec![WaitEvent::AnimationPublication]
         );
         assert_eq!(
             animation_events(&presentation_events),
@@ -9857,7 +10020,7 @@ P.
         let presentation_events = session.take_presentation_events();
         assert_eq!(
             wait_events(&presentation_events),
-            vec![WaitEvent::Wait { milliseconds: 80 }]
+            vec![WaitEvent::AnimationPublication]
         );
         assert_eq!(
             animation_events(&presentation_events),
@@ -9993,7 +10156,7 @@ PB.
         let presentation_events = session.take_presentation_events();
         assert_eq!(
             wait_events(&presentation_events),
-            vec![WaitEvent::Wait { milliseconds: 80 }]
+            vec![WaitEvent::AnimationPublication]
         );
         let mut animation_events = animation_events(&presentation_events);
         animation_events.sort_by_key(|event| match event {
@@ -10096,7 +10259,7 @@ PB.
         assert!(!session.state().has_object(&loaded.game, 1, 0, marker));
         assert_eq!(
             wait_events(&session.take_presentation_events()),
-            vec![WaitEvent::Wait { milliseconds: 80 }]
+            vec![WaitEvent::AnimationPublication]
         );
         complete_presentation(&mut session, &loaded);
         assert!(session.state().has_object(&loaded.game, 1, 0, marker));
@@ -10140,7 +10303,7 @@ AA
 
         assert_eq!(
             wait_events(&session.take_presentation_events()),
-            vec![WaitEvent::Wait { milliseconds: 25 }]
+            vec![WaitEvent::Duration { milliseconds: 25 }]
         );
         assert!(session.state().has_object(&loaded.game, 0, 0, b));
         assert!(session.state().has_object(&loaded.game, 1, 0, b));
@@ -10187,6 +10350,106 @@ P
 
         assert!(wait_events(&session.take_presentation_events()).is_empty());
         assert!(session.state().has_object(&loaded.game, 0, 0, marker));
+    }
+
+    #[test]
+    fn scene_wait_suspends_later_effects_until_its_presentation_continuation() {
+        let loaded = parse_game(
+            r#"
+const title = scene_wait_continuation
+puzzle default {
+layers { actor = Player }
+empty .
+rules {}
+levels {
+legend { P = Player }
+level "one" { P }
+}
+}
+scene title {
+layout { text "Title" }
+}
+scene playing {
+layout { text "Playing" }
+on_scene_start {
+wait 25ms
+goto title
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_command(&loaded, "goto playing").unwrap();
+
+        assert_eq!(session.surface_state().focused_component(), "playing");
+        assert_eq!(
+            wait_events(&session.take_presentation_events()),
+            vec![WaitEvent::Duration { milliseconds: 25 }]
+        );
+        assert!(session.is_waiting());
+        assert!(session.apply_command(&loaded, "goto title").is_err());
+
+        complete_presentation(&mut session, &loaded);
+
+        assert_eq!(session.surface_state().focused_component(), "title");
+        assert!(!session.is_waiting());
+    }
+
+    #[test]
+    fn nested_scene_waits_resume_inner_suffix_before_outer_suffix() {
+        let loaded = parse_game(
+            r#"
+const title = nested_scene_wait_continuation
+puzzle default {
+layers { actor = Player }
+empty .
+rules {}
+levels {
+legend { P = Player }
+level "one" { P }
+}
+}
+scene title {
+layout { text "Title" }
+}
+scene done {
+layout { text "Done" }
+}
+scene playing {
+layout { text "Playing" }
+on_scene_start {
+staged
+goto title
+}
+routine staged {
+wait 10ms
+wait 20ms
+goto done
+}
+}
+"#,
+        )
+        .unwrap();
+        let mut session = GameSession::new(&loaded);
+
+        session.apply_command(&loaded, "goto playing").unwrap();
+        assert_eq!(
+            wait_events(&session.take_presentation_events()),
+            vec![WaitEvent::Duration { milliseconds: 10 }]
+        );
+
+        complete_presentation(&mut session, &loaded);
+        assert_eq!(session.surface_state().focused_component(), "playing");
+        assert_eq!(
+            wait_events(&session.take_presentation_events()),
+            vec![WaitEvent::Duration { milliseconds: 20 }]
+        );
+
+        complete_presentation(&mut session, &loaded);
+        assert_eq!(session.surface_state().focused_component(), "title");
+        assert!(!session.is_waiting());
     }
 
     #[test]
@@ -10494,7 +10757,7 @@ A
         let presentation_events = session.take_presentation_events();
         assert_eq!(
             wait_events(&presentation_events),
-            vec![WaitEvent::Wait { milliseconds: 100 }]
+            vec![WaitEvent::Duration { milliseconds: 100 }]
         );
         assert!(sound_events(&presentation_events).is_empty());
 
@@ -10553,7 +10816,7 @@ A
         assert!(!session.can_undo());
         assert_eq!(
             wait_events(&session.take_presentation_events()),
-            vec![WaitEvent::Wait { milliseconds: 100 }]
+            vec![WaitEvent::Duration { milliseconds: 100 }]
         );
 
         complete_presentation(&mut session, &loaded);
@@ -11375,7 +11638,7 @@ step board
             .unwrap();
         assert_eq!(
             wait_events(&session.take_presentation_events()),
-            vec![WaitEvent::Wait { milliseconds: 100 }]
+            vec![WaitEvent::Duration { milliseconds: 100 }]
         );
         let initial = session.state().clone();
         assert_eq!(session.state(), &initial);
@@ -12395,7 +12658,7 @@ step board
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0].kind,
-            PresentationEventKind::Wait(WaitEvent::Wait { milliseconds: 1000 })
+            PresentationEventKind::Wait(WaitEvent::Duration { milliseconds: 1000 })
         );
         assert_eq!(events[0].context.level_index, Some(0));
 
@@ -12463,7 +12726,7 @@ P.
         ));
         assert_eq!(
             events.last().unwrap().kind,
-            PresentationEventKind::Wait(WaitEvent::Wait { milliseconds: 80 })
+            PresentationEventKind::Wait(WaitEvent::AnimationPublication)
         );
         assert!(
             events
@@ -12516,7 +12779,7 @@ A
         assert!(session.is_waiting());
         assert_eq!(
             wait_events(&session.take_presentation_events()),
-            vec![WaitEvent::Wait { milliseconds: 1000 }]
+            vec![WaitEvent::Duration { milliseconds: 1000 }]
         );
 
         complete_presentation(&mut session, &loaded);
@@ -13446,6 +13709,71 @@ step board
             presented_component_texts(&session),
             vec!["clear one".to_string()]
         );
+    }
+
+    #[test]
+    fn level_start_messages_await_dismissal_in_authored_order() {
+        let loaded = parse_game(
+            r#"
+const title = ordered_level_start_messages
+
+scene title {
+layout {
+choice "New Game" -> {
+clear_game_progress
+start playing
+}
+}
+}
+
+puzzle board {
+layers { actor = Player }
+empty .
+rules {}
+levels {
+legend { P = Player }
+level "one" {
+message "first"
+message "second"
+P
+}
+}
+}
+
+scene playing {
+layout { puzzle board = board }
+}
+"#,
+        )
+        .unwrap();
+
+        let mut session = GameSession::new(&loaded);
+        assert_eq!(session.surface_state().focused_component(), "title");
+        session
+            .apply_scene_action(
+                &loaded,
+                &RuntimeSceneActionToken {
+                    component: "title".to_string(),
+                    action: RuntimeSceneActionId::Node { ordinal: 0 },
+                },
+                SceneConditionContext {
+                    has_progress_save: false,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            presented_component_texts(&session),
+            vec!["first".to_string()]
+        );
+        dismiss_top_component(&mut session, &loaded);
+        assert_eq!(
+            presented_component_texts(&session),
+            vec!["second".to_string()]
+        );
+        dismiss_top_component(&mut session, &loaded);
+        assert!(presented_component_texts(&session).is_empty());
+        assert!(!session.is_waiting());
     }
 
     #[test]

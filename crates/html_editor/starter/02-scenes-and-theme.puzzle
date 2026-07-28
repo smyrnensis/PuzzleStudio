@@ -5,8 +5,8 @@
 const title = "02 — Scenes and Theme"
 const subtitle = "Build the screens around a puzzle"
 
+theme = puzzlescript
 theme {
-preset = "puzzlescript"
 accent_color = #e85d75
 background_color = #fff7ed
 text_color = #292524

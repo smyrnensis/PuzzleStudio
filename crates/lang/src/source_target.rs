@@ -69,6 +69,7 @@ pub struct SourceLevelLegendEntry {
 pub struct SourceVisualDocument {
     pub dimension: crate::ModelDimension,
     pub status: SourceVisualStatus,
+    pub diagnostics: Vec<String>,
     pub prelude_rows: Vec<String>,
     pub palette_tokens: Vec<String>,
     pub resolved_palette: Vec<SourceVisualPaletteEntry>,
@@ -329,6 +330,8 @@ fn push_source_visual_json(out: &mut String, visual: &SourceVisualTarget) {
     push_json_string(out, "dimension", visual.dimension.as_str());
     out.push(',');
     push_json_string(out, "status", visual.status.as_str());
+    out.push(',');
+    push_json_string_array(out, "diagnostics", &visual.diagnostics);
     out.push(',');
     push_json_string_array(out, "preludeRows", &visual.prelude_rows);
     out.push(',');
@@ -670,11 +673,16 @@ fn source_visual3d_for_target(
     let product = visual_product_for_target(document, target)?;
     let analyzed = &product.body;
     let syntax = &analyzed.syntax;
-    let (prelude_rows, transforms) = source_visual_editor_properties(syntax, &target.name);
-    if analyzed.error.is_some() {
+    let editor_properties =
+        source_visual_editor_properties(syntax, product.dimension, &target.name);
+    let prelude_rows = editor_properties.prelude_rows;
+    let transforms = editor_properties.transforms;
+    let diagnostics = editor_properties.diagnostics;
+    if analyzed.error.is_some() || !diagnostics.is_empty() {
         return Some(SourceVisualTarget {
             dimension: crate::ModelDimension::Three,
             status: SourceVisualStatus::Invalid,
+            diagnostics,
             prelude_rows,
             transforms,
             ..SourceVisualTarget::default()
@@ -984,8 +992,14 @@ fn source_visual_target(
     let product_invalid = analyzed.error.is_some();
     let syntax = &analyzed.syntax;
     target.palette_tokens = syntax.colors.clone().unwrap_or_default();
-    (target.prelude_rows, target.transforms) =
-        source_visual_editor_properties(syntax, syntax.selector.as_deref().unwrap_or("visual"));
+    let editor_properties = source_visual_editor_properties(
+        syntax,
+        product.dimension,
+        syntax.selector.as_deref().unwrap_or("visual"),
+    );
+    target.prelude_rows = editor_properties.prelude_rows;
+    target.transforms = editor_properties.transforms;
+    target.diagnostics = editor_properties.diagnostics;
     if let Some(value) = &syntax.duration {
         target.duration_ms = puzzle_scene::parse_wait_duration_ms_at(&value, &value).ok();
     }
@@ -1041,33 +1055,89 @@ fn source_visual_target(
         }
     }
     populate_source_visual_edit_frames(&mut target);
-    if product_invalid {
+    if product_invalid || !target.diagnostics.is_empty() {
         target.status = SourceVisualStatus::Invalid;
     }
     Some(target)
 }
 
+struct SourceVisualEditorProperties {
+    prelude_rows: Vec<String>,
+    transforms: Vec<crate::VisualTransform>,
+    diagnostics: Vec<String>,
+}
+
 fn source_visual_editor_properties(
     syntax: &crate::visual_authoring::VisualNodeSyntax,
+    dimension: crate::ModelDimension,
     line: &str,
-) -> (Vec<String>, Vec<crate::VisualTransform>) {
-    match crate::eval_visual_transforms(&syntax.properties, &HashMap::new(), line) {
-        Ok(transforms) => {
-            let prelude_rows = syntax
-                .prelude_rows
-                .iter()
-                .filter(|row| {
-                    !syntax
-                        .properties
-                        .iter()
-                        .any(|(_, property_row)| property_row == *row)
-                })
-                .cloned()
-                .collect();
-            (prelude_rows, transforms)
+) -> SourceVisualEditorProperties {
+    let catalog = crate::catalog::Catalog::for_dimension(dimension);
+    let mut prelude_rows = syntax.prelude_rows.clone();
+    let mut transforms = Vec::new();
+    let mut diagnostics = Vec::new();
+    for property in &syntax.properties {
+        if visual_property_requires_target_bindings(&property.0) {
+            continue;
         }
-        Err(_) => (syntax.prelude_rows.clone(), Vec::new()),
+        match crate::eval_visual_transforms(
+            std::slice::from_ref(property),
+            &HashMap::new(),
+            &catalog,
+            line,
+        ) {
+            Ok(resolved) => {
+                transforms.extend(resolved);
+                prelude_rows.retain(|row| row != &property.1);
+            }
+            Err(report) => {
+                diagnostics.extend(
+                    report
+                        .diagnostics()
+                        .iter()
+                        .map(|diagnostic| diagnostic.message.clone()),
+                );
+            }
+        }
     }
+    SourceVisualEditorProperties {
+        prelude_rows,
+        transforms,
+        diagnostics,
+    }
+}
+
+fn visual_property_requires_target_bindings(
+    property: &crate::visual_authoring::VisualPropertySyntax,
+) -> bool {
+    match property {
+        crate::visual_authoring::VisualPropertySyntax::Rotate {
+            angle, from, axis, ..
+        } => {
+            !visual_angle_expression_is_closed(angle)
+                || from
+                    .as_deref()
+                    .is_some_and(|expression| !visual_angle_expression_is_closed(expression))
+                || axis
+                    .as_deref()
+                    .is_some_and(|expression| !visual_vector_expression_is_closed(expression))
+        }
+        crate::visual_authoring::VisualPropertySyntax::Translate { value, .. } => {
+            !visual_vector_expression_is_closed(value)
+        }
+        crate::visual_authoring::VisualPropertySyntax::Flip(value) => {
+            !matches!(value.trim(), "true" | "false")
+        }
+        _ => false,
+    }
+}
+
+fn visual_angle_expression_is_closed(expression: &str) -> bool {
+    crate::eval_visual_angle_expr(expression, &HashMap::new(), expression).is_ok()
+}
+
+fn visual_vector_expression_is_closed(expression: &str) -> bool {
+    crate::eval_visual_vector_expr(expression, &HashMap::new(), expression).is_ok()
 }
 
 fn populate_source_visual_edit_frames(target: &mut SourceVisualTarget) {
@@ -1295,7 +1365,7 @@ mod tests {
     use super::{
         SoundSourceTargetKind, SourceTargetKind, SourceVisualPaletteEntry, SourceVisualShapeAsset,
         SourceVisualStatus, resolve_source_entries_from_document,
-        resolve_source_target_for_owner_dimension, source_entries_json,
+        resolve_source_target_for_owner_dimension, source_entries_json, source_target_json,
     };
 
     fn resolve_source_target(source: &str, cursor: usize) -> Option<super::SourceTarget> {
@@ -2526,6 +2596,42 @@ shape = {
         assert!(source_visual.transforms.is_empty());
         assert_eq!(source_visual.size, Some(1));
         assert_eq!(source_visual.cells, vec![Some(0)]);
+        assert!(source_visual.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn invalid_closed_visual_transform_surfaces_a_source_contract_diagnostic() {
+        let source = r##"
+visuals {
+Box {
+colors = #fff
+rotate 90deg around (0,0,0)
+shape = {
+0
+}
+}
+}
+"##;
+        let cursor = source.find("Box").unwrap();
+        let target = resolve_source_target(source, cursor).expect("visual target");
+        let source_visual = target
+            .source_visual
+            .as_ref()
+            .expect("source visual contract");
+
+        assert_eq!(source_visual.status, SourceVisualStatus::Invalid);
+        assert!(source_visual.transforms.is_empty());
+        assert_eq!(
+            source_visual.diagnostics,
+            ["visual rotate axis cannot be zero"]
+        );
+        assert_eq!(source_visual.prelude_rows, ["rotate 90deg around (0,0,0)"]);
+        let json = source_target_json(Some(&target));
+        assert!(json.contains("\"status\":\"invalid\""), "{json}");
+        assert!(
+            json.contains("\"diagnostics\":[\"visual rotate axis cannot be zero\"]"),
+            "{json}"
+        );
     }
 
     #[test]

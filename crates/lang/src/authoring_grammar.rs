@@ -124,7 +124,6 @@ pub(crate) struct DefinitionSpec {
     pub(crate) value_domain: DefinitionValueDomain,
     pub(crate) key_role: AuthoringSurfaceRole,
     pub(crate) value_role: Option<AuthoringSurfaceRole>,
-    pub(crate) value_source: DefinitionValueSource,
 }
 
 impl DefinitionSpec {
@@ -143,7 +142,6 @@ impl DefinitionSpec {
             value_domain: DefinitionValueDomain::None,
             key_role: AuthoringSurfaceRole::Setting,
             value_role: Some(value_role),
-            value_source: DefinitionValueSource::Local,
         }
     }
 
@@ -163,7 +161,6 @@ impl DefinitionSpec {
             value_domain: DefinitionValueDomain::None,
             key_role,
             value_role: Some(value_role),
-            value_source: DefinitionValueSource::Local,
         }
     }
 
@@ -183,7 +180,6 @@ impl DefinitionSpec {
             value_domain,
             key_role: AuthoringSurfaceRole::Setting,
             value_role: Some(value_role),
-            value_source: DefinitionValueSource::Local,
         }
     }
 
@@ -203,29 +199,6 @@ impl DefinitionSpec {
             value_domain: DefinitionValueDomain::None,
             key_role: AuthoringSurfaceRole::Setting,
             value_role: Some(value_role),
-            value_source: DefinitionValueSource::Local,
-        }
-    }
-
-    const fn mirror(
-        surface: &'static str,
-        key_role: AuthoringSurfaceRole,
-        target_kind: AuthoringKind,
-        target_surface: &'static str,
-    ) -> Self {
-        Self {
-            surface,
-            aliases: &[],
-            values: DefinitionValueSpec::None,
-            value_syntax: DefinitionValueSyntax::Any,
-            multiline_syntax: None,
-            value_domain: DefinitionValueDomain::None,
-            key_role,
-            value_role: None,
-            value_source: DefinitionValueSource::Mirror {
-                kind: target_kind,
-                surface: target_surface,
-            },
         }
     }
 }
@@ -338,15 +311,6 @@ pub(crate) struct AuthoringRecognition {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DefinitionValueSource {
-    Local,
-    Mirror {
-        kind: AuthoringKind,
-        surface: &'static str,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum DefinitionValueSpec {
     None,
@@ -386,6 +350,8 @@ pub(crate) enum DefinitionValueDomain {
 pub(crate) enum DefinitionBuiltinDomain {
     ThemePreset,
     PuzzleRenderGridType,
+    BusyInput,
+    QueuedPresentation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -647,11 +613,12 @@ const ROOT_DEFINITIONS: &[DefinitionSpec] = &[
         AuthoringSurfaceRole::Keyword,
         AuthoringSurfaceRole::Number,
     ),
-    DefinitionSpec::mirror(
+    DefinitionSpec::typed_domain(
         "theme",
-        AuthoringSurfaceRole::Keyword,
-        AuthoringKind::ThemeConfig,
-        "preset",
+        DefinitionValueSpec::One,
+        DefinitionValueSyntax::Atom,
+        DefinitionValueDomain::Builtin(DefinitionBuiltinDomain::ThemePreset),
+        AuthoringSurfaceRole::Theme,
     ),
 ];
 const PUZZLE_RENDER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
@@ -683,7 +650,7 @@ const PUZZLE_RENDER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
 const PUZZLE_RENDER_GRID_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[DefinitionSpec::typed_domain(
     "type",
     DefinitionValueSpec::One,
-    DefinitionValueSyntax::QuotedString,
+    DefinitionValueSyntax::Atom,
     DefinitionValueDomain::Builtin(DefinitionBuiltinDomain::PuzzleRenderGridType),
     AuthoringSurfaceRole::Literal,
 )];
@@ -850,16 +817,18 @@ const MUSIC_SOUND_SYMBOL_EXPORTS: &[AuthoringSymbolExportSpec] = &[AuthoringSymb
     target: AuthoringSymbolExportTarget::Music,
 }];
 const INPUT_BUFFER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
-    DefinitionSpec::value_role(
-        "queue_during_wait",
+    DefinitionSpec::typed_domain(
+        "busy_input",
         DefinitionValueSpec::One,
-        DefinitionValueSyntax::Boolean,
+        DefinitionValueSyntax::Atom,
+        DefinitionValueDomain::Builtin(DefinitionBuiltinDomain::BusyInput),
         AuthoringSurfaceRole::Literal,
     ),
-    DefinitionSpec::value_role(
-        "fast_forward_wait",
+    DefinitionSpec::typed_domain(
+        "queued_presentation",
         DefinitionValueSpec::One,
-        DefinitionValueSyntax::Boolean,
+        DefinitionValueSyntax::Atom,
+        DefinitionValueDomain::Builtin(DefinitionBuiltinDomain::QueuedPresentation),
         AuthoringSurfaceRole::Literal,
     ),
     DefinitionSpec::value_role(
@@ -870,13 +839,6 @@ const INPUT_BUFFER_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
     ),
 ];
 const THEME_CONFIG_DEFINITIONS: &[DefinitionSpec] = &[
-    DefinitionSpec::typed_domain(
-        "preset",
-        DefinitionValueSpec::One,
-        DefinitionValueSyntax::QuotedString,
-        DefinitionValueDomain::Builtin(DefinitionBuiltinDomain::ThemePreset),
-        AuthoringSurfaceRole::Theme,
-    ),
     DefinitionSpec::aliases(
         "accent_color",
         &["accent-color", "accent", "--accent"],
@@ -1572,34 +1534,26 @@ pub(crate) fn authoring_definition_matches_surface(
     definition.surface == surface || definition.aliases.contains(&surface)
 }
 
-fn definition_value_target(spec: &DefinitionSpec) -> &DefinitionSpec {
-    match spec.value_source {
-        DefinitionValueSource::Local => spec,
-        DefinitionValueSource::Mirror { kind, surface } => authoring_definition_spec(kind, surface)
-            .expect("mirrored authoring definition target exists"),
-    }
-}
-
 pub(crate) fn definition_values(spec: &DefinitionSpec) -> DefinitionValueSpec {
-    definition_value_target(spec).values
+    spec.values
 }
 
 pub(crate) fn definition_value_syntax(spec: &DefinitionSpec) -> DefinitionValueSyntax {
-    definition_value_target(spec).value_syntax
+    spec.value_syntax
 }
 
 pub(crate) fn definition_multiline_syntax(
     spec: &DefinitionSpec,
 ) -> Option<DefinitionMultilineSyntax> {
-    definition_value_target(spec).multiline_syntax
+    spec.multiline_syntax
 }
 
 pub(crate) fn definition_value_domain(spec: &DefinitionSpec) -> DefinitionValueDomain {
-    definition_value_target(spec).value_domain
+    spec.value_domain
 }
 
 pub(crate) fn definition_value_role(spec: &DefinitionSpec) -> Option<AuthoringSurfaceRole> {
-    definition_value_target(spec).value_role
+    spec.value_role
 }
 
 pub(crate) fn recognize_authoring_header(
@@ -1914,6 +1868,8 @@ pub(crate) fn definition_builtin_domain_values(
     match domain {
         DefinitionBuiltinDomain::PuzzleRenderGridType => &["occupied_cells", "all_cells"],
         DefinitionBuiltinDomain::ThemePreset => crate::THEME_PRESET_NAMES,
+        DefinitionBuiltinDomain::BusyInput => &["reject", "queue"],
+        DefinitionBuiltinDomain::QueuedPresentation => &["preserve", "skip", "accelerate"],
     }
 }
 
@@ -2669,7 +2625,7 @@ mod tests {
         let lines = vec![
             "render {".to_string(),
             "grid {".to_string(),
-            "type = \"occupied_cells\"".to_string(),
+            "type = occupied_cells".to_string(),
             "}".to_string(),
             "}".to_string(),
         ];
@@ -2688,8 +2644,28 @@ mod tests {
         );
         assert_eq!(
             node.children[0].definition_rows[0].values,
-            vec!["\"occupied_cells\""]
+            vec!["occupied_cells"]
         );
+    }
+
+    #[test]
+    fn rejects_quoted_grid_type_enum_value() {
+        let lines = logical_test_lines(vec![
+            "render {".to_string(),
+            "grid {".to_string(),
+            "type = \"occupied_cells\"".to_string(),
+            "}".to_string(),
+            "}".to_string(),
+        ]);
+        let error = parse_placed_authoring_node(
+            &lines,
+            0,
+            AuthoringKind::Root,
+            "render block missing closing brace",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("type must be one of: occupied_cells, all_cells"));
     }
 
     #[test]
@@ -2698,7 +2674,7 @@ mod tests {
             "render {".to_string(),
             "tween_duration= 64ms".to_string(),
             "grid {".to_string(),
-            "type = \"all_cells\"".to_string(),
+            "type = all_cells".to_string(),
             "}".to_string(),
             "}".to_string(),
         ];
@@ -2721,7 +2697,7 @@ mod tests {
         assert_eq!(node.children[0].definition_rows[0].key, "type");
         assert_eq!(
             node.children[0].definition_rows[0].values,
-            vec!["\"all_cells\""]
+            vec!["all_cells"]
         );
     }
 
@@ -2907,10 +2883,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_theme_preset_domain_definition() {
+    fn theme_block_contains_only_override_definitions() {
         let lines = vec![
             "theme {".to_string(),
-            "preset = \"clean\"".to_string(),
             "background_color = #123456".to_string(),
             "}".to_string(),
         ];
@@ -2922,43 +2897,29 @@ mod tests {
             "theme missing closing brace",
         )
         .unwrap();
-        assert_eq!(next_i, 4);
+        assert_eq!(next_i, 3);
         assert_eq!(node.kind, AuthoringKind::ThemeConfig);
-        assert_eq!(node.definition_rows[0].key, "preset");
-        let spec = super::authoring_definition_spec(AuthoringKind::ThemeConfig, "preset").unwrap();
-        assert_eq!(
-            super::definition_value_syntax(spec),
-            super::DefinitionValueSyntax::QuotedString
-        );
-        assert_eq!(
-            super::definition_value_domain(spec),
-            super::DefinitionValueDomain::Builtin(super::DefinitionBuiltinDomain::ThemePreset)
-        );
+        assert_eq!(node.definition_rows[0].key, "background_color");
+        assert!(super::authoring_definition_spec(AuthoringKind::ThemeConfig, "preset").is_none());
     }
 
     #[test]
-    fn root_theme_assignment_mirrors_theme_preset_definition() {
-        let row = super::parse_authoring_definition_row(AuthoringKind::Root, "theme = \"clean\"")
+    fn root_theme_assignment_owns_a_bare_preset_domain() {
+        let row = super::parse_authoring_definition_row(AuthoringKind::Root, "theme = clean")
             .unwrap()
             .unwrap();
         assert_eq!(row.key, "theme");
         assert_eq!(row.op, Some(super::AuthoringDefinitionOp::Equals));
-        assert_eq!(row.values, vec!["\"clean\""]);
+        assert_eq!(row.values, vec!["clean"]);
 
         let root = super::authoring_definition_spec(AuthoringKind::Root, "theme").unwrap();
-        let preset =
-            super::authoring_definition_spec(AuthoringKind::ThemeConfig, "preset").unwrap();
         assert_eq!(
             super::definition_value_syntax(root),
-            super::definition_value_syntax(preset)
+            super::DefinitionValueSyntax::Atom
         );
         assert_eq!(
             super::definition_value_domain(root),
-            super::definition_value_domain(preset)
-        );
-        assert_eq!(
-            super::definition_value_role(root),
-            super::definition_value_role(preset)
+            super::DefinitionValueDomain::Builtin(super::DefinitionBuiltinDomain::ThemePreset)
         );
     }
 
@@ -2990,22 +2951,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unquoted_theme_preset_domain_value() {
-        let lines = vec![
-            "theme {".to_string(),
-            "preset = clean".to_string(),
-            "}".to_string(),
-        ];
-        let lines = logical_test_lines(lines);
-        let error = parse_placed_authoring_node(
-            &lines,
-            0,
-            AuthoringKind::Root,
-            "theme missing closing brace",
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(error.contains("preset must be a quoted string"));
+    fn rejects_quoted_theme_preset_domain_value() {
+        let error = super::parse_authoring_definition_row(AuthoringKind::Root, "theme = \"clean\"")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("theme must be one of"));
     }
 
     #[test]

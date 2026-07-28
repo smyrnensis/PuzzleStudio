@@ -25,9 +25,9 @@ use puzzle_core::{
     ObjectId, Offset, Pattern, State,
 };
 pub use puzzle_game_runtime::RuntimeSession;
+use puzzle_lang::DiagnosticReport;
 #[cfg(not(target_arch = "wasm32"))]
 use puzzle_lang::resolve_game_entry;
-use puzzle_lang::DiagnosticReport;
 use puzzle_lang::{
     GoalCondition, GoalExpr, GoalValue, Level, LoadedDocumentModel, LoadedGame, RuleAnimation,
     RuleAnimationTrigger, SceneValue,
@@ -42,10 +42,6 @@ const PUZZLE_PLAYER_WASM_JS: &str = include_str!("../static/wasm_player/puzzle_w
 #[cfg(not(target_arch = "wasm32"))]
 const PUZZLE_PLAYER_WASM_BG: &[u8] =
     include_bytes!("../static/wasm_player/puzzle_wasm_player_bg.wasm");
-#[cfg(not(target_arch = "wasm32"))]
-const PUZZLE_GAME_WASM_JS: &str = include_str!("../static/wasm_game/puzzle_wasm_game.js");
-#[cfg(not(target_arch = "wasm32"))]
-const PUZZLE_GAME_WASM_BG: &[u8] = include_bytes!("../static/wasm_game/puzzle_wasm_game_bg.wasm");
 
 include!("lib_cli.rs");
 include!("lib_screenshot.rs");

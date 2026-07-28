@@ -2,16 +2,19 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use puzzle_assets::{DecodedVisualImageAsset, DecodedVisualImageCatalog};
 use puzzle_runtime_contract::{
-    RuntimeAnimationEvent, RuntimeGridMode, RuntimeLinearRgba, RuntimePresentationEvent,
-    RuntimePuzzle3SpatialOp, RuntimePuzzle3VisualSpace, RuntimeResolvedDecoration,
-    RuntimeResolvedFitMode, RuntimeResolvedLineDepth3d, RuntimeResolvedLineLayer2d,
-    RuntimeResolvedLineSegment2d, RuntimeResolvedLineSegment3d, RuntimeResolvedLineStyle,
+    RuntimeAnimationEvent, RuntimeGridMode, RuntimeLinearRgba, RuntimePreparedAnimationChannel,
+    RuntimePreparedAnimationEndpoint, RuntimePreparedAnimationSet,
+    RuntimePreparedInstanceAnimation, RuntimePresentationEvent, RuntimePuzzle3SpatialOp,
+    RuntimePuzzle3VisualSpace, RuntimeResolvedDecoration, RuntimeResolvedFitMode,
+    RuntimeResolvedLineDepth3d, RuntimeResolvedLineLayer2d, RuntimeResolvedLineSegment2d,
+    RuntimeResolvedLineSegment3d, RuntimeResolvedLineStyle, RuntimeResolvedNextSample,
     RuntimeResolvedPixelGeometry, RuntimeResolvedPlayback, RuntimeResolvedRect2d,
-    RuntimeResolvedRenderBatch, RuntimeResolvedRenderBatchContent, RuntimeResolvedRenderCell,
-    RuntimeResolvedRenderFrame, RuntimeResolvedRenderInstance, RuntimeResolvedRenderMoment,
-    RuntimeResolvedRenderScene, RuntimeResolvedSampling, RuntimeResolvedStrokeWidth,
-    RuntimeResolvedView2d, RuntimeResolvedVisualClip, RuntimeResolvedVisualFrame,
-    RuntimeResolvedVisualOrder, RuntimeScalarTween, RuntimeTheme, RuntimeUiControlStyle,
+    RuntimeResolvedRenderBatch, RuntimeResolvedRenderBatchContent,
+    RuntimeResolvedRenderBatchIdentity, RuntimeResolvedRenderCell, RuntimeResolvedRenderFrame,
+    RuntimeResolvedRenderInstance, RuntimeResolvedRenderMoment, RuntimeResolvedRenderScene,
+    RuntimeResolvedSampling, RuntimeResolvedStrokeWidth, RuntimeResolvedView2d,
+    RuntimeResolvedVisualClip, RuntimeResolvedVisualFrame, RuntimeResolvedVisualOrder,
+    RuntimeScalarTween, RuntimeTheme, RuntimeUiControlStyle, RuntimeUiReferenceSize,
     RuntimeUiTextStyle, RuntimeUiTypography, RuntimeVisualComposition, RuntimeVisualSpace,
     RuntimeVisualState, RuntimeVisualTransform, RuntimeVisualTween, RuntimeVisualTweenTransform,
 };
@@ -71,7 +74,10 @@ pub enum PresentationError {
     MissingImageAsset(String),
     InvalidImageAssetReference(String),
     ZeroAnimationDuration,
-    MissingAnimationTarget { object_id: u16, cell: [i32; 3] },
+    AmbiguousRenderInstance(u64),
+    AnimationEndpointMismatch(u64),
+    MissingRenderInstanceComposition(u64),
+    ConflictingAnimationClip(String),
     MissingRenderCell([i32; 3]),
     MissingResolvedAnimationVisual(String),
 }
@@ -162,6 +168,10 @@ pub fn resolve_runtime_theme<'a>(
         control_focused: with_alpha(accent, 0.22),
         control_selected: with_alpha(accent, 0.18),
         control_selected_border: with_alpha(accent, 0.42),
+        ui_reference_size: RuntimeUiReferenceSize {
+            width_px: 480.0,
+            height_px: 360.0,
+        },
         typography,
         control_layout,
     };
@@ -614,7 +624,7 @@ pub fn resolve_render_frame(
         &RuntimeResolvedRenderMoment {
             clip_elapsed_ms: elapsed_ms,
             animation_elapsed_ms: 0,
-            animations: Vec::new(),
+            animation: None,
         },
     )
 }
@@ -631,21 +641,43 @@ pub fn resolve_render_moment(
     assets: &DecodedVisualImageCatalog,
     moment: &RuntimeResolvedRenderMoment,
 ) -> Result<RuntimeResolvedRenderFrame, PresentationError> {
-    let animation_progress = if moment.animations.is_empty() {
+    resolve_prepared_render_moment(
+        scene,
+        assets,
+        moment.clip_elapsed_ms,
+        moment.animation_elapsed_ms,
+        moment.animation.as_ref(),
+    )
+}
+
+pub fn resolve_prepared_render_moment(
+    scene: &RuntimeResolvedRenderScene,
+    assets: &DecodedVisualImageCatalog,
+    clip_elapsed_ms: u64,
+    animation_elapsed_ms: u64,
+    animation: Option<&RuntimePreparedAnimationSet>,
+) -> Result<RuntimeResolvedRenderFrame, PresentationError> {
+    let animation_channels =
+        animation.map_or([].as_slice(), |animation| animation.channels.as_slice());
+    let has_continuous_animation = animation_channels
+        .iter()
+        .any(|channel| matches!(channel, RuntimePreparedAnimationChannel::Instance { .. }));
+    let animation_progress = if !has_continuous_animation {
         1.0
     } else {
         if scene.animation_duration_ms == 0 {
             return Err(PresentationError::ZeroAnimationDuration);
         }
-        (moment.animation_elapsed_ms as f64 / scene.animation_duration_ms as f64).clamp(0.0, 1.0)
+        (animation_elapsed_ms as f64 / scene.animation_duration_ms as f64).clamp(0.0, 1.0)
     };
-    let clips = scene
-        .clips
-        .iter()
-        .map(|clip| (clip.id.as_str(), clip))
-        .collect::<HashMap<_, _>>();
-    let (animated_instances, animated_groups) =
-        animated_scene(scene, moment, animation_progress, &clips)?;
+    let clips = prepared_clip_catalog(scene, animation)?;
+    let (animated_instances, animated_groups) = animated_scene(
+        scene,
+        animation_elapsed_ms,
+        animation,
+        animation_progress,
+        &clips,
+    )?;
     let instances = animated_instances
         .iter()
         .map(|instance| (instance.id, instance))
@@ -665,12 +697,7 @@ pub fn resolve_render_moment(
         match group.composition {
             RuntimeVisualComposition::Ordered => {
                 for instance in members {
-                    batches.push(instance_batch(
-                        instance,
-                        &clips,
-                        assets,
-                        moment.clip_elapsed_ms,
-                    )?);
+                    batches.push(instance_batch(instance, &clips, assets, clip_elapsed_ms)?);
                 }
             }
             RuntimeVisualComposition::Average => {
@@ -678,37 +705,202 @@ pub fn resolve_render_moment(
                     &members,
                     &clips,
                     group.render_order,
-                    moment.clip_elapsed_ms,
+                    clip_elapsed_ms,
                 )?);
             }
         }
     }
-    batches.sort_by_key(|batch| batch.render_order);
-    let continue_animation = animated_instances.iter().any(|instance| {
-        instance.playback == RuntimeResolvedPlayback::Loop
-            && clips
-                .get(instance.visual.as_str())
-                .is_some_and(|clip| clip.frames.len() > 1)
-    }) || moment.animations.iter().any(|animation| match animation {
-        RuntimeAnimationEvent::Move { .. } | RuntimeAnimationEvent::CantMove { .. } => {
-            animation_progress < 1.0
-        }
-        RuntimeAnimationEvent::Animation { name, .. } => {
-            clips
-                .get(name.as_str())
-                .and_then(|clip| {
-                    clip.frame_duration_ms
-                        .and_then(|frame| frame.checked_mul(clip.frames.len() as u64))
-                })
-                .unwrap_or(250)
-                > moment.animation_elapsed_ms
-        }
-    });
+    batches.sort_by_key(|batch| batch.identity.render_order);
+    let sample_schedule = resolve_sample_schedule(
+        &animated_instances,
+        &clips,
+        scene,
+        clip_elapsed_ms,
+        animation_elapsed_ms,
+        animation,
+        animation_progress,
+    )?;
     Ok(RuntimeResolvedRenderFrame {
         batches,
         decorations: scene.decorations.clone(),
-        continue_animation,
+        next_sample: sample_schedule.next_sample(),
     })
+}
+
+pub fn prepared_animation_completion_milliseconds(
+    scene: &RuntimeResolvedRenderScene,
+    animation: &RuntimePreparedAnimationSet,
+) -> Result<Option<u64>, PresentationError> {
+    let mut completion = None;
+    for channel in &animation.channels {
+        let duration = match channel {
+            RuntimePreparedAnimationChannel::Instance { .. } => {
+                if scene.animation_duration_ms == 0 {
+                    return Err(PresentationError::ZeroAnimationDuration);
+                }
+                scene.animation_duration_ms
+            }
+            RuntimePreparedAnimationChannel::Transient {
+                duration_milliseconds,
+                ..
+            } => *duration_milliseconds,
+        };
+        completion = Some(completion.map_or(duration, |current: u64| current.max(duration)));
+    }
+    Ok(completion)
+}
+
+pub fn prepared_animation_is_complete(
+    scene: &RuntimeResolvedRenderScene,
+    animation: &RuntimePreparedAnimationSet,
+    elapsed_milliseconds: u64,
+) -> Result<bool, PresentationError> {
+    Ok(
+        prepared_animation_completion_milliseconds(scene, animation)?
+            .is_none_or(|completion| elapsed_milliseconds >= completion),
+    )
+}
+
+#[derive(Default)]
+struct SampleSchedule {
+    nearest_deadline_after_ms: Option<u64>,
+    display_refresh_completion_after_ms: Option<u64>,
+    #[cfg(test)]
+    examined_channels: usize,
+}
+
+impl SampleSchedule {
+    fn observe_deadline(&mut self, after_ms: Option<u64>) {
+        #[cfg(test)]
+        {
+            self.examined_channels += 1;
+        }
+        let Some(after_ms) = after_ms else {
+            return;
+        };
+        debug_assert!(after_ms > 0);
+        self.nearest_deadline_after_ms = Some(
+            self.nearest_deadline_after_ms
+                .map_or(after_ms, |current| current.min(after_ms)),
+        );
+    }
+
+    fn observe_display_refresh(&mut self, completion_after_ms: Option<u64>) {
+        #[cfg(test)]
+        {
+            self.examined_channels += 1;
+        }
+        let Some(completion_after_ms) = completion_after_ms else {
+            return;
+        };
+        debug_assert!(completion_after_ms > 0);
+        self.display_refresh_completion_after_ms = Some(
+            self.display_refresh_completion_after_ms
+                .map_or(completion_after_ms, |current| {
+                    current.min(completion_after_ms)
+                }),
+        );
+    }
+
+    fn next_sample(&self) -> Option<RuntimeResolvedNextSample> {
+        if let Some(completion_after_milliseconds) = self.display_refresh_completion_after_ms {
+            return Some(RuntimeResolvedNextSample::DisplayRefresh {
+                completion_after_milliseconds,
+            });
+        }
+        self.nearest_deadline_after_ms
+            .map(|after_milliseconds| RuntimeResolvedNextSample::Deadline { after_milliseconds })
+    }
+}
+
+fn resolve_sample_schedule(
+    instances: &[RuntimeResolvedRenderInstance],
+    clips: &HashMap<&str, &RuntimeResolvedVisualClip>,
+    scene: &RuntimeResolvedRenderScene,
+    clip_elapsed_ms: u64,
+    animation_elapsed_ms: u64,
+    animation: Option<&RuntimePreparedAnimationSet>,
+    animation_progress: f64,
+) -> Result<SampleSchedule, PresentationError> {
+    let mut schedule = SampleSchedule::default();
+    for instance in instances {
+        let clip = clips
+            .get(instance.visual.as_str())
+            .copied()
+            .ok_or_else(|| PresentationError::UnknownVisual(instance.visual.clone()))?;
+        schedule.observe_deadline(next_clip_boundary_after(
+            clip,
+            instance.frame_elapsed_ms.unwrap_or(clip_elapsed_ms),
+            instance.playback,
+        )?);
+    }
+    for channel in animation
+        .into_iter()
+        .flat_map(|animation| &animation.channels)
+    {
+        match channel {
+            RuntimePreparedAnimationChannel::Instance { .. } => {
+                schedule.observe_display_refresh(
+                    (animation_progress < 1.0)
+                        .then(|| scene.animation_duration_ms - animation_elapsed_ms),
+                );
+            }
+            RuntimePreparedAnimationChannel::Transient {
+                duration_milliseconds,
+                ..
+            } => {
+                schedule.observe_deadline(
+                    (animation_elapsed_ms < *duration_milliseconds)
+                        .then(|| *duration_milliseconds - animation_elapsed_ms),
+                );
+            }
+        }
+    }
+    Ok(schedule)
+}
+
+fn next_clip_boundary_after(
+    clip: &RuntimeResolvedVisualClip,
+    elapsed_ms: u64,
+    playback: RuntimeResolvedPlayback,
+) -> Result<Option<u64>, PresentationError> {
+    if clip.frames.is_empty() {
+        return Err(PresentationError::EmptyVisualClip(clip.id.clone()));
+    }
+    let Some(duration_ms) = clip.frame_duration_ms else {
+        return Ok(None);
+    };
+    if duration_ms == 0 {
+        return Err(PresentationError::ZeroFrameDuration(clip.id.clone()));
+    }
+    if clip.frames.len() <= 1 {
+        return Ok(None);
+    }
+    let current_frame = elapsed_ms / duration_ms;
+    if playback == RuntimeResolvedPlayback::Once && current_frame >= (clip.frames.len() - 1) as u64
+    {
+        return Ok(None);
+    }
+    Ok(Some(duration_ms - elapsed_ms % duration_ms))
+}
+
+fn prepared_clip_catalog<'a>(
+    scene: &'a RuntimeResolvedRenderScene,
+    animation: Option<&'a RuntimePreparedAnimationSet>,
+) -> Result<HashMap<&'a str, &'a RuntimeResolvedVisualClip>, PresentationError> {
+    let mut clips = HashMap::new();
+    for clip in scene
+        .clips
+        .iter()
+        .chain(animation.into_iter().flat_map(|animation| &animation.clips))
+    {
+        if let Some(existing) = clips.insert(clip.id.as_str(), clip) {
+            if existing != clip {
+                return Err(PresentationError::ConflictingAnimationClip(clip.id.clone()));
+            }
+        }
+    }
+    Ok(clips)
 }
 
 pub fn resolve_image_free_render_moment(
@@ -720,9 +912,10 @@ pub fn resolve_image_free_render_moment(
 
 fn animated_scene(
     scene: &RuntimeResolvedRenderScene,
-    moment: &RuntimeResolvedRenderMoment,
+    animation_elapsed_ms: u64,
+    animation_set: Option<&RuntimePreparedAnimationSet>,
     animation_progress: f64,
-    clips: &HashMap<&str, &puzzle_runtime_contract::RuntimeResolvedVisualClip>,
+    _clips: &HashMap<&str, &puzzle_runtime_contract::RuntimeResolvedVisualClip>,
 ) -> Result<
     (
         Vec<RuntimeResolvedRenderInstance>,
@@ -732,162 +925,184 @@ fn animated_scene(
 > {
     let mut instances = scene.instances.clone();
     let mut groups = scene.composition_groups.clone();
-    let mut next_id = instances
-        .iter()
-        .map(|instance| instance.id)
-        .max()
-        .unwrap_or(0)
-        .checked_add(1)
-        .ok_or(PresentationError::InvalidOccurrenceId(u64::MAX))?;
-    for animation in &moment.animations {
-        match animation {
-            RuntimeAnimationEvent::Move {
-                object_id,
+    for channel in animation_set
+        .into_iter()
+        .flat_map(|animation| &animation.channels)
+    {
+        match channel {
+            RuntimePreparedAnimationChannel::Instance {
+                occurrence_id,
+                animation,
                 from,
                 to,
-                visual_tween,
-                name,
-                ..
             } => {
-                let target_cell = runtime_coord(*to);
-                let instance = instances
-                    .iter_mut()
-                    .find(|instance| {
-                        instance.object_id == Some(*object_id) && instance.cell == target_cell
-                    })
-                    .ok_or(PresentationError::MissingAnimationTarget {
-                        object_id: *object_id,
-                        cell: target_cell,
-                    })?;
-                let progress = animation_progress;
-                let delta = [
-                    f64::from(from.x) - f64::from(to.x),
-                    f64::from(from.y) - f64::from(to.y),
-                    f64::from(from.z.unwrap_or(0)) - f64::from(to.z.unwrap_or(0)),
-                ];
-                let mut movement = identity_affine3();
-                if animation_names(name).contains("slide")
-                    || animation_names(name).contains("tween")
-                    || name.is_empty()
-                {
-                    movement[0][3] = delta[0] * (1.0 - progress);
-                    movement[1][3] = delta[1] * (1.0 - progress);
-                    movement[2][3] = delta[2] * (1.0 - progress);
-                }
-                let names = animation_names(name);
-                if names.contains("zoom") {
-                    let scale = 0.85 + 0.15 * progress;
-                    movement = multiply_affine3(movement, scale_affine(scale));
-                }
-                if names.contains("fade") {
-                    instance.opacity *= 0.35 + 0.65 * progress;
-                }
-                instance.transform = multiply_affine3(movement, instance.transform);
-                if let Some(tween) = visual_tween {
-                    let state = sample_visual_tween(tween, progress);
-                    instance.transform =
-                        multiply_affine3(movement, resolve_visual_affine(&state.transforms)?);
-                    instance.opacity *= state.opacity.unwrap_or(1.0);
-                }
-            }
-            RuntimeAnimationEvent::CantMove {
-                object_id,
-                position,
-                name,
-            } => {
-                let cell = runtime_coord(*position);
-                let instance = instances
-                    .iter_mut()
-                    .find(|instance| {
-                        instance.object_id == Some(*object_id) && instance.cell == cell
-                    })
-                    .ok_or(PresentationError::MissingAnimationTarget {
-                        object_id: *object_id,
-                        cell,
-                    })?;
-                let progress = animation_progress;
-                let names = animation_names(name);
-                let mut effect = identity_affine3();
-                if names.contains("slide") || names.contains("tween") || name.is_empty() {
-                    effect[0][3] = (progress * std::f64::consts::TAU).sin() * 0.12;
-                }
-                if names.contains("zoom") {
-                    effect = multiply_affine3(
-                        effect,
-                        scale_affine(1.0 + (progress * std::f64::consts::PI).sin() * 0.18),
-                    );
-                }
-                if names.contains("fade") {
-                    instance.opacity *= 1.0 - (progress * std::f64::consts::PI).sin() * 0.45;
-                }
-                instance.transform = multiply_affine3(effect, instance.transform);
-            }
-            RuntimeAnimationEvent::Animation {
-                name,
-                position,
-                resolved_visual,
-            } => {
-                let resolved = resolved_visual.as_ref().ok_or_else(|| {
-                    PresentationError::MissingResolvedAnimationVisual(name.clone())
-                })?;
-                let clip = clips
-                    .get(name.as_str())
-                    .copied()
-                    .ok_or_else(|| PresentationError::UnknownVisual(name.clone()))?;
-                let duration = clip
-                    .frame_duration_ms
-                    .and_then(|frame| frame.checked_mul(clip.frames.len() as u64))
-                    .unwrap_or(250);
-                if moment.animation_elapsed_ms >= duration {
+                let target_index = exact_endpoint_index(&instances, *occurrence_id, to.as_ref())?;
+                if animation_progress >= 1.0 {
                     continue;
                 }
-                let cell = runtime_coord(*position);
-                let cell_order = scene
-                    .cells
-                    .iter()
-                    .find(|candidate| candidate.position == cell)
-                    .map(|candidate| candidate.render_order)
-                    .ok_or(PresentationError::MissingRenderCell(cell))?;
-                let render_order = cell_order
-                    .saturating_mul(u64::from(scene.render_priority_count))
-                    .saturating_add(u64::from(resolved.render_priority));
-                instances.push(RuntimeResolvedRenderInstance {
-                    id: next_id,
-                    object_id: None,
-                    visual: name.clone(),
-                    cell,
-                    transform: identity_affine3(),
-                    opacity: 1.0,
-                    frame_elapsed_ms: Some(moment.animation_elapsed_ms),
-                    playback: RuntimeResolvedPlayback::Once,
-                    render_order,
-                });
-                let group = groups.iter_mut().find(|group| {
-                    group.render_order == render_order
-                        && group.composition == resolved.composition
-                        && group.instances.iter().any(|id| {
-                            instances
-                                .iter()
-                                .find(|instance| instance.id == *id)
-                                .is_some_and(|instance| instance.cell == cell)
-                        })
-                });
-                if let Some(group) = group {
-                    group.instances.push(next_id);
-                } else {
-                    groups.push(puzzle_runtime_contract::RuntimeResolvedCompositionGroup {
-                        render_order,
-                        composition: resolved.composition,
-                        instances: vec![next_id],
-                    });
+                let target_index = match (target_index, from) {
+                    (Some(index), _) => index,
+                    (None, Some(endpoint)) => {
+                        insert_prepared_endpoint(&mut instances, &mut groups, endpoint)?;
+                        instances.len() - 1
+                    }
+                    (None, None) => {
+                        return Err(PresentationError::AnimationEndpointMismatch(*occurrence_id));
+                    }
+                };
+                let instance = &mut instances[target_index];
+                if from.is_none() {
+                    instance.opacity *= animation_progress;
+                } else if to.is_none() {
+                    instance.opacity *= 1.0 - animation_progress;
                 }
-                next_id = next_id
-                    .checked_add(1)
-                    .ok_or(PresentationError::InvalidOccurrenceId(u64::MAX))?;
+                match animation {
+                    RuntimePreparedInstanceAnimation::Move { name, visual_tween } => {
+                        sample_prepared_move(
+                            instance,
+                            from.as_ref(),
+                            to.as_ref(),
+                            name,
+                            visual_tween.as_ref(),
+                            animation_progress,
+                        )?;
+                    }
+                    RuntimePreparedInstanceAnimation::CantMove { name } => {
+                        sample_prepared_cant_move(instance, name, animation_progress);
+                    }
+                }
+            }
+            RuntimePreparedAnimationChannel::Transient {
+                endpoint,
+                duration_milliseconds,
+            } => {
+                if animation_elapsed_ms >= *duration_milliseconds {
+                    continue;
+                }
+                let mut endpoint = endpoint.clone();
+                endpoint.instance.frame_elapsed_ms = Some(animation_elapsed_ms);
+                insert_prepared_endpoint(&mut instances, &mut groups, &endpoint)?;
             }
         }
     }
     Ok((instances, groups))
+}
+
+fn exact_endpoint_index(
+    instances: &[RuntimeResolvedRenderInstance],
+    occurrence_id: u64,
+    expected: Option<&RuntimePreparedAnimationEndpoint>,
+) -> Result<Option<usize>, PresentationError> {
+    let mut matches = instances
+        .iter()
+        .enumerate()
+        .filter(|(_, instance)| instance.id == occurrence_id);
+    let found = matches.next();
+    if matches.next().is_some() {
+        return Err(PresentationError::AmbiguousRenderInstance(occurrence_id));
+    }
+    match (found, expected) {
+        (Some((index, instance)), Some(expected)) if instance == &expected.instance => {
+            Ok(Some(index))
+        }
+        (None, None) => Ok(None),
+        _ => Err(PresentationError::AnimationEndpointMismatch(occurrence_id)),
+    }
+}
+
+fn insert_prepared_endpoint(
+    instances: &mut Vec<RuntimeResolvedRenderInstance>,
+    groups: &mut Vec<puzzle_runtime_contract::RuntimeResolvedCompositionGroup>,
+    endpoint: &RuntimePreparedAnimationEndpoint,
+) -> Result<(), PresentationError> {
+    if instances
+        .iter()
+        .any(|instance| instance.id == endpoint.instance.id)
+    {
+        return Err(PresentationError::AmbiguousRenderInstance(
+            endpoint.instance.id,
+        ));
+    }
+    instances.push(endpoint.instance.clone());
+    if let Some(group) = groups.iter_mut().find(|group| {
+        group.render_order == endpoint.instance.render_order
+            && group.composition == endpoint.composition
+    }) {
+        group.instances.push(endpoint.instance.id);
+    } else {
+        groups.push(puzzle_runtime_contract::RuntimeResolvedCompositionGroup {
+            render_order: endpoint.instance.render_order,
+            composition: endpoint.composition,
+            instances: vec![endpoint.instance.id],
+        });
+    }
+    Ok(())
+}
+
+fn sample_prepared_move(
+    instance: &mut RuntimeResolvedRenderInstance,
+    from: Option<&RuntimePreparedAnimationEndpoint>,
+    to: Option<&RuntimePreparedAnimationEndpoint>,
+    name: &str,
+    visual_tween: Option<&RuntimeVisualTween>,
+    progress: f64,
+) -> Result<(), PresentationError> {
+    let from_cell = from
+        .map(|endpoint| endpoint.instance.cell)
+        .or_else(|| to.map(|endpoint| endpoint.instance.cell))
+        .expect("validated prepared channel has an endpoint");
+    let to_cell = to
+        .map(|endpoint| endpoint.instance.cell)
+        .or_else(|| from.map(|endpoint| endpoint.instance.cell))
+        .expect("validated prepared channel has an endpoint");
+    let delta = [
+        f64::from(from_cell[0] - to_cell[0]),
+        f64::from(from_cell[1] - to_cell[1]),
+        f64::from(from_cell[2] - to_cell[2]),
+    ];
+    let names = animation_names(name);
+    let mut movement = identity_affine3();
+    if names.contains("slide") || names.contains("tween") || name.is_empty() {
+        movement[0][3] = delta[0] * (1.0 - progress);
+        movement[1][3] = delta[1] * (1.0 - progress);
+        movement[2][3] = delta[2] * (1.0 - progress);
+    }
+    if names.contains("zoom") {
+        movement = multiply_affine3(movement, scale_affine(0.85 + 0.15 * progress));
+    }
+    if names.contains("fade") {
+        instance.opacity *= 0.35 + 0.65 * progress;
+    }
+    if let Some(tween) = visual_tween {
+        let state = sample_visual_tween(tween, progress);
+        instance.transform = multiply_affine3(movement, resolve_visual_affine(&state.transforms)?);
+        instance.opacity *= state.opacity.unwrap_or(1.0);
+    } else {
+        instance.transform = multiply_affine3(movement, instance.transform);
+    }
+    Ok(())
+}
+
+fn sample_prepared_cant_move(
+    instance: &mut RuntimeResolvedRenderInstance,
+    name: &str,
+    progress: f64,
+) {
+    let names = animation_names(name);
+    let mut effect = identity_affine3();
+    if names.contains("slide") || names.contains("tween") || name.is_empty() {
+        effect[0][3] = (progress * std::f64::consts::TAU).sin() * 0.12;
+    }
+    if names.contains("zoom") {
+        effect = multiply_affine3(
+            effect,
+            scale_affine(1.0 + (progress * std::f64::consts::PI).sin() * 0.18),
+        );
+    }
+    if names.contains("fade") {
+        instance.opacity *= 1.0 - (progress * std::f64::consts::PI).sin() * 0.45;
+    }
+    instance.transform = multiply_affine3(effect, instance.transform);
 }
 
 fn runtime_coord(coord: puzzle_runtime_contract::RuntimeCoord) -> [i32; 3] {
@@ -958,9 +1173,13 @@ fn instance_batch(
         instance.playback,
     )?;
     Ok(RuntimeResolvedRenderBatch {
-        render_order: instance.render_order,
-        object_ids: instance.object_id.into_iter().collect(),
-        cell: instance.cell,
+        identity: RuntimeResolvedRenderBatchIdentity {
+            render_order: instance.render_order,
+            object_ids: instance.object_id.into_iter().collect(),
+            visual_ids: vec![instance.visual.clone()],
+            instance_ids: vec![instance.id],
+            cell: instance.cell,
+        },
         transform: instance.transform,
         opacity: instance.opacity,
         pixel_geometry: pixel_geometry(frame, clip),
@@ -1154,12 +1373,16 @@ fn average_batch(
     let geometry = pixel_geometry(frames[0], first_clip);
     let content = average_frames(&frames, members, geometry)?;
     Ok(RuntimeResolvedRenderBatch {
-        render_order,
-        object_ids: members
-            .iter()
-            .filter_map(|member| member.object_id)
-            .collect(),
-        cell: first.cell,
+        identity: RuntimeResolvedRenderBatchIdentity {
+            render_order,
+            object_ids: members
+                .iter()
+                .filter_map(|member| member.object_id)
+                .collect(),
+            visual_ids: members.iter().map(|member| member.visual.clone()).collect(),
+            instance_ids: members.iter().map(|member| member.id).collect(),
+            cell: first.cell,
+        },
         transform: identity_affine3(),
         opacity: 1.0,
         pixel_geometry: geometry,
@@ -1682,6 +1905,229 @@ pub fn resolve_animation_channels(
         .collect()
 }
 
+/// Resolves semantic animation events once against immutable committed
+/// endpoints. Sampling consumes only the returned exact instance identities.
+pub fn prepare_render_animation_channels(
+    from_scene: &RuntimeResolvedRenderScene,
+    to_scene: &RuntimeResolvedRenderScene,
+    events: &[RuntimeAnimationEvent],
+) -> Result<RuntimePreparedAnimationSet, PresentationError> {
+    let events = resolve_animation_channels(events)?;
+    let mut clips = BTreeMap::new();
+    let mut next_transient_id = from_scene
+        .instances
+        .iter()
+        .chain(&to_scene.instances)
+        .map(|instance| instance.id)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or(PresentationError::InvalidOccurrenceId(u64::MAX))?;
+    let mut channels = Vec::with_capacity(events.len());
+    for event in events {
+        match event {
+            RuntimeAnimationEvent::Move {
+                name,
+                occurrence_id,
+                object_id,
+                visual_tween,
+                from,
+                to,
+            } => {
+                let from_endpoint =
+                    prepare_animation_endpoint(from_scene, occurrence_id, &mut clips)?;
+                let to_endpoint = prepare_animation_endpoint(to_scene, occurrence_id, &mut clips)?;
+                require_prepared_endpoint_cell(
+                    occurrence_id,
+                    runtime_coord(from),
+                    from_endpoint.as_ref(),
+                )?;
+                require_prepared_endpoint_cell(
+                    occurrence_id,
+                    runtime_coord(to),
+                    to_endpoint.as_ref(),
+                )?;
+                if from_endpoint.is_none() && to_endpoint.is_none() {
+                    return Err(PresentationError::UnknownRenderInstance(occurrence_id));
+                }
+                require_prepared_endpoint_object(
+                    occurrence_id,
+                    object_id,
+                    to_endpoint.as_ref().or(from_endpoint.as_ref()),
+                )?;
+                channels.push(RuntimePreparedAnimationChannel::Instance {
+                    occurrence_id,
+                    animation: RuntimePreparedInstanceAnimation::Move { name, visual_tween },
+                    from: from_endpoint,
+                    to: to_endpoint,
+                });
+            }
+            RuntimeAnimationEvent::CantMove {
+                name,
+                occurrence_id,
+                object_id,
+                position,
+            } => {
+                let from_endpoint =
+                    prepare_animation_endpoint(from_scene, occurrence_id, &mut clips)?;
+                let to_endpoint = prepare_animation_endpoint(to_scene, occurrence_id, &mut clips)?;
+                let expected_cell = runtime_coord(position);
+                if let Some(endpoint) = to_endpoint.as_ref().or(from_endpoint.as_ref()) {
+                    require_prepared_endpoint_cell(occurrence_id, expected_cell, Some(endpoint))?;
+                    require_prepared_endpoint_object(occurrence_id, object_id, Some(endpoint))?;
+                } else {
+                    return Err(PresentationError::UnknownRenderInstance(occurrence_id));
+                }
+                channels.push(RuntimePreparedAnimationChannel::Instance {
+                    occurrence_id,
+                    animation: RuntimePreparedInstanceAnimation::CantMove { name },
+                    from: from_endpoint,
+                    to: to_endpoint,
+                });
+            }
+            RuntimeAnimationEvent::Animation {
+                name,
+                position,
+                resolved_visual,
+            } => {
+                let resolved = resolved_visual.ok_or_else(|| {
+                    PresentationError::MissingResolvedAnimationVisual(name.clone())
+                })?;
+                let clip = to_scene
+                    .clips
+                    .iter()
+                    .find(|clip| clip.id == name)
+                    .cloned()
+                    .ok_or_else(|| PresentationError::UnknownVisual(name.clone()))?;
+                register_prepared_clip(&mut clips, &clip)?;
+                if clip.frames.is_empty() {
+                    return Err(PresentationError::EmptyVisualClip(name));
+                }
+                let duration_milliseconds = match clip.frame_duration_ms {
+                    Some(0) => return Err(PresentationError::ZeroFrameDuration(name)),
+                    Some(duration) => duration
+                        .checked_mul(clip.frames.len() as u64)
+                        .ok_or(PresentationError::InvalidOccurrenceId(u64::MAX))?,
+                    None => 250,
+                };
+                let cell = runtime_coord(position);
+                let cell_order = to_scene
+                    .cells
+                    .iter()
+                    .find(|candidate| candidate.position == cell)
+                    .map(|candidate| candidate.render_order)
+                    .ok_or(PresentationError::MissingRenderCell(cell))?;
+                let render_order = cell_order
+                    .saturating_mul(u64::from(to_scene.render_priority_count))
+                    .saturating_add(u64::from(resolved.render_priority));
+                channels.push(RuntimePreparedAnimationChannel::Transient {
+                    endpoint: RuntimePreparedAnimationEndpoint {
+                        instance: RuntimeResolvedRenderInstance {
+                            id: next_transient_id,
+                            object_id: None,
+                            visual: clip.id.clone(),
+                            cell,
+                            transform: identity_affine3(),
+                            opacity: 1.0,
+                            frame_elapsed_ms: Some(0),
+                            playback: RuntimeResolvedPlayback::Once,
+                            render_order,
+                        },
+                        composition: resolved.composition,
+                    },
+                    duration_milliseconds,
+                });
+                next_transient_id = next_transient_id
+                    .checked_add(1)
+                    .ok_or(PresentationError::InvalidOccurrenceId(u64::MAX))?;
+            }
+        }
+    }
+    Ok(RuntimePreparedAnimationSet {
+        clips: clips.into_values().collect(),
+        channels,
+    })
+}
+
+fn prepare_animation_endpoint(
+    scene: &RuntimeResolvedRenderScene,
+    occurrence_id: u64,
+    clips: &mut BTreeMap<String, RuntimeResolvedVisualClip>,
+) -> Result<Option<RuntimePreparedAnimationEndpoint>, PresentationError> {
+    let mut instances = scene
+        .instances
+        .iter()
+        .filter(|instance| instance.id == occurrence_id);
+    let Some(instance) = instances.next() else {
+        return Ok(None);
+    };
+    if instances.next().is_some() {
+        return Err(PresentationError::AmbiguousRenderInstance(occurrence_id));
+    }
+    let mut groups = scene
+        .composition_groups
+        .iter()
+        .filter(|group| group.instances.contains(&occurrence_id));
+    let group = groups
+        .next()
+        .ok_or(PresentationError::MissingRenderInstanceComposition(
+            occurrence_id,
+        ))?;
+    if groups.next().is_some() {
+        return Err(PresentationError::AmbiguousRenderInstance(occurrence_id));
+    }
+    let clip = scene
+        .clips
+        .iter()
+        .find(|clip| clip.id == instance.visual)
+        .cloned()
+        .ok_or_else(|| PresentationError::UnknownVisual(instance.visual.clone()))?;
+    register_prepared_clip(clips, &clip)?;
+    Ok(Some(RuntimePreparedAnimationEndpoint {
+        instance: instance.clone(),
+        composition: group.composition,
+    }))
+}
+
+fn register_prepared_clip(
+    clips: &mut BTreeMap<String, RuntimeResolvedVisualClip>,
+    clip: &RuntimeResolvedVisualClip,
+) -> Result<(), PresentationError> {
+    if let Some(existing) = clips.get(&clip.id) {
+        if existing != clip {
+            return Err(PresentationError::ConflictingAnimationClip(clip.id.clone()));
+        }
+    } else {
+        clips.insert(clip.id.clone(), clip.clone());
+    }
+    Ok(())
+}
+
+fn require_prepared_endpoint_cell(
+    occurrence_id: u64,
+    cell: [i32; 3],
+    endpoint: Option<&RuntimePreparedAnimationEndpoint>,
+) -> Result<(), PresentationError> {
+    let Some(endpoint) = endpoint else {
+        return Ok(());
+    };
+    if endpoint.instance.cell != cell {
+        return Err(PresentationError::AnimationEndpointMismatch(occurrence_id));
+    }
+    Ok(())
+}
+
+fn require_prepared_endpoint_object(
+    occurrence_id: u64,
+    object_id: u16,
+    endpoint: Option<&RuntimePreparedAnimationEndpoint>,
+) -> Result<(), PresentationError> {
+    if endpoint.is_none_or(|endpoint| endpoint.instance.object_id != Some(object_id)) {
+        return Err(PresentationError::AnimationEndpointMismatch(occurrence_id));
+    }
+    Ok(())
+}
+
 pub fn resolve_presentation_events(
     mut events: Vec<RuntimePresentationEvent>,
     order: &VisualOrderRef<'_>,
@@ -1988,6 +2434,69 @@ mod tests {
             fit: RuntimeResolvedFitMode::Contain,
             width: 1,
             height: 1,
+        }
+    }
+
+    fn endpoint_clip(id: &str) -> RuntimeResolvedVisualClip {
+        RuntimeResolvedVisualClip {
+            id: id.to_string(),
+            frames: vec![RuntimeResolvedVisualFrame::Pixels {
+                width: 1,
+                height: 1,
+                pixels: vec![RuntimeResolvedPixel {
+                    position: [0, 0],
+                    color: RuntimeLinearRgba {
+                        red: 1.0,
+                        green: 1.0,
+                        blue: 1.0,
+                        alpha: 1.0,
+                    },
+                }],
+            }],
+            frame_duration_ms: None,
+            layout: test_layout(),
+        }
+    }
+
+    fn endpoint_instance(
+        id: u64,
+        object_id: u16,
+        visual: &str,
+        cell: [i32; 3],
+    ) -> RuntimeResolvedRenderInstance {
+        RuntimeResolvedRenderInstance {
+            id,
+            object_id: Some(object_id),
+            visual: visual.to_string(),
+            cell,
+            transform: identity_affine3(),
+            opacity: 1.0,
+            frame_elapsed_ms: None,
+            playback: RuntimeResolvedPlayback::Loop,
+            render_order: id,
+        }
+    }
+
+    fn endpoint_scene(
+        clips: Vec<RuntimeResolvedVisualClip>,
+        instances: Vec<RuntimeResolvedRenderInstance>,
+    ) -> RuntimeResolvedRenderScene {
+        let composition_groups = instances
+            .iter()
+            .map(|instance| RuntimeResolvedCompositionGroup {
+                render_order: instance.render_order,
+                composition: RuntimeVisualComposition::Ordered,
+                instances: vec![instance.id],
+            })
+            .collect();
+        RuntimeResolvedRenderScene {
+            clips,
+            instances,
+            composition_groups,
+            cells: Vec::new(),
+            decorations: Vec::new(),
+            render_priority_count: 1,
+            animation_duration_ms: 100,
         }
     }
 
@@ -2308,7 +2817,7 @@ mod tests {
         else {
             panic!("averaged pixels must stay renderer-neutral pixels");
         };
-        assert_eq!(frame.batches[0].cell, [4, 2, 0]);
+        assert_eq!(frame.batches[0].identity.cell, [4, 2, 0]);
         assert_eq!(pixels.len(), 1);
         assert_eq!(
             pixels[0].color,
@@ -2319,6 +2828,328 @@ mod tests {
                 alpha: 1.0,
             }
         );
+    }
+
+    #[test]
+    fn independent_frame_rates_choose_one_nearest_deadline_without_a_common_grid() {
+        let pixel_frame = |red| RuntimeResolvedVisualFrame::Pixels {
+            width: 1,
+            height: 1,
+            pixels: vec![RuntimeResolvedPixel {
+                position: [0, 0],
+                color: RuntimeLinearRgba {
+                    red,
+                    green: 0.0,
+                    blue: 0.0,
+                    alpha: 1.0,
+                },
+            }],
+        };
+        let frame_rates = [7_u64, 11, 13, 19];
+        let clips = frame_rates
+            .iter()
+            .enumerate()
+            .map(|(index, fps)| RuntimeResolvedVisualClip {
+                id: format!("{fps}fps"),
+                frames: vec![pixel_frame(index as f64 / 4.0), pixel_frame(1.0)],
+                frame_duration_ms: Some(1_000 / fps),
+                layout: test_layout(),
+            })
+            .collect::<Vec<_>>();
+        let instances = frame_rates
+            .iter()
+            .enumerate()
+            .map(|(index, fps)| RuntimeResolvedRenderInstance {
+                id: index as u64,
+                object_id: None,
+                visual: format!("{fps}fps"),
+                cell: [index as i32, 0, 0],
+                transform: identity_affine3(),
+                opacity: 1.0,
+                frame_elapsed_ms: None,
+                playback: RuntimeResolvedPlayback::Loop,
+                render_order: index as u64,
+            })
+            .collect::<Vec<_>>();
+        let composition_groups = instances
+            .iter()
+            .map(|instance| RuntimeResolvedCompositionGroup {
+                render_order: instance.render_order,
+                composition: RuntimeVisualComposition::Ordered,
+                instances: vec![instance.id],
+            })
+            .collect();
+        let scene = RuntimeResolvedRenderScene {
+            clips,
+            instances,
+            composition_groups,
+            cells: Vec::new(),
+            decorations: Vec::new(),
+            render_priority_count: 1,
+            animation_duration_ms: 250,
+        };
+        let elapsed_ms = 1_000_000_000_001;
+
+        let frame = resolve_image_free_render_frame(&scene, elapsed_ms).unwrap();
+        assert_eq!(
+            frame.next_sample,
+            Some(RuntimeResolvedNextSample::Deadline {
+                after_milliseconds: 11,
+            })
+        );
+
+        let clips = scene
+            .clips
+            .iter()
+            .map(|clip| (clip.id.as_str(), clip))
+            .collect::<HashMap<_, _>>();
+        let schedule =
+            resolve_sample_schedule(&scene.instances, &clips, &scene, elapsed_ms, 0, None, 1.0)
+                .unwrap();
+        assert_eq!(
+            schedule.examined_channels,
+            frame_rates.len(),
+            "sampling work must visit each active clip once instead of enumerating a common period"
+        );
+    }
+
+    #[test]
+    fn prepared_move_samples_exact_identity_among_duplicate_object_cells() {
+        let clip = endpoint_clip("actor");
+        let from = endpoint_scene(
+            vec![clip.clone()],
+            vec![
+                endpoint_instance(1, 7, "actor", [0, 0, 0]),
+                endpoint_instance(2, 7, "actor", [0, 0, 0]),
+            ],
+        );
+        let to = endpoint_scene(
+            vec![clip],
+            vec![
+                endpoint_instance(1, 7, "actor", [1, 0, 0]),
+                endpoint_instance(2, 7, "actor", [1, 0, 0]),
+            ],
+        );
+        let animation = prepare_render_animation_channels(
+            &from,
+            &to,
+            &[RuntimeAnimationEvent::Move {
+                name: "tween".to_string(),
+                occurrence_id: 1,
+                object_id: 7,
+                visual_tween: None,
+                from: RuntimeCoord {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                },
+                to: RuntimeCoord {
+                    x: 1,
+                    y: 0,
+                    z: None,
+                },
+            }],
+        )
+        .unwrap();
+
+        let frame = resolve_image_free_render_moment(
+            &to,
+            &RuntimeResolvedRenderMoment {
+                clip_elapsed_ms: 0,
+                animation_elapsed_ms: 50,
+                animation: Some(animation),
+            },
+        )
+        .unwrap();
+        let moved = frame
+            .batches
+            .iter()
+            .find(|batch| batch.identity.instance_ids == [1])
+            .unwrap();
+        let untouched = frame
+            .batches
+            .iter()
+            .find(|batch| batch.identity.instance_ids == [2])
+            .unwrap();
+        assert_eq!(moved.transform[0][3], -0.5);
+        assert_eq!(untouched.transform, identity_affine3());
+    }
+
+    #[test]
+    fn prepared_endpoints_cover_removed_added_and_replaced_occurrences() {
+        let old_clip = endpoint_clip("old");
+        let new_clip = endpoint_clip("new");
+
+        let removed_from = endpoint_scene(
+            vec![old_clip.clone()],
+            vec![endpoint_instance(10, 1, "old", [0, 0, 0])],
+        );
+        let removed_to = endpoint_scene(Vec::new(), Vec::new());
+        let removed = prepare_render_animation_channels(
+            &removed_from,
+            &removed_to,
+            &[RuntimeAnimationEvent::Move {
+                name: "fade".to_string(),
+                occurrence_id: 10,
+                object_id: 1,
+                visual_tween: None,
+                from: RuntimeCoord {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                },
+                to: RuntimeCoord {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                },
+            }],
+        )
+        .unwrap();
+        assert_eq!(removed.clips.len(), 1);
+        let removed_frame = resolve_image_free_render_moment(
+            &removed_to,
+            &RuntimeResolvedRenderMoment {
+                clip_elapsed_ms: 0,
+                animation_elapsed_ms: 50,
+                animation: Some(removed),
+            },
+        )
+        .unwrap();
+        assert_eq!(removed_frame.batches.len(), 1);
+        assert_eq!(removed_frame.batches[0].identity.instance_ids, [10]);
+        assert_eq!(removed_frame.batches[0].opacity, 0.3375);
+
+        let added_from = endpoint_scene(Vec::new(), Vec::new());
+        let added_to = endpoint_scene(
+            vec![new_clip.clone()],
+            vec![endpoint_instance(20, 2, "new", [0, 0, 0])],
+        );
+        let added = prepare_render_animation_channels(
+            &added_from,
+            &added_to,
+            &[RuntimeAnimationEvent::Move {
+                name: String::new(),
+                occurrence_id: 20,
+                object_id: 2,
+                visual_tween: None,
+                from: RuntimeCoord {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                },
+                to: RuntimeCoord {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                },
+            }],
+        )
+        .unwrap();
+        let added_frame = resolve_image_free_render_moment(
+            &added_to,
+            &RuntimeResolvedRenderMoment {
+                clip_elapsed_ms: 0,
+                animation_elapsed_ms: 50,
+                animation: Some(added),
+            },
+        )
+        .unwrap();
+        assert_eq!(added_frame.batches[0].opacity, 0.5);
+
+        let replaced_from = endpoint_scene(
+            vec![old_clip],
+            vec![endpoint_instance(30, 1, "old", [0, 0, 0])],
+        );
+        let replaced_to = endpoint_scene(
+            vec![new_clip],
+            vec![endpoint_instance(30, 2, "new", [0, 0, 0])],
+        );
+        let replaced = prepare_render_animation_channels(
+            &replaced_from,
+            &replaced_to,
+            &[RuntimeAnimationEvent::Move {
+                name: "tween".to_string(),
+                occurrence_id: 30,
+                object_id: 2,
+                visual_tween: None,
+                from: RuntimeCoord {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                },
+                to: RuntimeCoord {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                },
+            }],
+        )
+        .unwrap();
+        let RuntimePreparedAnimationChannel::Instance { from, to, .. } = &replaced.channels[0]
+        else {
+            panic!("replacement must prepare exact instance endpoints");
+        };
+        assert_eq!(from.as_ref().unwrap().instance.visual, "old");
+        assert_eq!(to.as_ref().unwrap().instance.visual, "new");
+    }
+
+    #[test]
+    fn prepared_clip_storage_is_unique_by_clip_not_occurrence() {
+        let clip = endpoint_clip("actor");
+        let instances = (1..=100)
+            .map(|id| endpoint_instance(id, 7, "actor", [id as i32, 0, 0]))
+            .collect::<Vec<_>>();
+        let scene = endpoint_scene(vec![clip], instances);
+        let events = (1..=100)
+            .map(|id| RuntimeAnimationEvent::Move {
+                name: "tween".to_string(),
+                occurrence_id: id,
+                object_id: 7,
+                visual_tween: None,
+                from: RuntimeCoord {
+                    x: id as u16,
+                    y: 0,
+                    z: None,
+                },
+                to: RuntimeCoord {
+                    x: id as u16,
+                    y: 0,
+                    z: None,
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let prepared = prepare_render_animation_channels(&scene, &scene, &events).unwrap();
+        assert_eq!(prepared.channels.len(), 100);
+        assert_eq!(
+            prepared.clips.len(),
+            1,
+            "clip payload storage must scale with unique clips, not occurrence count"
+        );
+    }
+
+    #[test]
+    fn empty_prepared_animation_preserves_the_committed_scene() {
+        let scene = endpoint_scene(
+            vec![endpoint_clip("actor")],
+            vec![endpoint_instance(1, 7, "actor", [0, 0, 0])],
+        );
+        let animation = prepare_render_animation_channels(&scene, &scene, &[]).unwrap();
+        assert!(animation.channels.is_empty());
+        assert!(animation.clips.is_empty());
+        let frame = resolve_image_free_render_moment(
+            &scene,
+            &RuntimeResolvedRenderMoment {
+                clip_elapsed_ms: 0,
+                animation_elapsed_ms: u64::MAX,
+                animation: Some(animation),
+            },
+        )
+        .unwrap();
+        assert_eq!(frame.batches.len(), 1);
+        assert_eq!(frame.batches[0].identity.instance_ids, [1]);
+        assert_eq!(frame.next_sample, None);
     }
 
     #[test]
@@ -2481,9 +3312,15 @@ mod tests {
         .unwrap();
         let logical_batch = &logical.batches[0];
         let raster_batch = &raster.batches[0];
-        assert_eq!(logical_batch.render_order, raster_batch.render_order);
-        assert_eq!(logical_batch.object_ids, raster_batch.object_ids);
-        assert_eq!(logical_batch.cell, raster_batch.cell);
+        assert_eq!(
+            logical_batch.identity.render_order,
+            raster_batch.identity.render_order
+        );
+        assert_eq!(
+            logical_batch.identity.object_ids,
+            raster_batch.identity.object_ids
+        );
+        assert_eq!(logical_batch.identity.cell, raster_batch.identity.cell);
         assert_eq!(logical_batch.transform, raster_batch.transform);
         assert_eq!(logical_batch.opacity, raster_batch.opacity);
         let geometry = logical_batch.pixel_geometry.unwrap();
@@ -2793,54 +3630,85 @@ mod tests {
             render_priority_count: 2,
             animation_duration_ms: 30,
         };
+        let mut from_scene = scene.clone();
+        from_scene.instances[0].cell = [0, 0, 0];
+        let animation = prepare_render_animation_channels(
+            &from_scene,
+            &scene,
+            &[
+                RuntimeAnimationEvent::Move {
+                    name: "tween".to_string(),
+                    occurrence_id: 1,
+                    object_id: 7,
+                    visual_tween: None,
+                    from: RuntimeCoord {
+                        x: 0,
+                        y: 0,
+                        z: None,
+                    },
+                    to: RuntimeCoord {
+                        x: 1,
+                        y: 0,
+                        z: None,
+                    },
+                },
+                RuntimeAnimationEvent::Animation {
+                    name: "flash".to_string(),
+                    position: RuntimeCoord {
+                        x: 1,
+                        y: 0,
+                        z: None,
+                    },
+                    resolved_visual: Some(RuntimeResolvedVisualOrder {
+                        render_priority: 1,
+                        composition: RuntimeVisualComposition::Ordered,
+                    }),
+                },
+                RuntimeAnimationEvent::Animation {
+                    name: "flash".to_string(),
+                    position: RuntimeCoord {
+                        x: 1,
+                        y: 0,
+                        z: None,
+                    },
+                    resolved_visual: Some(RuntimeResolvedVisualOrder {
+                        render_priority: 1,
+                        composition: RuntimeVisualComposition::Ordered,
+                    }),
+                },
+            ],
+        )
+        .unwrap();
         let frame = resolve_image_free_render_moment(
             &scene,
             &RuntimeResolvedRenderMoment {
                 clip_elapsed_ms: 0,
                 animation_elapsed_ms: 15,
-                animations: vec![
-                    RuntimeAnimationEvent::Move {
-                        name: "tween".to_string(),
-                        occurrence_id: 1,
-                        object_id: 7,
-                        visual_tween: None,
-                        from: RuntimeCoord {
-                            x: 0,
-                            y: 0,
-                            z: None,
-                        },
-                        to: RuntimeCoord {
-                            x: 1,
-                            y: 0,
-                            z: None,
-                        },
-                    },
-                    RuntimeAnimationEvent::Animation {
-                        name: "flash".to_string(),
-                        position: RuntimeCoord {
-                            x: 1,
-                            y: 0,
-                            z: None,
-                        },
-                        resolved_visual: Some(RuntimeResolvedVisualOrder {
-                            render_priority: 1,
-                            composition: RuntimeVisualComposition::Ordered,
-                        }),
-                    },
-                ],
+                animation: Some(animation),
             },
         )
         .unwrap();
 
-        assert_eq!(frame.batches.len(), 2);
-        assert_eq!(frame.batches[0].object_ids, vec![7]);
+        assert_eq!(frame.batches.len(), 3);
+        assert_eq!(frame.batches[0].identity.object_ids, vec![7]);
         assert_eq!(frame.batches[0].transform[0][3], -0.5);
-        assert_eq!(frame.batches[1].render_order, 5);
+        assert_eq!(frame.batches[1].identity.render_order, 5);
+        assert_ne!(
+            frame.batches[1].identity, frame.batches[2].identity,
+            "duplicate ordered animation occurrences need distinct renderer identities"
+        );
         let RuntimeResolvedRenderBatchContent::Pixels { pixels, .. } = &frame.batches[1].content
         else {
             panic!("trigger clip must resolve to pixels");
         };
         assert_eq!(pixels[0].color.blue, 1.0);
+        assert_eq!(
+            frame.next_sample,
+            Some(RuntimeResolvedNextSample::DisplayRefresh {
+                completion_after_milliseconds: 15,
+            }),
+            "continuous channels sample on display refresh only until their finite completion"
+        );
     }
 
     #[test]

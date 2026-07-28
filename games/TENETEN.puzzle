@@ -19,8 +19,8 @@ choice "Level Select" -> goto level_select
 }
 }
 
+theme = puzzlescript
 theme {
-preset = "puzzlescript"
 background_color = #243
 }
 

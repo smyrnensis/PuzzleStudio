@@ -10,16 +10,11 @@ if (($# > 1)); then
   exit 2
 fi
 case "$mode" in
-  # The generated static files do not record whether they came from Cargo's
-  # debug or release profile. Always invoke the selected profile so switching
-  # between `tauri dev` and `tauri build` cannot reuse the other profile's WASM.
   desktop)
     wasm_profile="release"
-    force_wasm_build=1
     ;;
   desktop-dev)
     wasm_profile="debug"
-    force_wasm_build=1
     ;;
   *)
   echo "unknown wasm freshness mode: $mode" >&2
@@ -27,78 +22,65 @@ case "$mode" in
     ;;
 esac
 
-oldest_artifact_file() {
-  local oldest=""
+provenance_root="${CARGO_TARGET_DIR:-target}/puzzlestudio-wasm-provenance"
+
+artifacts_exist() {
   local path
   for path in "$@"; do
     if [[ ! -f "$path" ]]; then
       return 1
     fi
-    if [[ -z "$oldest" || "$path" -ot "$oldest" ]]; then
-      oldest="$path"
-    fi
   done
-  printf '%s\n' "$oldest"
 }
 
-newest_source_file() {
-  local newest=""
-  local found=0
+source_set_digest() {
+  local build_profile="$1"
+  local build_cmd="$2"
+  shift 2
+  local sources=("$@")
   local path
-  for path in "$@"; do
-    if [[ -f "$path" ]]; then
-      found=1
-      if [[ -z "$newest" || "$path" -nt "$newest" ]]; then
-        newest="$path"
-      fi
-    elif [[ -d "$path" ]]; then
-      local file
-      while IFS= read -r -d '' file; do
-        found=1
-        if [[ -z "$newest" || "$file" -nt "$newest" ]]; then
-          newest="$file"
-        fi
-      done < <(find "$path" -type f -print0)
-    else
-      echo "wasm freshness source path is missing: $path" >&2
+  if ((${#sources[@]} == 0)); then
+    echo "wasm provenance source set is empty" >&2
+    return 2
+  fi
+  for path in "${sources[@]}"; do
+    if [[ ! -f "$path" && ! -d "$path" ]]; then
+      echo "wasm provenance source path is missing: $path" >&2
       return 2
     fi
   done
-  if ((found == 0)); then
-    echo "wasm freshness source set is empty" >&2
-    return 2
-  fi
-  printf '%s\n' "$newest"
+  {
+    printf 'schema=1\nprofile=%s\nbuilder=%s\n' "$build_profile" "$build_cmd"
+    rustc -Vv
+    cargo -V
+    wasm-bindgen --version
+    node --version
+    for path in "${sources[@]}"; do
+      if [[ -f "$path" ]]; then
+        printf 'file=%s\n' "${path#"$repo_root"/}"
+        printf 'sha256='
+        shasum -a 256 "$path" | awk '{print $1}'
+      else
+        local file
+        while IFS= read -r file; do
+          printf 'file=%s\n' "${file#"$repo_root"/}"
+          printf 'sha256='
+          shasum -a 256 "$file" | awk '{print $1}'
+        done < <(find "$path" -type f -print | LC_ALL=C sort)
+      fi
+    done
+  } | shasum -a 256 | awk '{print $1}'
 }
 
-verify_target_current() {
+record_provenance() {
   local name="$1"
-  shift
-  local artifacts=()
-  while (($#)); do
-    if [[ "$1" == "--" ]]; then
-      shift
-      break
-    fi
-    artifacts+=("$1")
-    shift
-  done
-  local sources=("$@")
-
-  local oldest_artifact newest_source
-  if ! oldest_artifact="$(oldest_artifact_file "${artifacts[@]}")"; then
-    echo "wasm: $name artifacts are missing after build" >&2
-    return 1
-  fi
-  if ! newest_source="$(newest_source_file "${sources[@]}")"; then
-    return 1
-  fi
-  if [[ "$newest_source" -nt "$oldest_artifact" ]]; then
-    echo "wasm: $name is still stale after build" >&2
-    echo "wasm: newest source: $newest_source" >&2
-    echo "wasm: oldest artifact: $oldest_artifact" >&2
-    return 1
-  fi
+  local digest="$2"
+  local manifest="$provenance_root/$name.sha256"
+  mkdir -p "$provenance_root"
+  local temporary
+  temporary="$(mktemp "$provenance_root/$name.XXXXXX")"
+  printf '%s\n' "$digest" >"$temporary"
+  mv "$temporary" "$manifest"
 }
 
 ensure_target_current() {
@@ -117,41 +99,32 @@ ensure_target_current() {
   done
   local sources=("$@")
 
-  local oldest_artifact newest_source
-  if ((force_wasm_build)); then
-    echo "wasm: $name $build_profile build requested; running $build_cmd" >&2
-    "$build_cmd" "$build_profile"
-    verify_target_current "$name" "${artifacts[@]}" -- "${sources[@]}"
+  local manifest="$provenance_root/$name.sha256"
+  local expected_digest recorded_digest=""
+  expected_digest="$(source_set_digest "$build_profile" "$build_cmd" "${sources[@]}")"
+  if [[ -f "$manifest" ]]; then
+    recorded_digest="$(<"$manifest")"
+  fi
+  if artifacts_exist "${artifacts[@]}" && [[ "$recorded_digest" == "$expected_digest" ]]; then
+    echo "wasm: $name $build_profile current"
     return
   fi
-  if ! oldest_artifact="$(oldest_artifact_file "${artifacts[@]}")"; then
-    echo "wasm: $name artifacts missing; running $build_cmd $build_profile" >&2
-    "$build_cmd" "$build_profile"
-    verify_target_current "$name" "${artifacts[@]}" -- "${sources[@]}"
-    return
+
+  echo "wasm: $name $build_profile inputs changed; running $build_cmd" >&2
+  "$build_cmd" "$build_profile"
+  if ! artifacts_exist "${artifacts[@]}"; then
+    echo "wasm: $name artifacts are missing after build" >&2
+    return 1
   fi
-  if ! newest_source="$(newest_source_file "${sources[@]}")"; then
-    exit 1
-  fi
-  if [[ "$newest_source" -nt "$oldest_artifact" ]]; then
-    echo "wasm: $name stale; running $build_cmd $build_profile" >&2
-    echo "wasm: newest source: $newest_source" >&2
-    echo "wasm: oldest artifact: $oldest_artifact" >&2
-    "$build_cmd" "$build_profile"
-    verify_target_current "$name" "${artifacts[@]}" -- "${sources[@]}"
-    return
-  fi
-  echo "wasm: $name current"
+  record_provenance "$name" "$expected_digest"
 }
 
-ensure_wasm_copies_match() {
+sync_wasm_copies() {
   local name="$1"
-  local build_profile="$2"
-  local build_cmd="$3"
-  local source_js="$4"
-  local target_js="$5"
-  local source_wasm="$6"
-  local target_wasm="$7"
+  local source_js="$2"
+  local target_js="$3"
+  local source_wasm="$4"
+  local target_wasm="$5"
   if cmp -s \
     "$source_js" \
     "$target_js" \
@@ -161,15 +134,16 @@ ensure_wasm_copies_match() {
     return
   fi
 
-  echo "wasm: $name editor copy differs; running $build_cmd $build_profile" >&2
-  "$build_cmd" "$build_profile"
+  echo "wasm: synchronizing $name editor copy from its canonical artifact" >&2
+  cp "$source_js" "$target_js"
+  cp "$source_wasm" "$target_wasm"
   if ! cmp -s \
     "$source_js" \
     "$target_js" \
     || ! cmp -s \
       "$source_wasm" \
       "$target_wasm"; then
-    echo "wasm: $name editor copy still differs after $build_cmd $build_profile" >&2
+    echo "wasm: $name editor copy still differs after synchronization" >&2
     exit 1
   fi
 }
@@ -294,18 +268,14 @@ ensure_target_current \
   tools/build_wasm_game.sh \
   "${wasm_game_rust_sources[@]}"
 
-ensure_wasm_copies_match \
+sync_wasm_copies \
   puzzle_wasm_player \
-  "$wasm_profile" \
-  tools/build_wasm_player.sh \
   crates/html_play/static/wasm_player/puzzle_wasm_player.js \
   crates/html_editor/static/wasm_player/puzzle_wasm_player.js \
   crates/html_play/static/wasm_player/puzzle_wasm_player_bg.wasm \
   crates/html_editor/static/wasm_player/puzzle_wasm_player_bg.wasm
-ensure_wasm_copies_match \
+sync_wasm_copies \
   puzzle_wasm_game \
-  "$wasm_profile" \
-  tools/build_wasm_game.sh \
   crates/html_play/static/wasm_game/puzzle_wasm_game.js \
   crates/html_editor/static/wasm_game/puzzle_wasm_game.js \
   crates/html_play/static/wasm_game/puzzle_wasm_game_bg.wasm \

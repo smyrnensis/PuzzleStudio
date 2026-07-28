@@ -5047,7 +5047,7 @@ mod tests {
             PuzzleDirectiveSurface::Assignment
         );
         assert_eq!(
-            puzzle_directive_surface("theme = \"puzzlescript\""),
+            puzzle_directive_surface("theme = puzzlescript"),
             PuzzleDirectiveSurface::DocumentSetting
         );
         assert_eq!(

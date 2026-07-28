@@ -2,13 +2,29 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     error::Error,
     fmt,
+    sync::{Arc, Mutex},
 };
 
 use bevy::{
-    asset::RenderAssetUsages,
-    camera::{ClearColorConfig, ScalingMode, Viewport, visibility::RenderLayers},
+    asset::{AssetId, RenderAssetUsages},
+    camera::{ClearColorConfig, RenderTarget, ScalingMode, Viewport, visibility::RenderLayers},
+    pbr::{
+        PreparedMaterial, RenderMaterialInstances, RenderMeshInstances,
+        SpecializedMaterialPipelineCache,
+    },
     prelude::*,
-    render::render_resource::PrimitiveTopology,
+    render::{
+        Render, RenderApp, RenderSystems,
+        camera::ExtractedCamera,
+        erased_render_asset::ErasedRenderAssets,
+        extract_component::{ExtractComponent, ExtractComponentPlugin},
+        mesh::RenderMesh,
+        render_asset::RenderAssets,
+        render_resource::{PipelineCache, PrimitiveTopology, TextureFormat},
+        sync_world::MainEntity,
+        view::{ExtractedView, RenderVisibleEntities},
+    },
+    window::WindowRef,
 };
 use puzzle_assets::{VisualImageAssetId, VisualImageAssetRevision};
 use puzzle_runtime_contract::{
@@ -17,12 +33,18 @@ use puzzle_runtime_contract::{
 };
 
 mod pixelate;
+mod publication;
 mod two_d;
 
+pub use publication::{
+    BevyPublicationGroupError, BevyPublicationGroupId, BevyPublicationGroups,
+    BevyPublicationMember, PuzzleBevyPublicationPlugin,
+};
 pub use two_d::{
-    BevyResolvedFrameQueue2d, PreparedBevy2dFrame, PreparedLineMesh2d, PreparedLineMesh2dKey,
-    PreparedPixelMesh, PreparedPixelMeshKey, PreparedRasterQuad, PreparedRasterQuadKey,
-    PuzzleBevy2dPlugin, PuzzleBevy2dView, PuzzleLineMesh2d, PuzzlePixelMesh, PuzzleRasterQuad,
+    BevyPublishedViewFrame2d, BevyPublishedViewFrames2d, BevyResolvedFrameQueue2d,
+    PreparedBevy2dFrame, PreparedLineMesh2d, PreparedLineMesh2dKey, PreparedPixelMesh,
+    PreparedPixelMeshKey, PreparedRasterQuad, PreparedRasterQuadKey, PuzzleBevy2dPlugin,
+    PuzzleBevy2dView, PuzzleLineMesh2d, PuzzlePixelMesh, PuzzleRasterQuad, fitted_2d_content_rect,
     prepare_resolved_frame_2d, remove_render_view_2d, submit_image_free_resolved_frame_2d,
     submit_resolved_frame_2d,
 };
@@ -30,7 +52,7 @@ pub use two_d::{
 const OPAQUE_ALPHA: f32 = 0.999;
 const MATRIX_EPSILON: f32 = 0.000_1;
 const FIRST_3D_RENDER_LAYER: usize = 2;
-const RENDER_LAYER_STRIDE: usize = 2;
+const RENDER_LAYER_STRIDE: usize = 4;
 
 #[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PuzzleBevyRendererSystems {
@@ -52,7 +74,7 @@ fn camera_order(
         .ok_or(BevyRenderError::InvalidCameraOrder)
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct BevyViewRegistry {
     next_layer_slot: usize,
     free_layers: Vec<usize>,
@@ -133,6 +155,9 @@ impl BevyViewRegistry {
                 .checked_mul(RENDER_LAYER_STRIDE)
                 .and_then(|offset| first_render_layer.checked_add(offset))
                 .ok_or(BevyRenderError::ViewLayerExhausted)?;
+            if layer.checked_add(1).is_none() {
+                return Err(BevyRenderError::ViewLayerExhausted);
+            }
             self.next_layer_slot = self
                 .next_layer_slot
                 .checked_add(1)
@@ -483,21 +508,68 @@ pub struct PuzzleBevy3dPlugin;
 
 impl Plugin for PuzzleBevy3dPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<PuzzleBevyPublicationPlugin>() {
+            app.add_plugins(PuzzleBevyPublicationPlugin);
+        }
+        let gpu_backed = app.get_sub_app(RenderApp).is_some();
+        let readiness = RenderReadinessBridge3d::new(gpu_backed);
         app.insert_resource(GlobalAmbientLight::NONE)
+            .init_resource::<Assets<Image>>()
             .add_plugins(pixelate::PuzzlePixelatePlugin)
             .init_resource::<BevyResolvedFrameQueue>()
+            .init_resource::<BevyPublishedViewFrames3d>()
             .init_resource::<RenderedFrameState>()
+            .init_resource::<StagedFrameState3d>()
+            .insert_resource(readiness.clone())
             .add_systems(Startup, setup_renderer)
             .add_systems(
                 PostUpdate,
-                apply_pending_frame.in_set(PuzzleBevyRendererSystems::ApplySubmittedFrames),
+                apply_pending_frame
+                    .in_set(PuzzleBevyRendererSystems::ApplySubmittedFrames)
+                    .before(bevy::transform::TransformSystems::Propagate),
             );
+        if gpu_backed {
+            app.add_plugins(ExtractComponentPlugin::<FrameBankGeneration3d>::default());
+            app.add_plugins(ExtractComponentPlugin::<CameraPublication3d>::default());
+            app.add_plugins(ExtractComponentPlugin::<StagingPublication3d>::default());
+        }
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.insert_resource(readiness).add_systems(
+                Render,
+                acknowledge_ready_frames_3d.after(RenderSystems::QueueMeshes),
+            );
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BevyPublishedViewFrame3d {
+    pub view_id: PuzzleBevyViewId,
+    pub generation: u64,
+}
+
+#[derive(Resource, Default)]
+pub struct BevyPublishedViewFrames3d {
+    frames: Vec<BevyPublishedViewFrame3d>,
+}
+
+impl BevyPublishedViewFrames3d {
+    pub fn drain(&mut self) -> impl Iterator<Item = BevyPublishedViewFrame3d> + '_ {
+        self.frames.drain(..)
+    }
+
+    fn acknowledge(&mut self, view_id: PuzzleBevyViewId, generation: u64) {
+        self.frames.push(BevyPublishedViewFrame3d {
+            view_id,
+            generation,
+        });
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BevyRenderError {
     RendererNotInstalled,
+    GpuRendererUnavailable,
     InvalidFramebufferRect,
     InvalidViewId {
         field: &'static str,
@@ -602,6 +674,12 @@ impl fmt::Display for BevyRenderError {
         match self {
             Self::RendererNotInstalled => {
                 write!(formatter, "Bevy renderer plugin is not installed")
+            }
+            Self::GpuRendererUnavailable => {
+                write!(
+                    formatter,
+                    "3D publication requires an installed Bevy render sub-app"
+                )
             }
             Self::InvalidFramebufferRect => {
                 write!(formatter, "render view framebuffer size must be non-zero")
@@ -764,6 +842,9 @@ impl fmt::Display for BevyRenderError {
 
 impl Error for BevyRenderError {}
 
+/// Renderer-owned draw slot. This is intentionally positional rather than a
+/// game-object identity: every submitted frame replaces the slot's complete
+/// mesh, transform, and metadata atomically.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PreparedVoxelKey {
     pub batch_index: usize,
@@ -823,7 +904,6 @@ pub struct PreparedBevyFrame {
     pub voxels: Vec<PreparedVoxel>,
     pub line_meshes: Vec<PreparedLineMesh3d>,
     pub bounds: PreparedBounds,
-    pub continue_animation: bool,
 }
 
 pub fn prepare_resolved_frame(
@@ -854,9 +934,9 @@ pub fn prepare_resolved_frame(
         }
         let affine = runtime_affine(batch.transform, batch_index)?;
         let cell = Vec3::new(
-            batch.cell[0] as f32,
-            batch.cell[1] as f32,
-            batch.cell[2] as f32,
+            batch.identity.cell[0] as f32,
+            batch.identity.cell[1] as f32,
+            batch.identity.cell[2] as f32,
         );
         let step = 1.0 / f32::from((*width).max(*depth).max(*height));
 
@@ -896,8 +976,8 @@ pub fn prepare_resolved_frame(
                 },
                 transform,
                 color,
-                render_order: batch.render_order,
-                object_ids: batch.object_ids.clone(),
+                render_order: batch.identity.render_order,
+                object_ids: batch.identity.object_ids.clone(),
             };
             let world_key = WorldVoxelKey::from_matrix(bevy_from_cube);
             let stack = stacks.entry(world_key).or_default();
@@ -918,7 +998,6 @@ pub fn prepare_resolved_frame(
         voxels,
         line_meshes,
         bounds,
-        continue_animation: frame.continue_animation,
     })
 }
 
@@ -1014,6 +1093,12 @@ pub fn submit_resolved_frame(
     view: PuzzleBevy3dView,
     frame: &RuntimeResolvedRenderFrame,
 ) -> Result<u64, BevyRenderError> {
+    let Some(readiness) = world.get_resource::<RenderReadinessBridge3d>() else {
+        return Err(BevyRenderError::RendererNotInstalled);
+    };
+    if !readiness.gpu_backed {
+        return Err(BevyRenderError::GpuRendererUnavailable);
+    }
     let Some(mut queue) = world.get_resource_mut::<BevyResolvedFrameQueue>() else {
         return Err(BevyRenderError::RendererNotInstalled);
     };
@@ -1049,7 +1134,25 @@ struct PuzzleRendererCamera;
 #[derive(Component)]
 struct PuzzleRendererLight;
 
-#[derive(Resource, Default)]
+#[derive(Component, Clone, Copy, Debug, ExtractComponent)]
+struct FrameBankGeneration3d {
+    generation: u64,
+    render_layer: usize,
+}
+
+#[derive(Component, Clone, Copy, Debug, ExtractComponent)]
+struct CameraPublication3d {
+    generation: u64,
+    render_layer: usize,
+}
+
+#[derive(Component, Clone, Copy, Debug, ExtractComponent)]
+struct StagingPublication3d {
+    generation: u64,
+    render_layer: usize,
+}
+
+#[derive(Clone, Resource, Default)]
 pub struct BevyResolvedFrameQueue {
     next_generation: u64,
     registry: BevyViewRegistry,
@@ -1085,6 +1188,26 @@ impl BevyResolvedFrameQueue {
         view: PuzzleBevy3dView,
         frame: PreparedBevyFrame,
     ) -> Result<u64, BevyRenderError> {
+        self.submit_prepared_with_group(view_id, view, frame, None)
+    }
+
+    pub fn submit_prepared_in_group(
+        &mut self,
+        view_id: PuzzleBevyViewId,
+        view: PuzzleBevy3dView,
+        frame: PreparedBevyFrame,
+        publication_group: BevyPublicationGroupId,
+    ) -> Result<u64, BevyRenderError> {
+        self.submit_prepared_with_group(view_id, view, frame, Some(publication_group))
+    }
+
+    fn submit_prepared_with_group(
+        &mut self,
+        view_id: PuzzleBevyViewId,
+        view: PuzzleBevy3dView,
+        frame: PreparedBevyFrame,
+        publication_group: Option<BevyPublicationGroupId>,
+    ) -> Result<u64, BevyRenderError> {
         view_id.validate()?;
         view_id.validate_dimension(PuzzleBevyViewDimension::ThreeD)?;
         view.framebuffer.validate()?;
@@ -1108,6 +1231,7 @@ impl BevyResolvedFrameQueue {
                 camera_order,
                 view,
                 frame,
+                publication_group,
             }),
         );
         Ok(generation)
@@ -1132,6 +1256,7 @@ impl BevyResolvedFrameQueue {
     }
 }
 
+#[derive(Clone)]
 struct SubmittedFrame {
     generation: u64,
     view_id: PuzzleBevyViewId,
@@ -1139,33 +1264,138 @@ struct SubmittedFrame {
     camera_order: isize,
     view: PuzzleBevy3dView,
     frame: PreparedBevyFrame,
+    publication_group: Option<BevyPublicationGroupId>,
 }
 
+#[derive(Clone)]
 enum PendingViewChange {
     Submit(SubmittedFrame),
     Remove,
 }
 
+#[derive(Clone, Default)]
+struct GpuDependencies3d {
+    meshes: HashSet<AssetId<Mesh>>,
+    materials: HashSet<AssetId<StandardMaterial>>,
+    target: ReadinessTarget3d,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+enum ReadinessTarget3d {
+    #[default]
+    Assets,
+    FrameBank {
+        expected_entities: usize,
+        render_layer: usize,
+    },
+    PublicCamera {
+        render_layer: usize,
+    },
+}
+
+#[derive(Default)]
+struct RenderReadinessState3d {
+    requested: HashMap<u64, GpuDependencies3d>,
+    ready: HashSet<u64>,
+}
+
+#[derive(Resource, Clone)]
+struct RenderReadinessBridge3d {
+    gpu_backed: bool,
+    state: Arc<Mutex<RenderReadinessState3d>>,
+}
+
+impl RenderReadinessBridge3d {
+    fn new(gpu_backed: bool) -> Self {
+        Self {
+            gpu_backed,
+            state: Arc::new(Mutex::new(RenderReadinessState3d::default())),
+        }
+    }
+
+    fn request(&self, generation: u64, dependencies: GpuDependencies3d) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("3D render readiness lock poisoned");
+        state.ready.remove(&generation);
+        state.requested.insert(generation, dependencies);
+    }
+
+    fn cancel(&self, generation: u64) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("3D render readiness lock poisoned");
+        state.requested.remove(&generation);
+        state.ready.remove(&generation);
+    }
+
+    fn take_ready(&self) -> HashSet<u64> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("3D render readiness lock poisoned");
+        std::mem::take(&mut state.ready)
+    }
+}
+
+#[derive(Resource, Default)]
+struct StagedFrameState3d {
+    views: HashMap<PuzzleBevyViewId, SubmittedFrame>,
+}
+
 #[derive(Resource)]
 struct BevyRenderAssets {
+    // Render-world extraction can outlive the main-world entity update that
+    // stopped using an asset. Strong handles therefore live with the player
+    // app and are released when that app is dropped.
     cube: Handle<Mesh>,
     materials: HashMap<MaterialKey, Handle<StandardMaterial>>,
     line_meshes: HashMap<LineGeometryKey3d, Handle<Mesh>>,
     line_materials: HashMap<MaterialKey, Handle<StandardMaterial>>,
 }
 
-#[derive(Resource)]
-struct RenderedViewState {
+struct RenderedBankState {
     generation: u64,
     entities: HashMap<PreparedVoxelKey, Entity>,
     line_entities: HashMap<PreparedLineMesh3dKey, Entity>,
-    material_keys: HashSet<MaterialKey>,
-    line_mesh_keys: HashSet<LineGeometryKey3d>,
-    line_material_keys: HashSet<MaterialKey>,
     bounds: PreparedBounds,
     camera: Entity,
     light: Entity,
     render_layer: usize,
+}
+
+enum PublicationPhase3d {
+    Idle,
+    Building {
+        bank: usize,
+        generation: u64,
+        view: PuzzleBevy3dView,
+        camera_order: isize,
+        publication_group: Option<BevyPublicationGroupId>,
+    },
+    AwaitingGroup {
+        bank: usize,
+        generation: u64,
+        view: PuzzleBevy3dView,
+        camera_order: isize,
+        publication_group: BevyPublicationGroupId,
+    },
+    Switching {
+        bank: usize,
+        generation: u64,
+        publication_group: Option<BevyPublicationGroupId>,
+    },
+}
+
+#[derive(Resource)]
+struct RenderedViewState {
+    visible_bank: usize,
+    banks: [Option<RenderedBankState>; 2],
+    phase: PublicationPhase3d,
+    staging_target: Handle<Image>,
+    staging_target_size: UVec2,
 }
 
 #[derive(Resource, Default)]
@@ -1211,6 +1441,123 @@ fn setup_renderer(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     });
 }
 
+#[allow(clippy::too_many_arguments)]
+fn acknowledge_ready_frames_3d(
+    meshes: Res<RenderAssets<RenderMesh>>,
+    materials: Res<ErasedRenderAssets<PreparedMaterial>>,
+    mesh_instances: Res<RenderMeshInstances>,
+    material_instances: Res<RenderMaterialInstances>,
+    specialized_pipelines: Res<SpecializedMaterialPipelineCache>,
+    pipeline_cache: Res<PipelineCache>,
+    readiness: Res<RenderReadinessBridge3d>,
+    frame_entities: Query<(&MainEntity, &FrameBankGeneration3d)>,
+    public_cameras: Query<(&CameraPublication3d, &RenderLayers, &ExtractedCamera)>,
+    staging_cameras: Query<(
+        &StagingPublication3d,
+        &RenderLayers,
+        &ExtractedCamera,
+        &ExtractedView,
+        &RenderVisibleEntities,
+    )>,
+) {
+    let mut state = readiness
+        .state
+        .lock()
+        .expect("3D render readiness lock poisoned");
+    let ready = state
+        .requested
+        .iter()
+        .filter_map(|(generation, dependencies)| {
+            let assets_ready = dependencies
+                .meshes
+                .iter()
+                .all(|id| meshes.get(*id).is_some())
+                && dependencies
+                    .materials
+                    .iter()
+                    .all(|id| materials.get(*id).is_some());
+            let target_ready = match dependencies.target {
+                ReadinessTarget3d::Assets => true,
+                ReadinessTarget3d::FrameBank {
+                    expected_entities,
+                    render_layer,
+                } => {
+                    let bank_entities = frame_entities
+                        .iter()
+                        .filter_map(|(main_entity, marker)| {
+                            (marker.render_layer == render_layer)
+                                .then_some((*main_entity, marker.generation))
+                        })
+                        .collect::<Vec<_>>();
+                    let bank_complete = bank_entities.len() == expected_entities
+                        && bank_entities
+                            .iter()
+                            .all(|(_, entity_generation)| entity_generation == generation);
+                    let staging_ready =
+                        staging_cameras
+                            .iter()
+                            .any(|(marker, layers, extracted, view, visible)| {
+                                if marker.generation != *generation
+                                    || marker.render_layer != render_layer
+                                    || !layers.iter().eq(std::iter::once(render_layer))
+                                    || !matches!(
+                                        extracted.target,
+                                        Some(bevy::camera::NormalizedRenderTarget::Image(_))
+                                    )
+                                {
+                                    return false;
+                                }
+                                let visible_entities = visible
+                                    .get::<Mesh3d>()
+                                    .into_iter()
+                                    .flat_map(|entities| {
+                                        entities.iter_visible().map(|(_, main)| *main)
+                                    })
+                                    .collect::<Vec<_>>();
+                                if visible_entities.len() != expected_entities {
+                                    return false;
+                                }
+                                let Some(view_pipelines) =
+                                    specialized_pipelines.get(&view.retained_view_entity)
+                                else {
+                                    return expected_entities == 0;
+                                };
+                                visible_entities.iter().all(|main_entity| {
+                                    bank_entities
+                                        .iter()
+                                        .any(|(bank_entity, _)| bank_entity == main_entity)
+                                        && mesh_instances
+                                            .render_mesh_queue_data(*main_entity)
+                                            .is_some()
+                                        && material_instances.instances.contains_key(main_entity)
+                                        && view_pipelines.get(main_entity).is_some_and(|pipeline| {
+                                            pipeline_cache.get_render_pipeline(*pipeline).is_some()
+                                        })
+                                })
+                            });
+                    bank_complete && staging_ready
+                }
+                ReadinessTarget3d::PublicCamera { render_layer } => {
+                    public_cameras.iter().any(|(marker, layers, extracted)| {
+                        marker.generation == *generation
+                            && marker.render_layer == render_layer
+                            && layers.iter().eq(std::iter::once(render_layer))
+                            && matches!(
+                                extracted.target,
+                                Some(bevy::camera::NormalizedRenderTarget::Window(_))
+                            )
+                    })
+                }
+            };
+            (assets_ready && target_ready).then_some(*generation)
+        })
+        .collect::<Vec<_>>();
+    for generation in ready {
+        state.requested.remove(&generation);
+        state.ready.insert(generation);
+    }
+}
+
 fn lighting_transform(lighting: &PuzzleBevyLighting) -> Transform {
     let yaw = lighting.yaw_degrees.to_radians();
     let pitch = lighting.pitch_degrees.to_radians();
@@ -1225,194 +1572,434 @@ fn lighting_transform(lighting: &PuzzleBevyLighting) -> Transform {
 fn apply_pending_frame(
     mut commands: Commands,
     mut queue: ResMut<BevyResolvedFrameQueue>,
+    mut published: ResMut<BevyPublishedViewFrames3d>,
+    mut publication_groups: ResMut<BevyPublicationGroups>,
+    mut staged: ResMut<StagedFrameState3d>,
     mut state: ResMut<RenderedFrameState>,
+    readiness: Res<RenderReadinessBridge3d>,
     mut render_assets: ResMut<BevyRenderAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    if queue.pending.is_empty() {
+    if !readiness.gpu_backed {
         return;
     }
+    let ready_generations = readiness.take_ready();
     let pending = std::mem::take(&mut queue.pending);
+
+    let mut removals = Vec::new();
+    let mut submissions = Vec::new();
     for (view_id, change) in pending {
         match change {
-            PendingViewChange::Remove => {
-                if let Some(view) = state.views.remove(&view_id) {
-                    for entity in view.entities.into_values() {
-                        commands.entity(entity).despawn();
-                    }
-                    for entity in view.line_entities.into_values() {
-                        commands.entity(entity).despawn();
-                    }
-                    commands.entity(view.camera).despawn();
-                    commands.entity(view.light).despawn();
-                }
-                queue.registry.finish_removal(&view_id);
-            }
-            PendingViewChange::Submit(submitted) => {
-                let render_layers = RenderLayers::none().with(submitted.render_layer);
-                let mut view = state.views.remove(&view_id).unwrap_or_else(|| {
-                    let camera = commands
-                        .spawn((
-                            Camera3d::default(),
-                            PuzzleRendererCamera,
-                            PuzzleBevyRenderView {
-                                id: submitted.view_id.clone(),
-                            },
-                            render_layers.clone(),
-                        ))
-                        .id();
-                    let light = commands
-                        .spawn((
-                            PuzzleRendererLight,
-                            PuzzleBevyRenderView {
-                                id: submitted.view_id.clone(),
-                            },
-                            render_layers.clone(),
-                        ))
-                        .id();
-                    RenderedViewState {
-                        generation: 0,
-                        entities: HashMap::new(),
-                        line_entities: HashMap::new(),
-                        material_keys: HashSet::new(),
-                        line_mesh_keys: HashSet::new(),
-                        line_material_keys: HashSet::new(),
-                        bounds: submitted.frame.bounds,
-                        camera,
-                        light,
-                        render_layer: submitted.render_layer,
-                    }
-                });
-                debug_assert_eq!(view.render_layer, submitted.render_layer);
-                let mut retained = HashMap::with_capacity(submitted.frame.voxels.len());
-                let mut used_materials = HashSet::new();
-                for voxel in submitted.frame.voxels {
-                    let entity = view
-                        .entities
-                        .remove(&voxel.key)
-                        .unwrap_or_else(|| commands.spawn_empty().id());
-                    let material_key =
-                        MaterialKey::new(voxel.color, submitted.view.render_settings.shade);
-                    let material = material_for(
-                        material_key,
-                        voxel.color,
-                        submitted.view.render_settings.shade,
-                        &mut render_assets,
-                        &mut materials,
-                    );
-                    used_materials.insert(material_key);
-                    commands.entity(entity).insert((
-                        Mesh3d(render_assets.cube.clone()),
-                        MeshMaterial3d(material),
-                        voxel.transform,
-                        render_layers.clone(),
-                        PuzzleBevyRenderView {
-                            id: submitted.view_id.clone(),
-                        },
-                        PuzzleVoxel {
-                            key: voxel.key,
-                            render_order: voxel.render_order,
-                            object_ids: voxel.object_ids,
-                        },
-                    ));
-                    retained.insert(voxel.key, entity);
-                }
-                for entity in view.entities.drain().map(|(_, entity)| entity) {
-                    commands.entity(entity).despawn();
-                }
-                let mut retained_lines = HashMap::with_capacity(submitted.frame.line_meshes.len());
-                let mut used_line_meshes = HashSet::new();
-                let mut used_line_materials = HashSet::new();
-                for prepared in submitted.frame.line_meshes {
-                    let entity = view
-                        .line_entities
-                        .remove(&prepared.key)
-                        .unwrap_or_else(|| commands.spawn_empty().id());
-                    let mesh = line_mesh_for(&prepared.mesh, &mut render_assets, &mut meshes);
-                    let material_key = MaterialKey::new(prepared.color, false);
-                    let material = line_material_for(
-                        material_key,
-                        prepared.color,
-                        &mut render_assets,
-                        &mut materials,
-                    );
-                    used_line_meshes.insert(prepared.mesh.key.clone());
-                    used_line_materials.insert(material_key);
-                    commands.entity(entity).insert((
-                        Mesh3d(mesh),
-                        MeshMaterial3d(material),
-                        Transform::IDENTITY,
-                        render_layers.clone(),
-                        PuzzleBevyRenderView {
-                            id: submitted.view_id.clone(),
-                        },
-                        PuzzleLineMesh3d { key: prepared.key },
-                    ));
-                    retained_lines.insert(prepared.key, entity);
-                }
-                for entity in view.line_entities.drain().map(|(_, entity)| entity) {
-                    commands.entity(entity).despawn();
-                }
-                view.entities = retained;
-                view.line_entities = retained_lines;
-                view.material_keys = used_materials;
-                view.line_mesh_keys = used_line_meshes;
-                view.line_material_keys = used_line_materials;
-                view.bounds = submitted.frame.bounds;
-                view.generation = submitted.generation;
-                update_3d_view_entities(
-                    &mut commands,
-                    view.camera,
-                    view.light,
-                    &submitted.view,
-                    submitted.camera_order,
-                    view.bounds,
-                    render_layers,
-                );
-                state.views.insert(view_id, view);
-            }
+            PendingViewChange::Remove => removals.push(view_id),
+            PendingViewChange::Submit(submitted) => submissions.push((view_id, submitted)),
         }
     }
-    let used_materials = state
-        .views
-        .values()
-        .flat_map(|view| view.material_keys.iter().copied())
-        .collect::<HashSet<_>>();
-    render_assets.materials.retain(|key, handle| {
-        if used_materials.contains(key) {
-            true
-        } else {
-            materials.remove(handle.id());
-            false
+
+    for view_id in removals {
+        if let Some(replaced) = staged.views.remove(&view_id) {
+            readiness.cancel(replaced.generation);
         }
-    });
-    let used_line_meshes = state
-        .views
-        .values()
-        .flat_map(|view| view.line_mesh_keys.iter().cloned())
-        .collect::<HashSet<_>>();
-    render_assets.line_meshes.retain(|key, handle| {
-        if used_line_meshes.contains(key) {
-            true
-        } else {
-            meshes.remove(handle.id());
-            false
+        if let Some(view) = state.views.remove(&view_id) {
+            match view.phase {
+                PublicationPhase3d::Building { generation, .. }
+                | PublicationPhase3d::AwaitingGroup { generation, .. }
+                | PublicationPhase3d::Switching { generation, .. } => readiness.cancel(generation),
+                PublicationPhase3d::Idle => {}
+            }
+            for bank in view.banks.into_iter().flatten() {
+                despawn_3d_bank(&mut commands, bank);
+            }
+            images.remove(view.staging_target.id());
         }
-    });
-    let used_line_materials = state
-        .views
-        .values()
-        .flat_map(|view| view.line_material_keys.iter().copied())
-        .collect::<HashSet<_>>();
-    render_assets.line_materials.retain(|key, handle| {
-        if used_line_materials.contains(key) {
-            true
-        } else {
-            materials.remove(handle.id());
-            false
+        queue.registry.finish_removal(&view_id);
+    }
+
+    let view_ids = state.views.keys().cloned().collect::<Vec<_>>();
+    for view_id in view_ids {
+        let view = state
+            .views
+            .get_mut(&view_id)
+            .expect("selected 3D view must exist");
+        let phase = std::mem::replace(&mut view.phase, PublicationPhase3d::Idle);
+        view.phase = match phase {
+            PublicationPhase3d::Building {
+                bank,
+                generation,
+                view: settings,
+                camera_order,
+                publication_group,
+            } if ready_generations.contains(&generation) => {
+                if let Some(publication_group) = publication_group {
+                    publication_groups
+                        .mark_ready(BevyPublicationMember {
+                            view_id: view_id.clone(),
+                            generation,
+                        })
+                        .expect("grouped 3D candidate must belong to a registered publication");
+                    PublicationPhase3d::AwaitingGroup {
+                        bank,
+                        generation,
+                        view: settings,
+                        camera_order,
+                        publication_group,
+                    }
+                } else {
+                    publish_candidate_3d(
+                        &mut commands,
+                        &readiness,
+                        view,
+                        bank,
+                        generation,
+                        &settings,
+                        camera_order,
+                    );
+                    PublicationPhase3d::Switching {
+                        bank,
+                        generation,
+                        publication_group: None,
+                    }
+                }
+            }
+            PublicationPhase3d::AwaitingGroup {
+                bank,
+                generation,
+                view: settings,
+                camera_order,
+                publication_group,
+            } if publication_groups.is_authorized(&BevyPublicationMember {
+                view_id: view_id.clone(),
+                generation,
+            }) =>
+            {
+                publish_candidate_3d(
+                    &mut commands,
+                    &readiness,
+                    view,
+                    bank,
+                    generation,
+                    &settings,
+                    camera_order,
+                );
+                PublicationPhase3d::Switching {
+                    bank,
+                    generation,
+                    publication_group: Some(publication_group),
+                }
+            }
+            PublicationPhase3d::Switching {
+                bank,
+                generation,
+                publication_group,
+            } if ready_generations.contains(&generation) => {
+                view.visible_bank = bank;
+                if publication_group.is_some() {
+                    publication_groups
+                        .mark_published(BevyPublicationMember {
+                            view_id: view_id.clone(),
+                            generation,
+                        })
+                        .expect("grouped 3D publication must complete its registered member");
+                }
+                published.acknowledge(view_id.clone(), generation);
+                PublicationPhase3d::Idle
+            }
+            other => other,
+        };
+    }
+
+    for (view_id, submitted) in submissions {
+        if let Some(replaced) = staged.views.insert(view_id, submitted) {
+            readiness.cancel(replaced.generation);
         }
-    });
+    }
+
+    let mut candidates = staged.views.keys().cloned().collect::<Vec<_>>();
+    candidates.sort();
+    for view_id in candidates {
+        let can_build = state
+            .views
+            .get(&view_id)
+            .is_none_or(|view| matches!(view.phase, PublicationPhase3d::Idle));
+        if !can_build {
+            continue;
+        }
+        let submitted = staged
+            .views
+            .remove(&view_id)
+            .expect("selected staged 3D candidate must exist");
+        let view = state.views.entry(view_id).or_insert_with(|| {
+            let target_size = submitted.view.framebuffer.physical_size;
+            RenderedViewState {
+                visible_bank: 1,
+                banks: [None, None],
+                phase: PublicationPhase3d::Idle,
+                staging_target: staging_target_3d(&mut images, target_size),
+                staging_target_size: target_size,
+            }
+        });
+        let candidate_index = 1 - view.visible_bank;
+        let candidate_layer = submitted.render_layer + candidate_index;
+        if let Some(inactive) = view.banks[candidate_index].take() {
+            debug_assert!(inactive.generation < submitted.generation);
+            debug_assert_eq!(inactive.render_layer, candidate_layer);
+            despawn_3d_bank(&mut commands, inactive);
+        }
+        resize_staging_target_3d(
+            &mut view.staging_target,
+            &mut view.staging_target_size,
+            submitted.view.framebuffer.physical_size,
+            &mut images,
+        );
+        let (bank, mut dependencies) = materialize_3d_bank(
+            &mut commands,
+            &submitted,
+            candidate_layer,
+            view.staging_target.clone(),
+            &mut render_assets,
+            &mut materials,
+            &mut meshes,
+        );
+        let expected_entities = bank.entities.len() + bank.line_entities.len();
+        dependencies.target = ReadinessTarget3d::FrameBank {
+            expected_entities,
+            render_layer: candidate_layer,
+        };
+        readiness.request(submitted.generation, dependencies);
+        view.banks[candidate_index] = Some(bank);
+        view.phase = PublicationPhase3d::Building {
+            bank: candidate_index,
+            generation: submitted.generation,
+            view: submitted.view,
+            camera_order: submitted.camera_order,
+            publication_group: submitted.publication_group,
+        };
+    }
+}
+
+fn publish_candidate_3d(
+    commands: &mut Commands,
+    readiness: &RenderReadinessBridge3d,
+    view: &RenderedViewState,
+    bank: usize,
+    generation: u64,
+    settings: &PuzzleBevy3dView,
+    camera_order: isize,
+) {
+    let candidate = view.banks[bank]
+        .as_ref()
+        .expect("ready 3D candidate bank must exist");
+    configure_public_camera_3d(commands, candidate, settings, camera_order, generation);
+    if let Some(visible) = view.banks[view.visible_bank].as_ref() {
+        commands.entity(visible.camera).insert(Camera {
+            is_active: false,
+            ..default()
+        });
+    }
+    readiness.request(
+        generation,
+        GpuDependencies3d {
+            target: ReadinessTarget3d::PublicCamera {
+                render_layer: candidate.render_layer,
+            },
+            ..default()
+        },
+    );
+}
+
+fn staging_target_3d(images: &mut Assets<Image>, size: UVec2) -> Handle<Image> {
+    images.add(Image::new_target_texture(
+        size.x,
+        size.y,
+        TextureFormat::Rgba8UnormSrgb,
+        None,
+    ))
+}
+
+fn resize_staging_target_3d(
+    target: &mut Handle<Image>,
+    current_size: &mut UVec2,
+    desired_size: UVec2,
+    images: &mut Assets<Image>,
+) {
+    if *current_size == desired_size {
+        return;
+    }
+    let replacement = staging_target_3d(images, desired_size);
+    let retired = std::mem::replace(target, replacement);
+    images.remove(retired.id());
+    *current_size = desired_size;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_3d_bank(
+    commands: &mut Commands,
+    submitted: &SubmittedFrame,
+    render_layer: usize,
+    staging_target: Handle<Image>,
+    render_assets: &mut BevyRenderAssets,
+    materials: &mut Assets<StandardMaterial>,
+    meshes: &mut Assets<Mesh>,
+) -> (RenderedBankState, GpuDependencies3d) {
+    let render_layers = RenderLayers::none().with(render_layer);
+    let camera = commands
+        .spawn((
+            Camera3d::default(),
+            PuzzleRendererCamera,
+            PuzzleBevyRenderView {
+                id: submitted.view_id.clone(),
+            },
+            render_layers.clone(),
+        ))
+        .id();
+    let light = commands
+        .spawn((
+            PuzzleRendererLight,
+            PuzzleBevyRenderView {
+                id: submitted.view_id.clone(),
+            },
+            render_layers.clone(),
+        ))
+        .id();
+    let mut dependencies = GpuDependencies3d::default();
+    if !submitted.frame.voxels.is_empty() {
+        dependencies.meshes.insert(render_assets.cube.id());
+    }
+    let mut entities = HashMap::with_capacity(submitted.frame.voxels.len());
+    for voxel in &submitted.frame.voxels {
+        let entity = commands.spawn_empty().id();
+        let material_key = MaterialKey::new(voxel.color, submitted.view.render_settings.shade);
+        let material = material_for(
+            material_key,
+            voxel.color,
+            submitted.view.render_settings.shade,
+            render_assets,
+            materials,
+        );
+        dependencies.materials.insert(material.id());
+        let transform = voxel.transform;
+        commands.entity(entity).insert((
+            Mesh3d(render_assets.cube.clone()),
+            MeshMaterial3d(material),
+            transform,
+            GlobalTransform::from(transform),
+            render_layers.clone(),
+            PuzzleBevyRenderView {
+                id: submitted.view_id.clone(),
+            },
+            PuzzleVoxel {
+                key: voxel.key,
+                render_order: voxel.render_order,
+                object_ids: voxel.object_ids.clone(),
+            },
+            FrameBankGeneration3d {
+                generation: submitted.generation,
+                render_layer,
+            },
+            Visibility::Inherited,
+        ));
+        entities.insert(voxel.key, entity);
+    }
+    let mut line_entities = HashMap::with_capacity(submitted.frame.line_meshes.len());
+    for prepared in &submitted.frame.line_meshes {
+        let entity = commands.spawn_empty().id();
+        let mesh = line_mesh_for(&prepared.mesh, render_assets, meshes);
+        let material_key = MaterialKey::new(prepared.color, false);
+        let material = line_material_for(material_key, prepared.color, render_assets, materials);
+        dependencies.meshes.insert(mesh.id());
+        dependencies.materials.insert(material.id());
+        commands.entity(entity).insert((
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            render_layers.clone(),
+            PuzzleBevyRenderView {
+                id: submitted.view_id.clone(),
+            },
+            PuzzleLineMesh3d { key: prepared.key },
+            FrameBankGeneration3d {
+                generation: submitted.generation,
+                render_layer,
+            },
+            Visibility::Inherited,
+        ));
+        line_entities.insert(prepared.key, entity);
+    }
+    let bounds = submitted.frame.bounds;
+    let mut staging_view = submitted.view.clone();
+    staging_view.active = true;
+    staging_view.framebuffer.physical_position = UVec2::ZERO;
+    update_3d_view_entities(
+        commands,
+        camera,
+        light,
+        &staging_view,
+        submitted.camera_order,
+        bounds,
+        render_layers,
+        true,
+    );
+    commands.entity(camera).insert((
+        RenderTarget::Image(staging_target.into()),
+        StagingPublication3d {
+            generation: submitted.generation,
+            render_layer,
+        },
+    ));
+    (
+        RenderedBankState {
+            generation: submitted.generation,
+            entities,
+            line_entities,
+            bounds,
+            camera,
+            light,
+            render_layer,
+        },
+        dependencies,
+    )
+}
+
+fn configure_public_camera_3d(
+    commands: &mut Commands,
+    bank: &RenderedBankState,
+    view: &PuzzleBevy3dView,
+    camera_order: isize,
+    generation: u64,
+) {
+    update_3d_view_entities(
+        commands,
+        bank.camera,
+        bank.light,
+        view,
+        camera_order,
+        bank.bounds,
+        RenderLayers::none().with(bank.render_layer),
+        view.active,
+    );
+    commands.entity(bank.camera).insert((
+        RenderTarget::Window(WindowRef::Primary),
+        CameraPublication3d {
+            generation,
+            render_layer: bank.render_layer,
+        },
+    ));
+    commands
+        .entity(bank.camera)
+        .remove::<StagingPublication3d>();
+}
+
+fn despawn_3d_bank(commands: &mut Commands, bank: RenderedBankState) {
+    for entity in bank.entities.into_values() {
+        commands.entity(entity).despawn();
+    }
+    for entity in bank.line_entities.into_values() {
+        commands.entity(entity).despawn();
+    }
+    commands.entity(bank.camera).despawn();
+    commands.entity(bank.light).despawn();
 }
 
 fn line_mesh_for(
@@ -1464,6 +2051,7 @@ fn update_3d_view_entities(
     camera_order: isize,
     bounds: PreparedBounds,
     render_layers: RenderLayers,
+    active: bool,
 ) {
     let geometry = puzzle_bevy_camera_geometry(&view.camera, bounds);
     let radius = geometry.radius;
@@ -1482,7 +2070,7 @@ fn update_3d_view_entities(
     let mut camera_commands = commands.entity(camera_entity);
     camera_commands.insert((
         Camera {
-            is_active: view.active,
+            is_active: active,
             order: camera_order,
             viewport: Some(view.framebuffer.viewport()),
             clear_color: ClearColorConfig::Custom(view.clear_color.clone()),
@@ -1490,6 +2078,7 @@ fn update_3d_view_entities(
         },
         projection,
         transform,
+        GlobalTransform::from(transform),
         AmbientLight {
             color: view.lighting.color.clone(),
             brightness: 400.0 * view.lighting.ambient,
@@ -1507,6 +2096,7 @@ fn update_3d_view_entities(
     } else {
         camera_commands.remove::<pixelate::PuzzlePixelatePostProcess>();
     }
+    let light_transform = lighting_transform(&view.lighting);
     commands.entity(light_entity).insert((
         DirectionalLight {
             shadow_maps_enabled: view.shadows_enabled,
@@ -1514,7 +2104,8 @@ fn update_3d_view_entities(
             illuminance: 2_000.0 * view.lighting.intensity,
             ..default()
         },
-        lighting_transform(&view.lighting),
+        light_transform,
+        GlobalTransform::from(light_transform),
         render_layers,
     ));
 }
@@ -1696,16 +2287,81 @@ fn frame_bounds(voxels: &[PreparedVoxel], lines: &[PreparedLineMesh3d]) -> Prepa
 
 #[cfg(test)]
 mod tests {
+    use bevy::{
+        log::LogPlugin,
+        render::RenderPlugin,
+        window::{ExitCondition, WindowPlugin},
+        winit::WinitPlugin,
+    };
     use puzzle_runtime_contract::{
         RuntimeResolvedCompositionGroup, RuntimeResolvedFitMode, RuntimeResolvedLineDepth3d,
         RuntimeResolvedLineSegment3d, RuntimeResolvedLineStyle, RuntimeResolvedPlayback,
         RuntimeResolvedRenderBatch, RuntimeResolvedRenderBatchContent,
-        RuntimeResolvedRenderInstance, RuntimeResolvedRenderScene, RuntimeResolvedVisualClip,
-        RuntimeResolvedVisualFrame, RuntimeResolvedVisualLayout, RuntimeResolvedVoxel,
-        RuntimeVisualComposition,
+        RuntimeResolvedRenderBatchIdentity, RuntimeResolvedRenderInstance,
+        RuntimeResolvedRenderScene, RuntimeResolvedVisualClip, RuntimeResolvedVisualFrame,
+        RuntimeResolvedVisualLayout, RuntimeResolvedVoxel, RuntimeVisualComposition,
     };
 
     use super::*;
+
+    const GPU_3D_PREREQUISITE_DIAGNOSTIC: &str = "3D publication contract test requires a native wgpu adapter; no compatible adapter was available";
+
+    fn require_gpu_3d_adapter() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let options = wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::from_env().unwrap_or_default(),
+            force_fallback_adapter: std::env::var("WGPU_FORCE_FALLBACK_ADAPTER")
+                .is_ok_and(|value| !(value.is_empty() || value == "0" || value == "false")),
+            compatible_surface: None,
+        };
+        bevy::tasks::block_on(instance.request_adapter(&options))
+            .unwrap_or_else(|_| panic!("{GPU_3D_PREREQUISITE_DIAGNOSTIC}"));
+    }
+
+    fn gpu_3d_app() -> App {
+        require_gpu_3d_adapter();
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        visible: false,
+                        ..default()
+                    }),
+                    exit_condition: ExitCondition::DontExit,
+                    ..default()
+                })
+                .set(RenderPlugin {
+                    synchronous_pipeline_compilation: true,
+                    ..default()
+                })
+                .disable::<LogPlugin>()
+                .disable::<WinitPlugin>(),
+        )
+        .add_plugins(PuzzleBevy3dPlugin);
+        app.finish();
+        app.cleanup();
+        app
+    }
+
+    fn await_3d_publications(app: &mut App, generations: &[u64]) {
+        let mut remaining = generations.iter().copied().collect::<HashSet<_>>();
+        for _ in 0..120 {
+            app.update();
+            for frame in app
+                .world_mut()
+                .resource_mut::<BevyPublishedViewFrames3d>()
+                .drain()
+            {
+                remaining.remove(&frame.generation);
+            }
+            if remaining.is_empty() {
+                return;
+            }
+        }
+        panic!("3D generations {remaining:?} did not receive render-world publication acks");
+    }
 
     fn color(red: f64, green: f64, blue: f64, alpha: f64) -> RuntimeLinearRgba {
         RuntimeLinearRgba {
@@ -1731,9 +2387,13 @@ mod tests {
         rgba: RuntimeLinearRgba,
     ) -> RuntimeResolvedRenderBatch {
         RuntimeResolvedRenderBatch {
-            render_order,
-            object_ids: vec![render_order as u16],
-            cell,
+            identity: RuntimeResolvedRenderBatchIdentity {
+                render_order,
+                object_ids: vec![render_order as u16],
+                visual_ids: vec!["test".to_string()],
+                instance_ids: vec![render_order + 1],
+                cell,
+            },
             transform: identity(),
             opacity: 1.0,
             pixel_geometry: None,
@@ -1776,7 +2436,7 @@ mod tests {
         let frame = RuntimeResolvedRenderFrame {
             batches: vec![voxel_batch(7, [2, 3, 4], color(1.0, 0.0, 0.0, 1.0))],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
 
         let prepared = prepare_resolved_frame(&frame).unwrap();
@@ -1800,7 +2460,7 @@ mod tests {
                 voxel_batch(2, [0, 0, 0], color(0.0, 0.0, 1.0, 1.0)),
             ],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
 
         let prepared = prepare_resolved_frame(&frame).unwrap();
@@ -1814,9 +2474,13 @@ mod tests {
     fn rejects_pixel_content_at_the_3d_backend_boundary() {
         let frame = RuntimeResolvedRenderFrame {
             batches: vec![RuntimeResolvedRenderBatch {
-                render_order: 0,
-                object_ids: Vec::new(),
-                cell: [0, 0, 0],
+                identity: RuntimeResolvedRenderBatchIdentity {
+                    render_order: 0,
+                    object_ids: Vec::new(),
+                    visual_ids: vec!["test".to_string()],
+                    instance_ids: vec![1],
+                    cell: [0, 0, 0],
+                },
                 transform: identity(),
                 opacity: 1.0,
                 pixel_geometry: None,
@@ -1827,7 +2491,7 @@ mod tests {
                 },
             }],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
 
         assert_eq!(
@@ -1846,7 +2510,7 @@ mod tests {
         let frame = RuntimeResolvedRenderFrame {
             batches: vec![batch],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
 
         assert_eq!(
@@ -1874,7 +2538,7 @@ mod tests {
         let frame = RuntimeResolvedRenderFrame {
             batches: Vec::new(),
             decorations: vec![line_decoration_3d()],
-            continue_animation: false,
+            next_sample: None,
         };
 
         let prepared = prepare_resolved_frame(&frame).unwrap();
@@ -1894,19 +2558,18 @@ mod tests {
 
     #[test]
     fn line_list_entities_are_unlit_depth_tested_view_local_geometry() {
-        let mut app = App::new();
-        app.init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
-            .add_plugins(PuzzleBevy3dPlugin);
+        let mut app = gpu_3d_app();
         let frame = RuntimeResolvedRenderFrame {
             batches: Vec::new(),
             decorations: vec![line_decoration_3d()],
-            continue_animation: false,
+            next_sample: None,
         };
         let left = PuzzleBevyViewId::three_d("left", "main");
         let right = PuzzleBevyViewId::three_d("right", "main");
-        submit_resolved_frame(app.world_mut(), left.clone(), view_3d(UVec2::ZERO), &frame).unwrap();
-        submit_resolved_frame(
+        let left_generation =
+            submit_resolved_frame(app.world_mut(), left.clone(), view_3d(UVec2::ZERO), &frame)
+                .unwrap();
+        let right_generation = submit_resolved_frame(
             app.world_mut(),
             right.clone(),
             PuzzleBevy3dView {
@@ -1916,7 +2579,7 @@ mod tests {
             &frame,
         )
         .unwrap();
-        app.update();
+        await_3d_publications(&mut app, &[left_generation, right_generation]);
 
         let lines = app
             .world_mut()
@@ -1975,7 +2638,7 @@ mod tests {
         let frame = RuntimeResolvedRenderFrame {
             batches: Vec::new(),
             decorations: vec![decoration],
-            continue_animation: false,
+            next_sample: None,
         };
         assert_eq!(
             prepare_resolved_frame(&frame).unwrap_err(),
@@ -1995,24 +2658,21 @@ mod tests {
             pitch_degrees: 60.0,
             color: Color::linear_rgb(1.0, 0.5, 0.25),
         };
-        let mut app = App::new();
-        app.init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
-            .add_plugins(PuzzleBevy3dPlugin);
+        let mut app = gpu_3d_app();
         let mut view = view_3d(UVec2::ZERO);
         view.lighting = lighting.clone();
-        submit_resolved_frame(
+        let generation = submit_resolved_frame(
             app.world_mut(),
             PuzzleBevyViewId::three_d("board", "main"),
             view,
             &RuntimeResolvedRenderFrame {
                 batches: vec![voxel_batch(1, [0, 0, 0], color(1.0, 1.0, 1.0, 1.0))],
                 decorations: Vec::new(),
-                continue_animation: false,
+                next_sample: None,
             },
         )
         .unwrap();
-        app.update();
+        await_3d_publications(&mut app, &[generation]);
 
         let global = app.world().resource::<GlobalAmbientLight>();
         assert_eq!(global.brightness, GlobalAmbientLight::NONE.brightness);
@@ -2059,14 +2719,11 @@ mod tests {
 
     #[test]
     fn keyed_views_apply_shading_without_cross_view_material_reuse() {
-        let mut app = App::new();
-        app.init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
-            .add_plugins(PuzzleBevy3dPlugin);
+        let mut app = gpu_3d_app();
         let frame = RuntimeResolvedRenderFrame {
             batches: vec![voxel_batch(1, [0, 0, 0], color(0.25, 0.5, 0.75, 1.0))],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
         let shaded_id = PuzzleBevyViewId::three_d("shaded", "main");
         let unshaded_id = PuzzleBevyViewId::three_d("unshaded", "main");
@@ -2075,9 +2732,11 @@ mod tests {
         let mut unshaded = view_3d(UVec2::new(320, 0));
         unshaded.order = 1;
         unshaded.render_settings.shade = false;
-        submit_resolved_frame(app.world_mut(), shaded_id.clone(), shaded, &frame).unwrap();
-        submit_resolved_frame(app.world_mut(), unshaded_id.clone(), unshaded, &frame).unwrap();
-        app.update();
+        let shaded_generation =
+            submit_resolved_frame(app.world_mut(), shaded_id.clone(), shaded, &frame).unwrap();
+        let unshaded_generation =
+            submit_resolved_frame(app.world_mut(), unshaded_id.clone(), unshaded, &frame).unwrap();
+        await_3d_publications(&mut app, &[shaded_generation, unshaded_generation]);
 
         let handles = app
             .world_mut()
@@ -2097,15 +2756,12 @@ mod tests {
 
     #[test]
     fn pixelate_settings_are_view_owned_and_removed_when_disabled() {
-        let mut app = App::new();
-        app.init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
-            .add_plugins(PuzzleBevy3dPlugin);
+        let mut app = gpu_3d_app();
         let view_id = PuzzleBevyViewId::three_d("board", "main");
         let frame = RuntimeResolvedRenderFrame {
             batches: Vec::new(),
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
         let mut view = view_3d(UVec2::new(13, 29));
         view.framebuffer.physical_size = UVec2::new(321, 243);
@@ -2114,29 +2770,36 @@ mod tests {
             scale: 6,
             smoothing: false,
         };
-        submit_resolved_frame(app.world_mut(), view_id.clone(), view, &frame).unwrap();
-        app.update();
+        let enabled_generation =
+            submit_resolved_frame(app.world_mut(), view_id.clone(), view, &frame).unwrap();
+        await_3d_publications(&mut app, &[enabled_generation]);
 
         let settings = app
             .world_mut()
-            .query_filtered::<&pixelate::PuzzlePixelatePostProcess, With<PuzzleRendererCamera>>()
-            .single(app.world())
+            .query_filtered::<
+                (&Camera, &pixelate::PuzzlePixelatePostProcess),
+                With<PuzzleRendererCamera>,
+            >()
+            .iter(app.world())
+            .find_map(|(camera, settings)| camera.is_active.then_some(settings))
             .unwrap();
         assert_eq!(settings.viewport, Vec4::new(13.0, 29.0, 321.0, 243.0));
         assert_eq!(settings.parameters, Vec4::new(6.0, 0.0, 0.0, 0.0));
 
         let mut disabled = view_3d(UVec2::new(13, 29));
         disabled.framebuffer.physical_size = UVec2::new(321, 243);
-        submit_resolved_frame(app.world_mut(), view_id, disabled, &frame).unwrap();
-        app.update();
-        assert!(
-            app.world_mut()
-                .query_filtered::<&pixelate::PuzzlePixelatePostProcess, With<PuzzleRendererCamera>>(
-                )
-                .iter(app.world())
-                .next()
-                .is_none()
-        );
+        let disabled_generation =
+            submit_resolved_frame(app.world_mut(), view_id, disabled, &frame).unwrap();
+        await_3d_publications(&mut app, &[disabled_generation]);
+        let active_pixelate = app
+            .world_mut()
+            .query_filtered::<
+                (&Camera, Option<&pixelate::PuzzlePixelatePostProcess>),
+                With<PuzzleRendererCamera>,
+            >()
+            .iter(app.world())
+            .find_map(|(camera, settings)| camera.is_active.then_some(settings));
+        assert!(matches!(active_pixelate, Some(None)));
     }
 
     #[test]
@@ -2151,12 +2814,32 @@ mod tests {
                 &RuntimeResolvedRenderFrame {
                     batches: Vec::new(),
                     decorations: Vec::new(),
-                    continue_animation: false,
+                    next_sample: None,
                 },
             )
             .unwrap_err();
         assert_eq!(error, BevyRenderError::InvalidPixelate { field: "scale" });
         assert!(queue.pending.is_empty());
+    }
+
+    #[test]
+    fn public_3d_submission_rejects_a_missing_render_sub_app() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_plugins(PuzzleBevy3dPlugin);
+        let error = submit_resolved_frame(
+            app.world_mut(),
+            PuzzleBevyViewId::three_d("board", "main"),
+            view_3d(UVec2::ZERO),
+            &RuntimeResolvedRenderFrame {
+                batches: Vec::new(),
+                decorations: Vec::new(),
+                next_sample: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, BevyRenderError::GpuRendererUnavailable);
     }
 
     #[test]
@@ -2171,7 +2854,7 @@ mod tests {
                 &RuntimeResolvedRenderFrame {
                     batches: Vec::new(),
                     decorations: Vec::new(),
-                    continue_animation: false,
+                    next_sample: None,
                 },
             )
             .unwrap_err();
@@ -2218,99 +2901,178 @@ mod tests {
     }
 
     #[test]
-    fn ecs_sync_reuses_stable_voxel_entities_and_removes_stale_ones() {
-        let mut app = App::new();
-        app.init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
-            .add_plugins(PuzzleBevy3dPlugin::default());
+    fn three_d_publication_keeps_the_visible_bank_complete_across_cardinality_changes() {
+        let mut app = gpu_3d_app();
         let first = RuntimeResolvedRenderFrame {
             batches: vec![voxel_batch(1, [0, 0, 0], color(1.0, 0.0, 0.0, 1.0))],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
         let view_id = PuzzleBevyViewId::three_d("board", "main");
-        submit_resolved_frame(
+        let first_generation = submit_resolved_frame(
             app.world_mut(),
             view_id.clone(),
             view_3d(UVec2::ZERO),
             &first,
         )
         .unwrap();
-        app.update();
+        await_3d_publications(&mut app, &[first_generation]);
         let first_entity = app
             .world_mut()
             .query_filtered::<Entity, With<PuzzleVoxel>>()
             .single(app.world())
             .unwrap();
+        let first_layer = app
+            .world_mut()
+            .query_filtered::<(&Camera, &RenderLayers), With<PuzzleRendererCamera>>()
+            .iter(app.world())
+            .find_map(|(camera, layers)| camera.is_active.then(|| layers.iter().next().unwrap()))
+            .unwrap();
 
         let second = RuntimeResolvedRenderFrame {
-            batches: vec![voxel_batch(1, [0, 0, 0], color(0.0, 1.0, 0.0, 1.0))],
+            batches: vec![
+                voxel_batch(1, [1, 0, 0], color(0.0, 1.0, 0.0, 1.0)),
+                voxel_batch(2, [2, 0, 0], color(0.0, 0.0, 1.0, 1.0)),
+            ],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
-        submit_resolved_frame(
+        let second_generation = submit_resolved_frame(
             app.world_mut(),
             view_id.clone(),
             view_3d(UVec2::ZERO),
             &second,
         )
         .unwrap();
+        assert_eq!(
+            app.world()
+                .get::<Transform>(first_entity)
+                .unwrap()
+                .translation,
+            Vec3::ZERO,
+            "queueing a candidate must leave the published bank untouched"
+        );
         app.update();
-        let second_entity = app
+        let staging_targets = app
             .world_mut()
-            .query_filtered::<Entity, With<PuzzleVoxel>>()
-            .single(app.world())
+            .query_filtered::<
+                (&Camera, &RenderTarget, &StagingPublication3d),
+                With<PuzzleRendererCamera>,
+            >()
+            .iter(app.world())
+            .filter(|(camera, target, marker)| {
+                camera.is_active
+                    && marker.generation == second_generation
+                    && matches!(target, RenderTarget::Image(_))
+            })
+            .count();
+        assert_eq!(
+            staging_targets, 1,
+            "the candidate must be rendered only through its private image target"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<
+                    (&Camera, &RenderTarget, &RenderLayers),
+                    With<PuzzleRendererCamera>,
+                >()
+                .iter(app.world())
+                .find_map(|(camera, target, layers)| {
+                    (camera.is_active && matches!(target, RenderTarget::Window(_)))
+                        .then(|| layers.iter().next().unwrap())
+                }),
+            Some(first_layer),
+            "private candidate construction must not switch the public camera"
+        );
+        await_3d_publications(&mut app, &[second_generation]);
+        let second_layer = app
+            .world_mut()
+            .query_filtered::<(&Camera, &RenderLayers), With<PuzzleRendererCamera>>()
+            .iter(app.world())
+            .find_map(|(camera, layers)| camera.is_active.then(|| layers.iter().next().unwrap()))
             .unwrap();
-        assert_eq!(first_entity, second_entity);
-        assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 1);
+        assert_ne!(first_layer, second_layer);
+        assert!(app.world().get_entity(first_entity).is_ok());
+        let visible_positions = app
+            .world_mut()
+            .query::<(&Transform, &RenderLayers, &PuzzleVoxel)>()
+            .iter(app.world())
+            .filter_map(|(transform, layers, _)| {
+                layers
+                    .iter()
+                    .any(|layer| layer == second_layer)
+                    .then_some(transform.translation)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(visible_positions.len(), 2);
+        assert!(visible_positions.contains(&Vec3::new(1.0, 0.0, 0.0)));
+        assert!(visible_positions.contains(&Vec3::new(2.0, 0.0, 0.0)));
+        assert_eq!(
+            app.world().resource::<BevyRenderAssets>().materials.len(),
+            3,
+            "app-lifetime cache must keep the prior extracted material alive"
+        );
 
-        submit_resolved_frame(
+        let empty_generation = submit_resolved_frame(
             app.world_mut(),
             view_id,
             view_3d(UVec2::ZERO),
             &RuntimeResolvedRenderFrame {
                 batches: Vec::new(),
                 decorations: Vec::new(),
-                continue_animation: false,
+                next_sample: None,
             },
         )
         .unwrap();
-        app.update();
-        assert!(
+        await_3d_publications(&mut app, &[empty_generation]);
+        let empty_layer = app
+            .world_mut()
+            .query_filtered::<(&Camera, &RenderLayers), With<PuzzleRendererCamera>>()
+            .iter(app.world())
+            .find_map(|(camera, layers)| camera.is_active.then(|| layers.iter().next().unwrap()))
+            .unwrap();
+        assert_eq!(empty_layer, first_layer);
+        assert_eq!(
             app.world_mut()
-                .query_filtered::<Entity, With<PuzzleVoxel>>()
+                .query::<(&RenderLayers, &PuzzleVoxel)>()
                 .iter(app.world())
-                .next()
-                .is_none()
+                .filter(|(layers, _)| layers.iter().any(|layer| layer == empty_layer))
+                .count(),
+            0
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<&Camera, With<PuzzleRendererCamera>>()
+                .iter(app.world())
+                .filter(|camera| camera.is_active)
+                .count(),
+            1
         );
     }
 
     #[test]
     fn keyed_views_own_disjoint_cameras_entities_and_removal() {
-        let mut app = App::new();
-        app.init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
-            .add_plugins(PuzzleBevy3dPlugin::default());
+        let mut app = gpu_3d_app();
         let left = PuzzleBevyViewId::three_d("left-board", "main");
         let right = PuzzleBevyViewId::three_d("right-board", "main");
         let left_frame = RuntimeResolvedRenderFrame {
             batches: vec![voxel_batch(1, [0, 0, 0], color(1.0, 0.0, 0.0, 1.0))],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
         let right_frame = RuntimeResolvedRenderFrame {
             batches: vec![voxel_batch(1, [0, 0, 0], color(0.0, 0.0, 1.0, 1.0))],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
-        submit_resolved_frame(
+        let left_generation = submit_resolved_frame(
             app.world_mut(),
             left.clone(),
             view_3d(UVec2::ZERO),
             &left_frame,
         )
         .unwrap();
-        submit_resolved_frame(
+        let right_generation = submit_resolved_frame(
             app.world_mut(),
             right.clone(),
             PuzzleBevy3dView {
@@ -2320,7 +3082,7 @@ mod tests {
             &right_frame,
         )
         .unwrap();
-        app.update();
+        await_3d_publications(&mut app, &[left_generation, right_generation]);
 
         let right_entity = app
             .world_mut()
@@ -2400,7 +3162,11 @@ mod tests {
             remaining_lights,
             vec![PuzzleBevyViewId::three_d("right-board", "main")]
         );
-        assert_eq!(app.world().resource::<Assets<StandardMaterial>>().len(), 1);
+        assert_eq!(
+            app.world().resource::<BevyRenderAssets>().materials.len(),
+            2,
+            "removing a view must not invalidate render-world asset handles"
+        );
         assert_eq!(
             remove_render_view(app.world_mut(), &left),
             Err(BevyRenderError::UnknownView { view_id: left })
@@ -2409,10 +3175,7 @@ mod tests {
 
     #[test]
     fn keyed_views_preserve_distinct_directional_and_ambient_lighting() {
-        let mut app = App::new();
-        app.init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
-            .add_plugins(PuzzleBevy3dPlugin);
+        let mut app = gpu_3d_app();
         let left_id = PuzzleBevyViewId::three_d("left-board", "main");
         let right_id = PuzzleBevyViewId::three_d("right-board", "main");
         let mut left_view = view_3d(UVec2::ZERO);
@@ -2435,11 +3198,13 @@ mod tests {
         let frame = RuntimeResolvedRenderFrame {
             batches: vec![voxel_batch(1, [0, 0, 0], color(1.0, 1.0, 1.0, 1.0))],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
-        submit_resolved_frame(app.world_mut(), left_id.clone(), left_view, &frame).unwrap();
-        submit_resolved_frame(app.world_mut(), right_id.clone(), right_view, &frame).unwrap();
-        app.update();
+        let left_generation =
+            submit_resolved_frame(app.world_mut(), left_id.clone(), left_view, &frame).unwrap();
+        let right_generation =
+            submit_resolved_frame(app.world_mut(), right_id.clone(), right_view, &frame).unwrap();
+        await_3d_publications(&mut app, &[left_generation, right_generation]);
 
         let lights = app
             .world_mut()
@@ -2479,7 +3244,7 @@ mod tests {
         let frame = RuntimeResolvedRenderFrame {
             batches: Vec::new(),
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
         let wrong_dimension = PuzzleBevyViewId::two_d("board", "main");
         assert_eq!(
@@ -2514,7 +3279,7 @@ mod tests {
         let frame = RuntimeResolvedRenderFrame {
             batches: Vec::new(),
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
         let outgoing = PuzzleBevyViewId::three_d("outgoing", "main");
         let incoming = PuzzleBevyViewId::three_d("incoming", "main");
@@ -2542,7 +3307,7 @@ mod tests {
         let frame = RuntimeResolvedRenderFrame {
             batches: Vec::new(),
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
         let left = PuzzleBevyViewId::three_d("left", "main");
         let right = PuzzleBevyViewId::three_d("right", "main");

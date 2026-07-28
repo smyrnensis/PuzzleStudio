@@ -2,8 +2,8 @@ use std::collections::{BTreeSet, HashSet};
 
 use bevy::prelude::{Vec2, Vec3};
 use puzzle_bevy_renderer::{
-    PreparedBounds, PuzzleBevyCamera, puzzle_bevy_camera_ray, puzzle_bevy_point_to_visual,
-    puzzle_visual_point_to_bevy,
+    PreparedBounds, PuzzleBevyCamera, fitted_2d_content_rect, puzzle_bevy_camera_ray,
+    puzzle_bevy_point_to_visual, puzzle_visual_point_to_bevy,
 };
 use puzzle_editor_preview_contract::{
     EditorAuthoringHitTarget, EditorAuthoringInteraction, EditorAuthoringPresentation,
@@ -42,6 +42,7 @@ enum EditorAuthoringFrameGeometry {
     Grid2d {
         origin: [i32; 2],
         size: [u16; 2],
+        content_rect: bevy::math::Rect,
         occupied: HashSet<[u16; 2]>,
     },
     Grid3d {
@@ -427,6 +428,13 @@ impl EditorAuthoringConfiguration {
             geometry: EditorAuthoringFrameGeometry::Grid2d {
                 origin: scene.view.origin,
                 size: scene.view.size,
+                content_rect: fitted_2d_content_rect(
+                    css_size,
+                    Vec2::new(f32::from(scene.view.size[0]), f32::from(scene.view.size[1])),
+                )
+                .ok_or_else(|| {
+                    "editor grid2d content rectangle must be finite and non-empty".to_string()
+                })?,
                 occupied,
             },
         })
@@ -470,13 +478,23 @@ impl EditorAuthoringFrame {
         {
             return Err("editor pointer coordinates are outside the committed surface".to_string());
         }
-        let normalized = Vec2::new(point_css.x / self.css_size.x, point_css.y / self.css_size.y);
         match &self.geometry {
             EditorAuthoringFrameGeometry::Grid2d {
                 origin,
                 size,
+                content_rect,
                 occupied,
-            } => hit_grid2d(normalized, *origin, *size, occupied, self.interaction),
+            } => {
+                if point_css.x < content_rect.min.x
+                    || point_css.y < content_rect.min.y
+                    || point_css.x >= content_rect.max.x
+                    || point_css.y >= content_rect.max.y
+                {
+                    return Ok(None);
+                }
+                let normalized = (point_css - content_rect.min) / content_rect.size();
+                hit_grid2d(normalized, *origin, *size, occupied, self.interaction)
+            }
             EditorAuthoringFrameGeometry::Grid3d {
                 camera,
                 bounds,
@@ -484,6 +502,8 @@ impl EditorAuthoringFrame {
                 occupied,
                 slice_z,
             } => {
+                let normalized =
+                    Vec2::new(point_css.x / self.css_size.x, point_css.y / self.css_size.y);
                 let ray = puzzle_bevy_camera_ray(
                     camera,
                     *bounds,
@@ -1218,6 +1238,7 @@ mod tests {
             geometry: EditorAuthoringFrameGeometry::Grid2d {
                 origin: [0, 0],
                 size: [2, 1],
+                content_rect: bevy::math::Rect::from_corners(Vec2::ZERO, Vec2::new(200.0, 100.0)),
                 occupied: HashSet::new(),
             },
         };
@@ -1253,6 +1274,7 @@ mod tests {
             geometry: EditorAuthoringFrameGeometry::Grid2d {
                 origin: [0, 0],
                 size: [2, 1],
+                content_rect: bevy::math::Rect::from_corners(Vec2::ZERO, Vec2::new(200.0, 100.0)),
                 occupied: HashSet::from([[0, 0]]),
             },
         };
@@ -1271,6 +1293,38 @@ mod tests {
                 .hit_for_gesture("stage", 9, point, EditorPointerGesture::Release)
                 .unwrap(),
             expected
+        );
+    }
+
+    #[test]
+    fn grid2d_hit_uses_the_same_fitted_content_rect_as_rendering() {
+        let frame = EditorAuthoringFrame {
+            surface_id: "stage".to_string(),
+            revision: 9,
+            css_size: Vec2::new(200.0, 100.0),
+            interaction: EditorAuthoringInteraction::Paint {
+                operation: EditorPaintOperation::Replace,
+            },
+            geometry: EditorAuthoringFrameGeometry::Grid2d {
+                origin: [0, 0],
+                size: [2, 2],
+                content_rect: bevy::math::Rect::from_corners(
+                    Vec2::new(50.0, 0.0),
+                    Vec2::new(150.0, 100.0),
+                ),
+                occupied: HashSet::from([[0, 0]]),
+            },
+        };
+
+        assert_eq!(frame.hit("stage", 9, Vec2::new(25.0, 50.0)).unwrap(), None);
+        assert_eq!(
+            frame.hit("stage", 9, Vec2::new(75.0, 25.0)).unwrap(),
+            Some(EditorAuthoringHitTarget::Cell {
+                position: EditorGridPosition::Grid2d(puzzle_authoring::EditorDraftPosition2d {
+                    x: 0,
+                    y: 0
+                })
+            })
         );
     }
 

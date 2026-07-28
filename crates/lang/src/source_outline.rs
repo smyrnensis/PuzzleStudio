@@ -198,6 +198,45 @@ Light
     }
 
     #[test]
+    fn bare_shape_reference_stays_inside_its_visual_outline_item() {
+        let source = r##"
+puzzle board {
+layers {
+marker = BlackMarker2
+}
+visuals {
+shapes {
+shape_WaterMarker {
+0
+}
+}
+
+BlackMarker2
+#0000 #000
+shape_WaterMarker
+}
+rules {
+}
+levels {
+legend {
+. = empty
+B = BlackMarker2
+}
+level "one"
+B
+}
+}
+"##;
+        let visual_labels = source_outline(source)
+            .into_iter()
+            .filter(|item| item.kind == "visual")
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
+
+        assert_eq!(visual_labels, vec!["BlackMarker2".to_string()]);
+    }
+
+    #[test]
     fn author_chosen_shape_names_never_become_outline_kinds() {
         let source = r#"
 shapes {

@@ -1688,9 +1688,9 @@ assets {
     fn suggests_theme_presets_after_theme_assignment_value() {
         let source = r#"
 const title = complete_theme_presets
-theme = "p
+theme = p
 "#;
-        let cursor = source.find("theme = \"p").unwrap() + "theme = \"p".len();
+        let cursor = source.find("theme = p").unwrap() + "theme = p".len();
         let list = suggest_source_completions(&source, cursor);
 
         assert!(
@@ -1702,6 +1702,39 @@ theme = "p
             list.items
                 .iter()
                 .any(|item| item.label == "paper" && item.kind == CompletionKind::Theme)
+        );
+    }
+
+    #[test]
+    fn suggests_owner_scoped_busy_input_enum_values() {
+        let source = r#"
+const title = complete_input_policy
+input_buffer {
+busy_input = q
+}
+"#;
+        let cursor = source.find("busy_input = q").unwrap() + "busy_input = q".len();
+        let list = suggest_source_completions(source, cursor);
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "queue" && item.kind == CompletionKind::Literal)
+        );
+
+        let source = r#"
+const title = complete_presentation_policy
+input_buffer {
+busy_input = queue
+queued_presentation = a
+}
+"#;
+        let cursor =
+            source.find("queued_presentation = a").unwrap() + "queued_presentation = a".len();
+        let list = suggest_source_completions(source, cursor);
+        assert!(
+            list.items
+                .iter()
+                .any(|item| item.label == "accelerate" && item.kind == CompletionKind::Literal)
         );
     }
 
@@ -1727,7 +1760,6 @@ unknown = li
         let source = r#"
 const title = complete_theme_settings
 theme {
-preset = "clean"
 
 }
 "#;
@@ -1747,11 +1779,7 @@ preset = "clean"
                 item.label == "accent_color" && item.kind == CompletionKind::Setting
             })
         );
-        assert!(
-            list.items
-                .iter()
-                .any(|item| { item.label == "preset" && item.kind == CompletionKind::Setting })
-        );
+        assert!(list.items.iter().all(|item| item.label != "preset"));
         assert!(list.items.iter().all(|item| item.label != "ui_font"));
         assert!(list.items.iter().all(|item| item.label != "board_color"));
     }
