@@ -12,7 +12,7 @@ fn planar_visual_pattern(visual: &VisualDef) -> &Vec<String> {
 fn workspace_presentation_manifest_uses_compiled_language_facts() {
     let source = r##"
 const title = workspace_manifest
-theme = "pixel"
+theme = pixel
 
 assets {
 "audio/click.wav"
@@ -1221,6 +1221,78 @@ rules {
 }
 
 #[test]
+fn model_sounds_reject_unknown_move_sfx_even_without_a_matching_rule() {
+    let source = r#"
+const title = unknown_move_sound
+
+puzzle sokoban {
+sounds {
+move Player -> sfx missing
+}
+
+layers {
+actor = Player
+}
+
+levels {
+legend {
+P = Player
+}
+
+level "start"
+P
+}
+
+rules {
+
+}
+}
+"#;
+
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("unknown sfx sound reference `missing`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn model_sounds_reject_unknown_operation_sfx() {
+    let source = r#"
+const title = unknown_operation_sound
+
+puzzle sokoban {
+sounds {
+undo -> sfx missing
+}
+
+layers {
+actor = Player
+}
+
+levels {
+legend {
+P = Player
+}
+
+level "start"
+P
+}
+
+rules {
+
+}
+}
+"#;
+
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("unknown sfx sound reference `missing`"),
+        "{error}"
+    );
+}
+
+#[test]
 fn model_sounds_report_selector_errors_at_sound_entry() {
     let source = r#"
 const title = bad_model_sound_selector
@@ -1283,6 +1355,10 @@ audio {
 fn scene_lifecycle_blocks_lower_to_lifecycle_transitions() {
     let source = r#"
 const title = scene_lifecycle_blocks
+
+sounds {
+music music_name { seed = 123456 }
+}
 
 puzzle default {
 layers {
@@ -1634,13 +1710,14 @@ P
 
 #[test]
 fn top_level_input_buffer_parses_to_game_settings() {
-    let loaded = parse_game(
-        r#"
+    fn parse_policy(settings: &str) -> Result<BusyInputPolicy, DiagnosticReport> {
+        let source = [
+            r#"
 const title = input_buffer_fixture
 input_buffer {
-queue_during_wait = false
-fast_forward_wait = true
-min_wait = 75ms
+"#,
+            settings,
+            r#"
 }
 
 puzzle main {
@@ -1660,12 +1737,56 @@ P
 }
 }
 "#,
-    )
-    .unwrap();
+        ]
+        .concat();
+        parse_game(&source).map(|loaded| loaded.input_buffer.busy_input)
+    }
 
-    assert!(!loaded.input_buffer.queue_during_wait);
-    assert!(loaded.input_buffer.fast_forward_wait);
-    assert_eq!(loaded.input_buffer.min_wait_ms, 75);
+    assert_eq!(
+        parse_policy("busy_input = reject").unwrap(),
+        BusyInputPolicy::Reject
+    );
+    assert_eq!(
+        parse_policy("busy_input = queue\nqueued_presentation = preserve").unwrap(),
+        BusyInputPolicy::Queue
+    );
+    assert_eq!(
+        parse_policy("busy_input = queue\nqueued_presentation = skip").unwrap(),
+        BusyInputPolicy::Skip
+    );
+    assert_eq!(
+        parse_policy("busy_input = queue\nqueued_presentation = accelerate\nmin_wait = 75ms")
+            .unwrap(),
+        BusyInputPolicy::Accelerate { min_wait_ms: 75 }
+    );
+    assert_eq!(
+        parse_policy("busy_input = queue\nqueued_presentation = accelerate").unwrap(),
+        BusyInputPolicy::Accelerate { min_wait_ms: 50 }
+    );
+    assert!(
+        parse_policy("busy_input = reject\nqueued_presentation = skip")
+            .unwrap_err()
+            .to_string()
+            .contains("does not accept queued_presentation")
+    );
+    assert!(
+        parse_policy("busy_input = queue")
+            .unwrap_err()
+            .to_string()
+            .contains("requires queued_presentation")
+    );
+    assert!(
+        parse_policy("busy_input = queue\nqueued_presentation = preserve\nmin_wait = 10ms")
+            .unwrap_err()
+            .to_string()
+            .contains("valid only")
+    );
+    assert!(
+        parse_policy("busy_input = \"reject\"")
+            .unwrap_err()
+            .to_string()
+            .contains("busy_input must be one of")
+    );
 }
 
 #[test]
@@ -1959,6 +2080,10 @@ fn puzzle_presentation_effect_parses_commands() {
 const title = puzzle_presentation_effect
 default_wait_time = 350ms
 
+sounds {
+sfx pushed { seed = pushed01; type = hit }
+}
+
 puzzle default {
 layers {
 __legacy_layer_0 = Player
@@ -2003,6 +2128,113 @@ P
             RuleEffect::Runtime(RuntimeEffect::Wait { milliseconds }) if *milliseconds == 25
         )
     }));
+}
+
+#[test]
+fn parse_game_rejects_unknown_rule_sfx_before_runtime() {
+    let source = r#"
+const title = unknown_rule_sfx
+
+sounds {
+sfx known { seed = known01; type = hit }
+}
+
+puzzle default {
+layers {
+base = Player
+}
+legend P = Player
+rules {
+[ Player ] -> [ Player ] sfx missing
+}
+level "start" {
+P
+}
+}
+"#;
+
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("unknown sfx sound reference `missing`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn parse_game_rejects_scene_music_reference_to_same_named_sfx() {
+    let source = r#"
+const title = cross_kind_scene_sound
+
+sounds {
+sfx ambience { seed = ambience01; type = hit }
+}
+
+puzzle default {
+layers {
+base = Player
+}
+legend P = Player
+rules {
+
+}
+level "start" {
+P
+}
+}
+
+scene title {
+layout {
+button "Play" -> goto playing play_music ambience
+}
+}
+
+scene playing {
+layout {
+puzzle board = default
+}
+}
+"#;
+
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("unknown music sound reference `ambience`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn parse_game_rejects_unknown_music_control_in_scene_lifecycle() {
+    let source = r#"
+const title = unknown_scene_music_control
+
+puzzle default {
+layers {
+base = Player
+}
+legend P = Player
+rules {
+
+}
+level "start" {
+P
+}
+}
+
+scene playing {
+layout {
+puzzle board = default
+}
+on_scene_start {
+stop_music missing
+}
+}
+"#;
+
+    let error = parse_game(source).unwrap_err().to_string();
+    assert!(
+        error.contains("unknown music sound reference `missing`"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -2255,6 +2487,10 @@ P
 fn routine_can_group_effect_statements() {
     let source = r#"
 const title = routine_effect_statements
+
+sounds {
+sfx tick { seed = tick01; type = hit }
+}
 
 puzzle default {
 layers {
@@ -6603,8 +6839,8 @@ P
 }
 }
 
+theme = clean
 theme {
-preset = "clean"
 accent_color = #2f7ebc
 }
 "##;
@@ -6673,8 +6909,8 @@ fn theme_background_alias_sets_background_variable() {
     let loaded = parse_game(
         r##"
 const title = themed
+theme = puzzlescript
 theme {
-preset = "puzzlescript"
 background = #123456
 }
 puzzle default {
@@ -6739,9 +6975,9 @@ LEVELS
     )
     .unwrap();
 
-    assert!(
-        canonical.contains("theme {\npreset = \"puzzlescript\"\nbackground_color = #123456\n}")
-    );
+    assert!(canonical.contains("theme = puzzlescript"));
+    assert!(canonical.contains("background_color = #123456"));
+    assert!(!canonical.contains("preset ="));
 }
 
 #[test]
@@ -6749,7 +6985,7 @@ fn theme_preset_can_be_selected_without_block() {
     let loaded = parse_game(
         r##"
 const title = themed
-theme = "pixel"
+theme = pixel
 puzzle default {
 layers {
 actor = Player
@@ -6774,12 +7010,53 @@ P
 }
 
 #[test]
+fn theme_preset_rejects_quoted_values_and_duplicate_declarations() {
+    let quoted = parse_game(
+        r#"
+const title = themed
+theme = "pixel"
+"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(quoted.contains("theme must be one of"));
+
+    let duplicate = parse_game(
+        r#"
+const title = themed
+theme = pixel
+theme = clean
+"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(duplicate.contains("theme preset must be declared only once"));
+}
+
+#[test]
+fn theme_block_rejects_preset_assignment() {
+    let error = parse_game(
+        r#"
+const title = themed
+theme {
+preset = clean
+}
+"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("theme setting must be one of: accent_color, background_color, text_color")
+    );
+}
+
+#[test]
 fn theme_setting_accepts_assignment_syntax() {
     let loaded = parse_game(
         r##"
 const title = themed
+theme = clean
 theme {
-preset = "clean"
 background_color = #123456
 accent_color = #abcdef
 }
@@ -6828,8 +7105,8 @@ fn theme_rejects_non_public_color_settings() {
     let error = parse_game(
         r##"
 const title = themed
+theme = clean
 theme {
-preset = "clean"
 board_color = #edf1f2
 }
 puzzle default {
@@ -6862,8 +7139,8 @@ fn theme_rejects_non_color_style_settings() {
     let error = parse_game(
         r##"
 const title = themed
+theme = clean
 theme {
-preset = "clean"
 ui_font = Inter
 }
 puzzle default {
@@ -6893,37 +7170,6 @@ P
             .to_string()
             .contains("theme setting must be one of: accent_color, background_color, text_color")
     );
-}
-
-#[test]
-fn theme_block_requires_quoted_preset_value() {
-    let error = parse_game(
-        r##"
-const title = themed
-theme {
-preset = pixel
-}
-puzzle default {
-layers {
-actor = Player
-}
-legend {
-. = empty
-P = Player
-}
-rules {
-[ Player ] -> [ Player ]
-}
-level "start" {
-P
-}
-}
-"##,
-    )
-    .unwrap_err()
-    .to_string();
-
-    assert!(error.contains("preset must be a quoted string"));
 }
 
 #[test]
@@ -10893,9 +11139,9 @@ level "start"
     let loaded = parse_game(source).unwrap();
     let expected = [
         ("Boundary-up", 0.0),
-        ("Boundary-right", -90.0),
-        ("Boundary-down", -180.0),
-        ("Boundary-left", 90.0),
+        ("Boundary-right", 90.0),
+        ("Boundary-down", 180.0),
+        ("Boundary-left", -90.0),
     ];
 
     for (name, degrees) in expected {
@@ -10921,6 +11167,121 @@ level "start"
             }]
         );
     }
+}
+
+#[test]
+fn visual_direction_rotation_derives_axis_and_angle_from_each_cartesian_plane() {
+    let catalog = Catalog::for_dimension(ModelDimension::Three);
+    let cases = [
+        ("xy_plane", "front", "right", [0.0, 0.0, 1.0], 90.0),
+        ("xz_plane", "up", "right", [0.0, 1.0, 0.0], -90.0),
+        ("xz_plane", "up", "down", [0.0, 1.0, 0.0], 180.0),
+        ("yz_plane", "up", "back", [1.0, 0.0, 0.0], 90.0),
+    ];
+
+    for (plane, from, to, axis, degrees) in cases {
+        let properties = [(
+            crate::visual_authoring::VisualPropertySyntax::Rotate {
+                space: crate::visual_authoring::VisualSpaceSyntax::World,
+                angle: plane.to_string(),
+                from: Some(from.to_string()),
+                axis: None,
+            },
+            format!("rotate {plane} from {from}"),
+        )];
+        let bindings = HashMap::from([(plane.to_string(), to.to_string())]);
+
+        assert_eq!(
+            eval_visual_transforms(&properties, &bindings, &catalog, &properties[0].1).unwrap(),
+            [VisualTransform::Rotate {
+                degrees,
+                axis,
+                space: VisualSpace::World,
+            }],
+            "{plane}: {from} -> {to}"
+        );
+    }
+}
+
+#[test]
+fn visual_entry_rotates_xz_plane_from_up() {
+    let source = r#"
+const title = xz_plane_visual_rotation
+
+puzzle cube {
+dimension = 3
+layers {
+actor = Arrow:xz_plane
+}
+visuals {
+Arrow:xz_plane {
+rotate xz_plane from up
+colors = #fff
+0
+}
+}
+rules {
+
+}
+levels {
+legend {
+. = empty
+}
+level "start"
+.
+}
+}
+"#;
+    let document = parse_game_for_path(source, "xz_plane_visual_rotation.puzzle").unwrap();
+    let Some(LoadedDocumentModel::Puzzle3d { game: loaded, .. }) = document.single_model() else {
+        panic!("expected one 3D puzzle model");
+    };
+    let expected = [
+        ("Arrow-up", 0.0),
+        ("Arrow-down", 180.0),
+        ("Arrow-left", 90.0),
+        ("Arrow-right", -90.0),
+    ];
+
+    for (name, degrees) in expected {
+        let visual = loaded
+            .visuals
+            .entries
+            .iter()
+            .find(|visual| visual.name == name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        assert_eq!(
+            visual.transforms,
+            [VisualTransform::Rotate {
+                degrees,
+                axis: [0.0, 1.0, 0.0],
+                space: VisualSpace::World,
+            }]
+        );
+    }
+}
+
+#[test]
+fn visual_direction_rotation_requires_an_axis_for_a_non_planar_set() {
+    let catalog = Catalog::for_dimension(ModelDimension::Three);
+    let properties = [(
+        crate::visual_authoring::VisualPropertySyntax::Rotate {
+            space: crate::visual_authoring::VisualSpaceSyntax::World,
+            angle: "directions".to_string(),
+            from: Some("up".to_string()),
+            axis: None,
+        },
+        "rotate directions from up".to_string(),
+    )];
+    let bindings = HashMap::from([("directions".to_string(), "right".to_string())]);
+
+    let error = eval_visual_transforms(&properties, &bindings, &catalog, &properties[0].1)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("must identify exactly one rotation plane"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -10971,7 +11332,7 @@ level "start"
     assert_eq!(
         boundary_right.transforms,
         [VisualTransform::Rotate {
-            degrees: -90.0,
+            degrees: 90.0,
             axis: [0.0, 0.0, 1.0],
             space: VisualSpace::World,
         }]
@@ -11025,7 +11386,7 @@ level "start"
     assert_eq!(
         boundary_right.transforms,
         [VisualTransform::Rotate {
-            degrees: -90.0,
+            degrees: 90.0,
             axis: [0.0, 0.0, 1.0],
             space: VisualSpace::World,
         }]
@@ -16118,7 +16479,7 @@ p
                 space: VisualSpace::World
             },
             VisualTransform::Rotate {
-                degrees: -90.0,
+                degrees: 90.0,
                 axis: [0.0, 0.0, 1.0],
                 space: VisualSpace::World
             },
@@ -16158,25 +16519,12 @@ p
                 space: VisualSpace::World
             },
             VisualTransform::Rotate {
-                degrees: -180.0,
+                degrees: 180.0,
                 axis: [0.0, 0.0, 1.0],
                 space: VisualSpace::World
             },
         ]
     );
-}
-
-#[test]
-fn visual_direction_minus_angle_matches_rotate_from_sugar() {
-    let bindings = HashMap::from([("directions".to_string(), "up".to_string())]);
-    let explicit =
-        eval_visual_angle_expr("directions - 90deg", &bindings, "rotate expression").unwrap();
-    let from_sugar = eval_visual_angle_expr("directions", &bindings, "rotate expression")
-        .unwrap()
-        .sub(eval_visual_angle_expr("up", &bindings, "rotate expression").unwrap());
-
-    assert_eq!(explicit, from_sugar);
-    assert_eq!(explicit, Rational::ZERO);
 }
 
 #[test]
@@ -17592,7 +17940,7 @@ empty .
 
 render {
 grid {
-type = "all_cells"
+type = all_cells
 }
 }
 
@@ -17621,7 +17969,7 @@ empty .
 
 render {
 grid {
-type = "occupied_cells"
+type = occupied_cells
 }
 }
 
@@ -18417,6 +18765,11 @@ P
 fn display_match_can_emit_sfx_without_rhs_block() {
     let source = r#"
 const title = display_match_sfx
+
+sounds {
+sfx x { seed = x01; type = hit }
+sfx y { seed = y01; type = hit }
+}
 
 puzzle default {
 layers {
@@ -19486,8 +19839,8 @@ default_wait_time = 100ms
 sounds {
   sfx push { seed = push01; type = jump }
 }
+theme = clean
 theme {
-preset = "clean"
   accent_color = #ff0000
 }
 assets {
@@ -19638,7 +19991,7 @@ fn theme_preset_statement_before_puzzle3_does_not_capture_model_block() {
     let document = super::parse_game_for_path(
         r#"
 const title = "Themed 3D"
-theme = "puzzlescript"
+theme = puzzlescript
 
 puzzle push3 {
   dimension = 3
@@ -19674,7 +20027,7 @@ levels demo of push3 {
 fn canonical_document_associates_resources_by_puzzle_owner() {
     let source = r#"
 const title = "Mixed Runtime"
-theme = "puzzlescript"
+theme = puzzlescript
 
 puzzle flat {
 layers {
@@ -20098,6 +20451,10 @@ fn puzzle3_fixture_serializes_shared_scene_effects() {
         r#"
 const title = "Shared Effects 3D"
 
+sounds {
+sfx click { seed = click01; type = hit }
+}
+
 puzzle demo {
 dimension = 3
 layers {
@@ -20278,6 +20635,10 @@ fn music_effect_in_puzzle_statement_lowers_to_rule_effect() {
     let loaded = super::parse_game2d(
         r#"
 const title = music_effect_in_puzzle_statement
+
+sounds {
+music locked_room { seed = 123456 }
+}
 
 puzzle main {
 layers {

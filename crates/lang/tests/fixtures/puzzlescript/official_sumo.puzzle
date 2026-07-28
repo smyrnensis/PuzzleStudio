@@ -18,7 +18,7 @@ start playing
 }
 }
 
-theme = "puzzlescript"
+theme = puzzlescript
 
 sounds {
 sfx sumo_move { seed = 48878907; type = puzzlescript }

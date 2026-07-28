@@ -40,8 +40,8 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         low_size - vec2(1.0),
     );
     let sample_pixel = viewport_origin + (low_pixel + vec2(0.5)) * viewport_size / low_size;
-    let smooth = textureSample(source_texture, source_sampler, sample_pixel / target_size);
+    let smooth_sample = textureSample(source_texture, source_sampler, sample_pixel / target_size);
     let nearest = textureLoad(source_texture, vec2<i32>(floor(sample_pixel)), 0);
-    let pixelated = select(nearest, smooth, settings.parameters.y >= 0.5);
+    let pixelated = select(nearest, smooth_sample, settings.parameters.y >= 0.5);
     return select(unchanged, pixelated, inside_viewport);
 }

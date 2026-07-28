@@ -17,6 +17,8 @@ mod web_audio;
 #[cfg(feature = "editor-debug")]
 pub use editor_authoring::EditorAuthoringFrame;
 
+#[cfg(target_arch = "wasm32")]
+use bevy::app::PluginGroup;
 use bevy::prelude::*;
 use bevy::{
     camera::{ClearColorConfig, visibility::RenderLayers},
@@ -34,11 +36,11 @@ use puzzle_audio::{
     CANONICAL_AUDIO_SAMPLE_RATE,
 };
 use puzzle_bevy_renderer::{
-    BevyRenderError, BevyResolvedFrameQueue, BevyResolvedFrameQueue2d, PuzzleBevy2dPlugin,
-    PuzzleBevy2dView, PuzzleBevy3dPlugin, PuzzleBevy3dRenderSettings, PuzzleBevy3dView,
-    PuzzleBevyCamera, PuzzleBevyFramebufferRect, PuzzleBevyLighting, PuzzleBevyPixelate,
-    PuzzleBevyRendererSystems, PuzzleBevyViewId, PuzzleCameraProjection, prepare_resolved_frame,
-    prepare_resolved_frame_2d,
+    BevyPublicationGroupId, BevyPublicationGroups, BevyPublicationMember, BevyRenderError,
+    BevyResolvedFrameQueue, BevyResolvedFrameQueue2d, PuzzleBevy2dPlugin, PuzzleBevy2dView,
+    PuzzleBevy3dPlugin, PuzzleBevy3dRenderSettings, PuzzleBevy3dView, PuzzleBevyCamera,
+    PuzzleBevyFramebufferRect, PuzzleBevyLighting, PuzzleBevyPixelate, PuzzleBevyRendererSystems,
+    PuzzleBevyViewId, PuzzleCameraProjection, prepare_resolved_frame, prepare_resolved_frame_2d,
 };
 #[cfg(feature = "editor-debug")]
 use puzzle_editor_preview_contract::{
@@ -54,17 +56,20 @@ use puzzle_runtime_contract::RuntimeProgressPersistenceOperation;
 #[cfg(feature = "editor-debug")]
 use puzzle_runtime_contract::RuntimeStateSnapshot;
 use puzzle_runtime_contract::{
-    RuntimeAnimationEvent, RuntimeKeyTrigger, RuntimeLinearRgba,
-    RuntimePresentationContinuationToken, RuntimePresentationEvent, RuntimeProgressSaveRequest,
-    RuntimePuzzle3CameraProjection, RuntimeResolvedRenderFrame, RuntimeResolvedRenderMoment,
+    RuntimeKeyTrigger, RuntimeLinearRgba, RuntimePreparedAnimationSet,
+    RuntimePresentationContinuationToken, RuntimePresentationEvent,
+    RuntimePresentationTransitionId, RuntimePresentationWait, RuntimeProgressSaveRequest,
+    RuntimePuzzle3CameraProjection, RuntimeResolvedNextSample, RuntimeResolvedRenderFrame,
     RuntimeSceneActionToken, RuntimeTheme, RuntimeUiTextStyle, RuntimeViewportSourceId,
     SessionAction, StandaloneProgressStorage,
 };
 use puzzle_scene::SceneTextRole;
 use puzzle_session_contract::{
-    RuntimeComponentPresentation, RuntimeRendererState, RuntimeResolvedSceneComponent,
-    RuntimeSessionSnapshot,
+    RuntimeBusyInputPolicy, RuntimeComponentPresentation, RuntimeRendererState,
+    RuntimeResolvedSceneComponent, RuntimeSessionSnapshot, RuntimeSurface,
 };
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 
 fn audio_frame(now_seconds: f64) -> u64 {
     (now_seconds.max(0.0) * f64::from(CANONICAL_AUDIO_SAMPLE_RATE))
@@ -277,10 +282,39 @@ struct HostViewport {
     source: RuntimeViewportSourceId,
     order: isize,
     renderer: RuntimeRendererState,
-    active_animations: Vec<RuntimeAnimationEvent>,
+    active_animation: Option<RuntimePreparedAnimationSet>,
     animation_epoch_seconds: f64,
-    continue_animation: bool,
+    next_sample: Option<HostNextSample>,
     needs_frame: bool,
+}
+
+#[derive(Clone, Copy)]
+enum HostNextSample {
+    Deadline {
+        at_seconds: f64,
+    },
+    DisplayRefresh {
+        completion_at_seconds: f64,
+        last_sample_seconds: f64,
+    },
+}
+
+impl HostNextSample {
+    fn consume_if_due(&mut self, now_seconds: f64) -> bool {
+        match self {
+            Self::Deadline { at_seconds } => now_seconds >= *at_seconds,
+            Self::DisplayRefresh {
+                completion_at_seconds,
+                last_sample_seconds,
+            } if now_seconds > *last_sample_seconds
+                && *last_sample_seconds < *completion_at_seconds =>
+            {
+                *last_sample_seconds = now_seconds.min(*completion_at_seconds);
+                true
+            }
+            Self::DisplayRefresh { .. } => false,
+        }
+    }
 }
 
 pub struct ResolvedBevyViewportFrame {
@@ -293,12 +327,21 @@ pub struct PuzzleBevyPlayerHost {
     runtime: RuntimeSession,
     visual_images: Arc<DecodedVisualImageCatalog>,
     snapshot: RuntimeSessionSnapshot,
+    ui_projection: UiProjectionIdentity,
+    ui_projection_generation: u64,
     viewports: BTreeMap<RuntimeViewportSourceId, HostViewport>,
+    animation_origins: BTreeMap<RuntimeViewportSourceId, RuntimeRendererState>,
+    animation_origin_transition: Option<RuntimePresentationTransitionId>,
     pending_presentation: VecDeque<QueuedPresentationEvent>,
     pending_presentation_continuation: Option<RuntimePresentationContinuationToken>,
     audio_runtime: AudioRuntime,
     pending_audio: Vec<AudioDeviceCommand>,
     wait_until_seconds: Option<f64>,
+    wait_started_seconds: Option<f64>,
+    waiting_for_animation_publication: Option<RuntimePresentationTransitionId>,
+    renderer_publication_group: Option<BevyPublicationGroupId>,
+    renderer_publication_animation_transition: Option<RuntimePresentationTransitionId>,
+    queued_input_presentation: Option<RuntimeBusyInputPolicy>,
     clip_epoch_seconds: f64,
     fatal_error: Option<String>,
     #[cfg(feature = "editor-debug")]
@@ -355,20 +398,31 @@ impl PuzzleBevyPlayerHost {
         visual_images: Arc<DecodedVisualImageCatalog>,
     ) -> Result<Self, BevyPlayerError> {
         let audio_catalog = runtime.audio_catalog();
+        let origin_snapshot = runtime.snapshot();
+        let origin_viewports = projected_viewports(&origin_snapshot, 0.0)?;
         let snapshot = runtime
             .dispatch_typed(SessionAction::Initialize)
             .map_err(BevyPlayerError::Runtime)?;
-        let viewports = projected_viewports(&snapshot, 0.0)?;
+        let ui_projection = UiProjectionIdentity::player(&origin_snapshot);
         let mut host = Self {
             runtime,
             visual_images,
-            snapshot,
-            viewports,
+            snapshot: origin_snapshot,
+            ui_projection,
+            ui_projection_generation: 1,
+            viewports: origin_viewports,
+            animation_origins: BTreeMap::new(),
+            animation_origin_transition: None,
             pending_presentation: VecDeque::new(),
             pending_presentation_continuation: None,
             audio_runtime: AudioRuntime::new(audio_catalog, initial_audio_capability()),
             pending_audio: Vec::new(),
             wait_until_seconds: None,
+            wait_started_seconds: None,
+            waiting_for_animation_publication: None,
+            renderer_publication_group: None,
+            renderer_publication_animation_transition: None,
+            queued_input_presentation: None,
             clip_epoch_seconds: 0.0,
             fatal_error: None,
             #[cfg(feature = "editor-debug")]
@@ -378,7 +432,7 @@ impl PuzzleBevyPlayerHost {
             #[cfg(feature = "editor-debug")]
             next_editor_authoring_frame_revision: 1,
         };
-        host.replace_presentation_events();
+        host.apply_snapshot(snapshot, 0.0, false)?;
         Ok(host)
     }
 
@@ -459,19 +513,53 @@ impl PuzzleBevyPlayerHost {
         if let Some(error) = &self.fatal_error {
             return Err(BevyPlayerError::Runtime(error.clone()));
         }
-        let presentation_queue_was_active =
-            self.wait_until_seconds.is_some() || !self.pending_presentation.is_empty();
-        let previous_continuation = self.pending_presentation_continuation.clone();
+        let busy_input_policy = self.snapshot.input_buffer.busy_input;
+        let previously_queued_model_input = self.snapshot.queued_model_input;
         let snapshot = self
             .runtime
             .dispatch_typed(action)
             .map_err(BevyPlayerError::Runtime)?;
-        self.apply_snapshot_preserving_matching_presentation(
-            snapshot,
-            now_seconds,
-            presentation_queue_was_active,
-            previous_continuation.as_ref(),
-        )
+        let queued_model_input = !previously_queued_model_input && snapshot.queued_model_input;
+        self.apply_snapshot_preserving_matching_presentation(snapshot, now_seconds)?;
+        if queued_model_input {
+            self.apply_queued_input_presentation_policy(busy_input_policy, now_seconds)?;
+        }
+        Ok(())
+    }
+
+    fn apply_queued_input_presentation_policy(
+        &mut self,
+        policy: RuntimeBusyInputPolicy,
+        now_seconds: f64,
+    ) -> Result<(), BevyPlayerError> {
+        match policy {
+            RuntimeBusyInputPolicy::Reject | RuntimeBusyInputPolicy::Queue => {}
+            RuntimeBusyInputPolicy::Skip => {
+                self.pending_presentation.clear();
+                self.wait_until_seconds = None;
+                self.wait_started_seconds = None;
+                self.waiting_for_animation_publication = None;
+                self.renderer_publication_animation_transition = None;
+                self.queued_input_presentation = None;
+                if let Some(token) = self.pending_presentation_continuation.take() {
+                    let snapshot = self
+                        .runtime
+                        .dispatch_typed(SessionAction::PresentationComplete { token })
+                        .map_err(BevyPlayerError::Runtime)?;
+                    self.apply_snapshot(snapshot, now_seconds, false)?;
+                }
+            }
+            RuntimeBusyInputPolicy::Accelerate { min_wait_ms } => {
+                self.queued_input_presentation = Some(policy);
+                if let (Some(started), Some(deadline)) =
+                    (self.wait_started_seconds, self.wait_until_seconds)
+                {
+                    let accelerated_deadline = started + min_wait_ms as f64 / 1_000.0;
+                    self.wait_until_seconds = Some(deadline.min(accelerated_deadline));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Atomically installs the typed editor draft and its model-scoped
@@ -601,24 +689,7 @@ impl PuzzleBevyPlayerHost {
             .runtime
             .dispatch_editor_model_key(&model, trigger, trace_model_input)
             .map_err(BevyPlayerError::Runtime)?;
-        let renderer = configuration.renderer.clone();
-        let projection = self
-            .runtime
-            .current_editor_model_projection(&model)
-            .map_err(BevyPlayerError::Runtime)?;
-        let (configuration, viewports) = prepare_editor_authoring_projection(
-            configuration,
-            projection,
-            &renderer,
-            &dispatch.snapshot.theme,
-            now_seconds,
-        )?;
-        self.install_editor_authoring_projection(
-            dispatch.snapshot,
-            configuration,
-            viewports,
-            now_seconds,
-        );
+        self.apply_snapshot(dispatch.snapshot, now_seconds, false)?;
         Ok(dispatch.debug)
     }
 
@@ -633,12 +704,17 @@ impl PuzzleBevyPlayerHost {
         self.viewports = viewports;
         self.snapshot = snapshot;
         self.editor_authoring = Some(configuration);
+        self.refresh_ui_projection();
         self.editor_authoring_frame = None;
         self.pending_presentation.clear();
         self.pending_presentation_continuation = None;
         self.wait_until_seconds = None;
+        self.waiting_for_animation_publication = None;
+        self.renderer_publication_animation_transition = None;
+        self.animation_origins.clear();
+        self.animation_origin_transition = None;
         for viewport in self.viewports.values_mut() {
-            viewport.active_animations.clear();
+            viewport.active_animation = None;
             viewport.animation_epoch_seconds = now_seconds;
             viewport.needs_frame = true;
         }
@@ -703,6 +779,9 @@ impl PuzzleBevyPlayerHost {
     }
 
     pub fn process_presentation(&mut self, now_seconds: f64) -> Result<(), BevyPlayerError> {
+        if self.waiting_for_animation_publication.is_some() {
+            return Ok(());
+        }
         if self
             .wait_until_seconds
             .is_some_and(|deadline| now_seconds < deadline)
@@ -710,6 +789,7 @@ impl PuzzleBevyPlayerHost {
             return Ok(());
         }
         self.wait_until_seconds = None;
+        self.wait_started_seconds = None;
         while let Some(queued) = self.pending_presentation.pop_front() {
             match queued.event {
                 RuntimePresentationEvent::AnimationBatch {
@@ -718,14 +798,73 @@ impl PuzzleBevyPlayerHost {
                     let Some(viewport) = self.viewports.get_mut(&source) else {
                         return Err(BevyPlayerError::MissingPresentationTarget(source));
                     };
-                    viewport.active_animations = animations;
+                    let transition = self
+                        .snapshot
+                        .presentation
+                        .as_ref()
+                        .map(|presentation| presentation.id)
+                        .ok_or_else(|| {
+                            BevyPlayerError::Runtime(
+                                "animation batch requires an active transition".to_string(),
+                            )
+                        })?;
+                    if self.animation_origin_transition != Some(transition) {
+                        return Err(BevyPlayerError::Runtime(format!(
+                            "animation transition {transition:?} has no matching committed origin"
+                        )));
+                    }
+                    let origin = self.animation_origins.get(&source).ok_or_else(|| {
+                        BevyPlayerError::Runtime(format!(
+                            "animation source {}.{} has no committed origin",
+                            source.component, source.source
+                        ))
+                    })?;
+                    let from_scene = renderer_scene(origin);
+                    let to_scene = renderer_scene(&viewport.renderer);
+                    viewport.active_animation = Some(
+                        puzzle_presentation::prepare_render_animation_channels(
+                            from_scene,
+                            to_scene,
+                            &animations,
+                        )
+                        .map_err(|error| {
+                            BevyPlayerError::Presentation {
+                                source: source.clone(),
+                                error: format!("{error:?}"),
+                            }
+                        })?,
+                    );
                     viewport.animation_epoch_seconds = now_seconds;
                     viewport.needs_frame = true;
                 }
-                RuntimePresentationEvent::Wait { milliseconds } => {
-                    self.wait_until_seconds = Some(now_seconds + milliseconds as f64 / 1_000.0);
-                    return Ok(());
-                }
+                RuntimePresentationEvent::Wait { completion } => match completion {
+                    RuntimePresentationWait::Duration { milliseconds } => {
+                        let milliseconds = match self.queued_input_presentation {
+                            Some(RuntimeBusyInputPolicy::Accelerate { min_wait_ms }) => {
+                                milliseconds.min(min_wait_ms)
+                            }
+                            _ => milliseconds,
+                        };
+                        self.wait_started_seconds = Some(now_seconds);
+                        self.wait_until_seconds = Some(now_seconds + milliseconds as f64 / 1_000.0);
+                        return Ok(());
+                    }
+                    RuntimePresentationWait::AnimationPublication => {
+                        let transition = self
+                            .snapshot
+                            .presentation
+                            .as_ref()
+                            .map(|presentation| presentation.id)
+                            .ok_or_else(|| {
+                                BevyPlayerError::Runtime(
+                                    "animation publication wait requires an active transition"
+                                        .to_string(),
+                                )
+                            })?;
+                        self.waiting_for_animation_publication = Some(transition);
+                        return Ok(());
+                    }
+                },
                 RuntimePresentationEvent::Audio { command } => {
                     self.pending_audio
                         .extend(self.audio_runtime.apply(command, audio_frame(now_seconds)));
@@ -733,6 +872,7 @@ impl PuzzleBevyPlayerHost {
             }
         }
         if let Some(token) = self.pending_presentation_continuation.take() {
+            self.queued_input_presentation = None;
             let snapshot = self
                 .runtime
                 .dispatch_typed(SessionAction::PresentationComplete { token })
@@ -753,28 +893,43 @@ impl PuzzleBevyPlayerHost {
         };
         let mut frames = Vec::new();
         for viewport in self.viewports.values_mut() {
-            if !viewport.needs_frame && !viewport.continue_animation {
+            let scheduled_sample_due = viewport
+                .next_sample
+                .as_mut()
+                .is_some_and(|sample| sample.consume_if_due(now_seconds));
+            if !viewport.needs_frame && !scheduled_sample_due {
                 continue;
             }
             let render_scene = match &viewport.renderer {
                 RuntimeRendererState::TwoD(scene) => &scene.render_scene,
                 RuntimeRendererState::ThreeD(scene) => &scene.render_scene,
             };
-            let frame = puzzle_presentation::resolve_render_moment(
+            let frame = puzzle_presentation::resolve_prepared_render_moment(
                 render_scene,
                 &self.visual_images,
-                &RuntimeResolvedRenderMoment {
-                    clip_elapsed_ms: milliseconds(self.clip_epoch_seconds),
-                    animation_elapsed_ms: milliseconds(viewport.animation_epoch_seconds),
-                    animations: viewport.active_animations.clone(),
-                },
+                milliseconds(self.clip_epoch_seconds),
+                milliseconds(viewport.animation_epoch_seconds),
+                viewport.active_animation.as_ref(),
             )
             .map_err(|error| BevyPlayerError::Presentation {
                 source: viewport.source.clone(),
                 error: format!("{error:?}"),
             })?;
             viewport.needs_frame = false;
-            viewport.continue_animation = frame.continue_animation;
+            viewport.next_sample = frame.next_sample.map(|sample| match sample {
+                RuntimeResolvedNextSample::Deadline { after_milliseconds } => {
+                    HostNextSample::Deadline {
+                        at_seconds: now_seconds + after_milliseconds as f64 / 1_000.0,
+                    }
+                }
+                RuntimeResolvedNextSample::DisplayRefresh {
+                    completion_after_milliseconds,
+                } => HostNextSample::DisplayRefresh {
+                    completion_at_seconds: now_seconds
+                        + completion_after_milliseconds as f64 / 1_000.0,
+                    last_sample_seconds: now_seconds,
+                },
+            });
             frames.push(ResolvedBevyViewportFrame {
                 source: viewport.source.clone(),
                 renderer: viewport.renderer.clone(),
@@ -782,6 +937,66 @@ impl PuzzleBevyPlayerHost {
             });
         }
         Ok(frames)
+    }
+
+    fn completed_animation_transition_at(
+        &self,
+        now_seconds: f64,
+    ) -> Result<Option<RuntimePresentationTransitionId>, BevyPlayerError> {
+        let Some(transition) = self.waiting_for_animation_publication else {
+            return Ok(None);
+        };
+        if self.snapshot.presentation.as_ref().map(|active| active.id) != Some(transition) {
+            return Err(BevyPlayerError::Runtime(format!(
+                "animation publication wait references stale transition {transition:?}"
+            )));
+        }
+        let mut found_animation = false;
+        for viewport in self.viewports.values() {
+            let Some(animation) = viewport.active_animation.as_ref() else {
+                continue;
+            };
+            found_animation = true;
+            let elapsed_milliseconds = ((now_seconds - viewport.animation_epoch_seconds).max(0.0)
+                * 1_000.0)
+                .floor()
+                .min(u64::MAX as f64) as u64;
+            if !puzzle_presentation::prepared_animation_is_complete(
+                renderer_scene(&viewport.renderer),
+                animation,
+                elapsed_milliseconds,
+            )
+            .map_err(|error| BevyPlayerError::Presentation {
+                source: viewport.source.clone(),
+                error: format!("{error:?}"),
+            })? {
+                return Ok(None);
+            }
+        }
+        if !found_animation {
+            return Err(BevyPlayerError::Runtime(format!(
+                "animation publication wait for transition {transition:?} has no prepared animation"
+            )));
+        }
+        Ok(Some(transition))
+    }
+
+    fn acknowledge_animation_publication(
+        &mut self,
+        transition: RuntimePresentationTransitionId,
+    ) -> Result<(), BevyPlayerError> {
+        if self.waiting_for_animation_publication != Some(transition) {
+            return Err(BevyPlayerError::Runtime(format!(
+                "renderer acknowledged stale animation transition {transition:?}"
+            )));
+        }
+        for viewport in self.viewports.values_mut() {
+            viewport.active_animation = None;
+        }
+        self.waiting_for_animation_publication = None;
+        self.animation_origins.clear();
+        self.animation_origin_transition = None;
+        Ok(())
     }
 
     fn refresh_runtime_snapshot(&mut self, now_seconds: f64) -> Result<(), BevyPlayerError> {
@@ -793,30 +1008,21 @@ impl PuzzleBevyPlayerHost {
         &mut self,
         now_seconds: f64,
     ) -> Result<(), BevyPlayerError> {
-        let presentation_queue_was_active =
-            self.wait_until_seconds.is_some() || !self.pending_presentation.is_empty();
-        let previous_continuation = self.pending_presentation_continuation.clone();
         let snapshot = self.runtime.snapshot();
-        self.apply_snapshot_preserving_matching_presentation(
-            snapshot,
-            now_seconds,
-            presentation_queue_was_active,
-            previous_continuation.as_ref(),
-        )
+        self.apply_snapshot_preserving_matching_presentation(snapshot, now_seconds)
     }
 
     fn apply_snapshot_preserving_matching_presentation(
         &mut self,
         snapshot: RuntimeSessionSnapshot,
         now_seconds: f64,
-        presentation_queue_was_active: bool,
-        previous_continuation: Option<&RuntimePresentationContinuationToken>,
     ) -> Result<(), BevyPlayerError> {
-        let preserve_event_queue = preserve_presentation_event_queue(
-            presentation_queue_was_active,
-            previous_continuation,
-            snapshot.presentation_continuation.as_ref(),
-        );
+        let preserve_event_queue = self
+            .snapshot
+            .presentation
+            .as_ref()
+            .zip(snapshot.presentation.as_ref())
+            .is_some_and(|(previous, next)| previous.id == next.id);
         self.apply_snapshot(snapshot, now_seconds, preserve_event_queue)
     }
 
@@ -829,8 +1035,12 @@ impl PuzzleBevyPlayerHost {
         let mut next = projected_viewports(&snapshot, now_seconds)?;
         for (source, viewport) in &mut next {
             if let Some(previous) = self.viewports.get(source) {
-                viewport.active_animations = previous.active_animations.clone();
+                viewport.active_animation = previous.active_animation.clone();
                 viewport.animation_epoch_seconds = previous.animation_epoch_seconds;
+                if viewport.renderer == previous.renderer {
+                    viewport.next_sample = previous.next_sample;
+                    viewport.needs_frame = previous.needs_frame;
+                }
             }
         }
         #[cfg(feature = "editor-debug")]
@@ -852,21 +1062,21 @@ impl PuzzleBevyPlayerHost {
             self.editor_authoring = Some(configuration);
             self.editor_authoring_frame = None;
         }
+        if !preserve_event_queue {
+            self.capture_animation_origins(&snapshot)?;
+        }
         self.viewports = next;
         if preserve_event_queue {
-            self.pending_presentation.extend(
-                snapshot
-                    .presentation_events
-                    .iter()
-                    .cloned()
-                    .map(|event| QueuedPresentationEvent { event }),
-            );
-            self.pending_presentation_continuation = snapshot.presentation_continuation.clone();
+            self.pending_presentation_continuation = snapshot
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.continuation.clone());
         }
         self.snapshot = snapshot;
+        self.refresh_ui_projection();
         if !preserve_event_queue {
             for viewport in self.viewports.values_mut() {
-                viewport.active_animations.clear();
+                viewport.active_animation = None;
                 viewport.animation_epoch_seconds = now_seconds;
             }
             self.replace_presentation_events();
@@ -877,14 +1087,66 @@ impl PuzzleBevyPlayerHost {
     fn replace_presentation_events(&mut self) {
         self.pending_presentation = self
             .snapshot
-            .presentation_events
-            .iter()
+            .presentation
+            .as_ref()
+            .into_iter()
+            .flat_map(|presentation| presentation.steps.iter())
             .map(|event| QueuedPresentationEvent {
                 event: event.clone(),
             })
             .collect();
-        self.pending_presentation_continuation = self.snapshot.presentation_continuation.clone();
+        self.pending_presentation_continuation = self
+            .snapshot
+            .presentation
+            .as_ref()
+            .and_then(|presentation| presentation.continuation.clone());
         self.wait_until_seconds = None;
+        self.wait_started_seconds = None;
+        self.waiting_for_animation_publication = None;
+        self.renderer_publication_animation_transition = None;
+        self.queued_input_presentation = None;
+    }
+
+    fn capture_animation_origins(
+        &mut self,
+        snapshot: &RuntimeSessionSnapshot,
+    ) -> Result<(), BevyPlayerError> {
+        self.animation_origins.clear();
+        self.animation_origin_transition = None;
+        let Some(transition) = snapshot.presentation.as_ref() else {
+            return Ok(());
+        };
+        if self.snapshot.state_commit != transition.from_state_commit
+            || snapshot.state_commit != transition.to_state_commit
+        {
+            return Err(BevyPlayerError::Runtime(format!(
+                "presentation transition {:?} declares state commits {:?} -> {:?}, but the player owns {:?} -> {:?}",
+                transition.id,
+                transition.from_state_commit,
+                transition.to_state_commit,
+                self.snapshot.state_commit,
+                snapshot.state_commit,
+            )));
+        }
+        self.animation_origins.extend(
+            self.viewports
+                .iter()
+                .map(|(source, viewport)| (source.clone(), viewport.renderer.clone())),
+        );
+        self.animation_origin_transition = Some(transition.id);
+        Ok(())
+    }
+
+    fn refresh_ui_projection(&mut self) {
+        let next = UiProjectionIdentity::from_host(self);
+        if self.ui_projection == next {
+            return;
+        }
+        self.ui_projection = next;
+        self.ui_projection_generation = self
+            .ui_projection_generation
+            .checked_add(1)
+            .expect("Bevy UI projection generation must not overflow");
     }
 
     fn fail(&mut self, error: BevyPlayerError) {
@@ -892,9 +1154,18 @@ impl PuzzleBevyPlayerHost {
         error!("{message}");
         self.fatal_error = Some(message);
         for viewport in self.viewports.values_mut() {
-            viewport.continue_animation = false;
+            viewport.next_sample = None;
             viewport.needs_frame = false;
         }
+    }
+}
+
+fn renderer_scene(
+    renderer: &RuntimeRendererState,
+) -> &puzzle_runtime_contract::RuntimeResolvedRenderScene {
+    match renderer {
+        RuntimeRendererState::TwoD(scene) => &scene.render_scene,
+        RuntimeRendererState::ThreeD(scene) => &scene.render_scene,
     }
 }
 
@@ -984,9 +1255,9 @@ fn projected_viewports(
                         source,
                         order,
                         renderer,
-                        active_animations: Vec::new(),
+                        active_animation: None,
                         animation_epoch_seconds: now_seconds,
-                        continue_animation: false,
+                        next_sample: None,
                         needs_frame: true,
                     },
                 ))
@@ -1043,9 +1314,9 @@ fn prepare_editor_authoring_projection(
         source: projection.source.clone(),
         order: 0,
         renderer,
-        active_animations: Vec::new(),
+        active_animation: None,
         animation_epoch_seconds: now_seconds,
-        continue_animation: false,
+        next_sample: None,
         needs_frame: true,
     };
     Ok((
@@ -1203,6 +1474,44 @@ struct SubmittedViewportIds(BTreeSet<PuzzleBevyViewId>);
 #[derive(Resource, Default)]
 struct SubmittedViewportRects(BTreeMap<RuntimeViewportSourceId, PuzzleBevyFramebufferRect>);
 
+#[derive(Clone, Debug, PartialEq)]
+enum UiProjectionIdentity {
+    Player {
+        theme: RuntimeTheme,
+        surface: RuntimeSurface,
+    },
+    #[cfg(feature = "editor-debug")]
+    EditorAuthoring {
+        background: RuntimeLinearRgba,
+        surface_id: String,
+        viewport_source: RuntimeViewportSourceId,
+    },
+}
+
+impl UiProjectionIdentity {
+    fn player(snapshot: &RuntimeSessionSnapshot) -> Self {
+        Self::Player {
+            theme: snapshot.theme,
+            surface: snapshot.surface.clone(),
+        }
+    }
+
+    fn from_host(host: &PuzzleBevyPlayerHost) -> Self {
+        #[cfg(feature = "editor-debug")]
+        if let Some(authoring) = host.editor_authoring.as_ref() {
+            return Self::EditorAuthoring {
+                background: host.snapshot.theme.background,
+                surface_id: authoring.surface.surface_id.clone(),
+                viewport_source: authoring.viewport_source.clone(),
+            };
+        }
+        Self::player(&host.snapshot)
+    }
+}
+
+#[derive(Resource, Default)]
+struct RenderedUiProjection(Option<u64>);
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct InteractiveCameraOffset {
     yaw_degrees: f32,
@@ -1347,6 +1656,7 @@ impl Plugin for PuzzleBevyPlayerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SubmittedViewportIds>()
             .init_resource::<SubmittedViewportRects>()
+            .init_resource::<RenderedUiProjection>()
             .init_resource::<InteractiveCameraState>()
             .init_resource::<TouchScrollTargets>()
             .init_resource::<PuzzleBevyPlayerObservationState>()
@@ -1368,6 +1678,7 @@ impl Plugin for PuzzleBevyPlayerPlugin {
                     update_interactive_camera,
                     dispatch_keyboard_input,
                     advance_presentation,
+                    sync_ui_scale,
                     sync_resolved_ui,
                     update_ui_scroll,
                 )
@@ -1394,6 +1705,51 @@ impl Plugin for PuzzleBevyPlayerPlugin {
     }
 }
 
+/// Builds the browser player shell shared by standalone exports and editor
+/// previews. Host-specific plugins are added by each caller after this returns;
+/// editor capabilities therefore remain absent from standalone builds.
+#[cfg(target_arch = "wasm32")]
+pub fn build_browser_player_app(
+    host: PuzzleBevyPlayerHost,
+    canvas_selector: &str,
+    title: &str,
+) -> Result<App, String> {
+    if canvas_selector.trim().is_empty() {
+        return Err("Bevy player canvas selector must not be empty".to_string());
+    }
+    let window = web_sys::window()
+        .ok_or_else(|| "Bevy player canvas validation requires a browser window".to_string())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "Bevy player canvas validation requires a browser document".to_string())?;
+    let element = document
+        .query_selector(canvas_selector)
+        .map_err(|error| {
+            format!("Bevy player canvas selector `{canvas_selector}` is invalid: {error:?}")
+        })?
+        .ok_or_else(|| {
+            format!("Bevy player canvas selector `{canvas_selector}` matched no element")
+        })?;
+    if !element.is_instance_of::<web_sys::HtmlCanvasElement>() {
+        return Err(format!(
+            "Bevy player canvas selector `{canvas_selector}` must match a canvas element"
+        ));
+    }
+
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(bevy::window::WindowPlugin {
+        primary_window: Some(Window {
+            title: title.to_string(),
+            canvas: Some(canvas_selector.to_string()),
+            fit_canvas_to_parent: true,
+            ..default()
+        }),
+        ..default()
+    }));
+    install_puzzle_bevy_player(&mut app, host);
+    Ok(app)
+}
+
 pub fn install_puzzle_bevy_player(app: &mut App, host: PuzzleBevyPlayerHost) -> &mut App {
     #[cfg(not(target_arch = "wasm32"))]
     audio::install_native_audio_backend(app);
@@ -1406,6 +1762,40 @@ pub fn install_puzzle_bevy_player(app: &mut App, host: PuzzleBevyPlayerHost) -> 
     #[cfg(target_arch = "wasm32")]
     app.add_plugins(web_audio::PuzzleBevyWebAudioPlugin::new(web_audio_catalog));
     app
+}
+
+fn uniform_ui_scale(window_size: Vec2, reference_size: Vec2) -> Option<f32> {
+    if !window_size.is_finite()
+        || !reference_size.is_finite()
+        || window_size.x <= 0.0
+        || window_size.y <= 0.0
+        || reference_size.x <= 0.0
+        || reference_size.y <= 0.0
+    {
+        return None;
+    }
+    let scale = (window_size.x / reference_size.x).min(window_size.y / reference_size.y);
+    scale.is_finite().then_some(scale)
+}
+
+fn sync_ui_scale(
+    primary_window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    host: NonSend<PuzzleBevyPlayerHost>,
+    mut ui_scale: ResMut<UiScale>,
+) {
+    let Ok(window) = primary_window.single() else {
+        return;
+    };
+    let reference = host.snapshot.theme.ui_reference_size;
+    let Some(scale) = uniform_ui_scale(
+        Vec2::new(window.width(), window.height()),
+        Vec2::new(reference.width_px, reference.height_px),
+    ) else {
+        return;
+    };
+    if (ui_scale.0 - scale).abs() > f32::EPSILON {
+        ui_scale.0 = scale;
+    }
 }
 
 fn spawn_ui_root(mut commands: Commands) {
@@ -1479,6 +1869,7 @@ fn spawn_ui_root(mut commands: Commands) {
 fn sync_resolved_ui(
     mut commands: Commands,
     host: NonSend<PuzzleBevyPlayerHost>,
+    mut rendered: ResMut<RenderedUiProjection>,
     roots: Query<Entity, With<PuzzleBevyUiRoot>>,
     root_layers: Query<Entity, With<PuzzleBevyUiRootLayer>>,
     content_layers: Query<Entity, With<PuzzleBevyUiContentLayer>>,
@@ -1486,6 +1877,10 @@ fn sync_resolved_ui(
     mut background_cameras: Query<&mut Camera, With<PuzzleBevyBackgroundCamera>>,
     existing: Query<(Entity, &PuzzleBevyUiIdentity)>,
 ) {
+    let generation = host.ui_projection_generation;
+    if rendered.0 == Some(generation) {
+        return;
+    }
     if roots.single().is_err() {
         return;
     }
@@ -1499,6 +1894,7 @@ fn sync_resolved_ui(
     let Ok(mut background_camera) = background_cameras.single_mut() else {
         return;
     };
+    rendered.0 = Some(generation);
     background_camera.clear_color =
         ClearColorConfig::Custom(bevy_color(host.snapshot.theme.background));
     let old = existing
@@ -1553,10 +1949,8 @@ fn sync_resolved_ui(
             .entity(content_layer)
             .replace_children(&[authoring_root]);
         commands.entity(overlay_layer).replace_children(&[]);
-        for (id, entity) in old {
-            if !retained.contains(&id) {
-                commands.entity(entity).despawn();
-            }
+        for entity in removed_ui_subtree_roots(&old, &retained) {
+            commands.entity(entity).despawn();
         }
         return;
     }
@@ -1671,11 +2065,31 @@ fn sync_resolved_ui(
     commands
         .entity(overlay_layer)
         .replace_children(&overlay_components);
-    for (id, entity) in old {
-        if !retained.contains(&id) {
-            commands.entity(entity).despawn();
-        }
+    for entity in removed_ui_subtree_roots(&old, &retained) {
+        commands.entity(entity).despawn();
     }
+}
+
+fn removed_ui_subtree_roots(
+    existing: &HashMap<PuzzleBevyUiIdentity, Entity>,
+    retained: &BTreeSet<PuzzleBevyUiIdentity>,
+) -> Vec<Entity> {
+    existing
+        .iter()
+        .filter(|(identity, _)| {
+            if retained.contains(*identity) {
+                return false;
+            }
+            let mut ancestor = (*identity).clone();
+            while ancestor.tree_path.pop().is_some() {
+                if existing.contains_key(&ancestor) && !retained.contains(&ancestor) {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(|(_, entity)| *entity)
+        .collect()
 }
 
 fn awaited_pointer_action<'a>(
@@ -1877,10 +2291,10 @@ fn sync_ui_component(
 }
 
 fn text_justify(text_align: Option<puzzle_scene::SceneTextAlign>) -> Justify {
-    match text_align {
-        None | Some(puzzle_scene::SceneTextAlign::Start) => Justify::Start,
-        Some(puzzle_scene::SceneTextAlign::Center) => Justify::Center,
-        Some(puzzle_scene::SceneTextAlign::End) => Justify::End,
+    match text_align.unwrap_or_default() {
+        puzzle_scene::SceneTextAlign::Start => Justify::Start,
+        puzzle_scene::SceneTextAlign::Center => Justify::Center,
+        puzzle_scene::SceneTextAlign::End => Justify::End,
     }
 }
 
@@ -2283,6 +2697,7 @@ fn submit_resolved_frames(
     viewport_nodes: Query<(&PuzzleBevyUiViewport, &ComputedNode, &UiGlobalTransform)>,
     mut queue_2d: ResMut<BevyResolvedFrameQueue2d>,
     mut queue_3d: ResMut<BevyResolvedFrameQueue>,
+    mut publication_groups: ResMut<BevyPublicationGroups>,
     mut submitted_ids: ResMut<SubmittedViewportIds>,
     mut submitted_rects: ResMut<SubmittedViewportRects>,
     interactive_camera: Res<InteractiveCameraState>,
@@ -2290,12 +2705,36 @@ fn submit_resolved_frames(
     mut host: NonSendMut<PuzzleBevyPlayerHost>,
 ) {
     pending_observation.presentation_started_micros = presentation_clock_micros();
+    let completed_groups = publication_groups.drain_completed().collect::<Vec<_>>();
+    for completed in completed_groups {
+        if host.renderer_publication_group != Some(completed) {
+            host.fail(BevyPlayerError::Runtime(format!(
+                "renderer completed unexpected publication group {}",
+                completed.0
+            )));
+            return;
+        }
+        if let Some(transition) = host.renderer_publication_animation_transition.take()
+            && let Err(error) = host.acknowledge_animation_publication(transition)
+        {
+            host.fail(error);
+            return;
+        }
+        host.renderer_publication_group = None;
+    }
+    if host.renderer_publication_group.is_some() {
+        return;
+    }
     let Ok(window) = primary_window.single() else {
         if !host.viewports.is_empty() {
             host.fail(BevyPlayerError::MissingPrimaryWindow);
         }
         return;
     };
+    let layout_sources = viewport_nodes
+        .iter()
+        .map(|(viewport, _, _)| viewport.0.clone())
+        .collect::<BTreeSet<_>>();
     let framebuffer_by_source = viewport_nodes
         .iter()
         .filter_map(|(viewport, node, transform)| {
@@ -2307,13 +2746,23 @@ fn submit_resolved_frames(
             .map(|framebuffer| (viewport.0.clone(), framebuffer))
         })
         .collect::<BTreeMap<_, _>>();
-    let missing_layout = host
+    let missing_layout_node = host
         .viewports
         .values()
-        .find(|viewport| !framebuffer_by_source.contains_key(&viewport.source))
+        .find(|viewport| !layout_sources.contains(&viewport.source))
         .map(|viewport| viewport.source.clone());
-    if let Some(source) = missing_layout {
+    if let Some(source) = missing_layout_node {
         host.fail(BevyPlayerError::MissingViewportLayout(source));
+        return;
+    }
+    if host
+        .viewports
+        .values()
+        .any(|viewport| !framebuffer_by_source.contains_key(&viewport.source))
+    {
+        // A resize can temporarily collapse an otherwise mounted UI leaf to
+        // zero area. That geometry is not a frame candidate: retain the last
+        // committed renderer submission until layout produces a valid rect.
         return;
     }
     for viewport in host.viewports.values_mut() {
@@ -2347,9 +2796,18 @@ fn submit_resolved_frames(
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let queue_2d_checkpoint = queue_2d.clone();
+    let queue_3d_checkpoint = queue_3d.clone();
+    macro_rules! abort_publication {
+        ($error:expr) => {{
+            *queue_2d = queue_2d_checkpoint.clone();
+            *queue_3d = queue_3d_checkpoint.clone();
+            host.fail($error);
+            return;
+        }};
+    }
     if let Err(error) = reconcile_view_camera_orders(&mut queue_2d, &mut queue_3d, &order_by_id) {
-        host.fail(error);
-        return;
+        abort_publication!(error);
     }
     let submitted = submitted_ids.0.clone();
     for removed in submitted.difference(&active) {
@@ -2358,10 +2816,33 @@ fn submit_resolved_frames(
             puzzle_bevy_renderer::PuzzleBevyViewDimension::ThreeD => queue_3d.remove(removed),
         };
         if let Err(error) = result {
-            host.fail(error.into());
-            return;
+            abort_publication!(error.into());
         }
     }
+    if frames.is_empty() {
+        submitted_ids.0 = active;
+        submitted_rects.0 = framebuffer_by_source;
+        update_pending_observation(
+            &mut pending_observation,
+            &host,
+            u64::try_from(time.delta().as_micros()).unwrap_or(u64::MAX),
+        );
+        return;
+    }
+    let completes_animation_transition =
+        match host.completed_animation_transition_at(time.elapsed_secs_f64()) {
+            Ok(transition) => transition,
+            Err(error) => {
+                abort_publication!(error);
+            }
+        };
+    let publication_group = match publication_groups.reserve_group() {
+        Ok(group) => group,
+        Err(error) => {
+            abort_publication!(BevyPlayerError::Runtime(error.to_string()));
+        }
+    };
+    let mut publication_members = Vec::with_capacity(frames.len());
     let clear_color = bevy_color(host.snapshot.theme.background);
     #[cfg(feature = "editor-debug")]
     let authoring_configuration = host.editor_authoring.clone();
@@ -2369,8 +2850,7 @@ fn submit_resolved_frames(
     let mut next_authoring_frame = None;
     for resolved in frames {
         let Some(framebuffer) = framebuffer_by_source.get(&resolved.source).copied() else {
-            host.fail(BevyPlayerError::MissingViewportLayout(resolved.source));
-            return;
+            abort_publication!(BevyPlayerError::MissingViewportLayout(resolved.source));
         };
         let id = view_id(&resolved.source, &resolved.renderer);
         let order = order_by_id[&id];
@@ -2381,8 +2861,7 @@ fn submit_resolved_frames(
                     match prepare_resolved_frame_2d(&resolved.frame, &host.visual_images, &view) {
                         Ok(prepared) => prepared,
                         Err(error) => {
-                            host.fail(error.into());
-                            return;
+                            abort_publication!(error.into());
                         }
                     };
                 #[cfg(feature = "editor-debug")]
@@ -2394,8 +2873,7 @@ fn submit_resolved_frames(
                         match editor_authoring_css_size(framebuffer, window.scale_factor()) {
                             Ok(css_size) => css_size,
                             Err(error) => {
-                                host.fail(BevyPlayerError::EditorAuthoring(error));
-                                return;
+                                abort_publication!(BevyPlayerError::EditorAuthoring(error));
                             }
                         };
                     match configuration.frame2d(
@@ -2405,17 +2883,21 @@ fn submit_resolved_frames(
                     ) {
                         Ok(frame) => next_authoring_frame = Some(frame),
                         Err(error) => {
-                            host.fail(BevyPlayerError::EditorAuthoring(error));
-                            return;
+                            abort_publication!(BevyPlayerError::EditorAuthoring(error));
                         }
                     }
                 }
-                queue_2d.submit_prepared(
-                    PuzzleBevyViewId::two_d(&resolved.source.component, &resolved.source.source),
-                    view,
-                    host.visual_images.clone(),
-                    prepared,
-                )
+                let view_id =
+                    PuzzleBevyViewId::two_d(&resolved.source.component, &resolved.source.source);
+                queue_2d
+                    .submit_prepared_in_group(
+                        view_id.clone(),
+                        view,
+                        host.visual_images.clone(),
+                        prepared,
+                        publication_group,
+                    )
+                    .map(|generation| (view_id, generation))
             }
             RuntimeRendererState::ThreeD(scene) => {
                 let camera = match bevy_camera(
@@ -2425,8 +2907,7 @@ fn submit_resolved_frames(
                 ) {
                     Ok(camera) => camera,
                     Err(error) => {
-                        host.fail(error);
-                        return;
+                        abort_publication!(error);
                     }
                 };
                 #[cfg(feature = "editor-debug")]
@@ -2437,14 +2918,12 @@ fn submit_resolved_frames(
                     .filter(|configuration| configuration.viewport_source == resolved.source)
                     && let Err(error) = configuration.apply_camera(&mut camera)
                 {
-                    host.fail(BevyPlayerError::EditorAuthoring(error));
-                    return;
+                    abort_publication!(BevyPlayerError::EditorAuthoring(error));
                 }
                 let prepared = match prepare_resolved_frame(&resolved.frame) {
                     Ok(prepared) => prepared,
                     Err(error) => {
-                        host.fail(error.into());
-                        return;
+                        abort_publication!(error.into());
                     }
                 };
                 #[cfg(feature = "editor-debug")]
@@ -2456,8 +2935,7 @@ fn submit_resolved_frames(
                         match editor_authoring_css_size(framebuffer, window.scale_factor()) {
                             Ok(css_size) => css_size,
                             Err(error) => {
-                                host.fail(BevyPlayerError::EditorAuthoring(error));
-                                return;
+                                abort_publication!(BevyPlayerError::EditorAuthoring(error));
                             }
                         };
                     match configuration.frame3d(
@@ -2469,53 +2947,86 @@ fn submit_resolved_frames(
                     ) {
                         Ok(frame) => next_authoring_frame = Some(frame),
                         Err(error) => {
-                            host.fail(BevyPlayerError::EditorAuthoring(error));
-                            return;
+                            abort_publication!(BevyPlayerError::EditorAuthoring(error));
                         }
                     }
                 }
-                queue_3d.submit_prepared(
-                    PuzzleBevyViewId::three_d(&resolved.source.component, &resolved.source.source),
-                    PuzzleBevy3dView {
-                        active: true,
-                        order,
-                        framebuffer,
-                        clear_color,
-                        camera,
-                        lighting: bevy_lighting(scene),
-                        shadows_enabled: scene.render.shadow,
-                        render_settings: bevy_render_settings(scene),
-                    },
-                    prepared,
-                )
+                let view_id =
+                    PuzzleBevyViewId::three_d(&resolved.source.component, &resolved.source.source);
+                queue_3d
+                    .submit_prepared_in_group(
+                        view_id.clone(),
+                        PuzzleBevy3dView {
+                            active: true,
+                            order,
+                            framebuffer,
+                            clear_color,
+                            camera,
+                            lighting: bevy_lighting(scene),
+                            shadows_enabled: scene.render.shadow,
+                            render_settings: bevy_render_settings(scene),
+                        },
+                        prepared,
+                        publication_group,
+                    )
+                    .map(|generation| (view_id, generation))
             }
         };
-        if let Err(error) = result {
-            host.fail(error.into());
-            return;
+        match result {
+            Ok((view_id, generation)) => {
+                publication_members.push(BevyPublicationMember {
+                    view_id,
+                    generation,
+                });
+            }
+            Err(error) => {
+                abort_publication!(error.into());
+            }
         }
     }
     #[cfg(feature = "editor-debug")]
-    if let Some(frame) = next_authoring_frame {
-        let Some(next_revision) = host.next_editor_authoring_frame_revision.checked_add(1) else {
-            host.fail(BevyPlayerError::EditorAuthoring(
+    let next_authoring_revision = if next_authoring_frame.is_some() {
+        match host.next_editor_authoring_frame_revision.checked_add(1) {
+            Some(revision) => Some(revision),
+            None => abort_publication!(BevyPlayerError::EditorAuthoring(
                 "editor authoring frame revision overflow".to_string(),
-            ));
-            return;
-        };
+            )),
+        }
+    } else {
+        None
+    };
+    if let Err(error) = publication_groups.register_group(publication_group, publication_members) {
+        abort_publication!(BevyPlayerError::Runtime(error.to_string()));
+    }
+    host.renderer_publication_group = Some(publication_group);
+    host.renderer_publication_animation_transition = completes_animation_transition;
+    #[cfg(feature = "editor-debug")]
+    if let Some(frame) = next_authoring_frame {
         host.editor_authoring_frame = Some(frame);
-        host.next_editor_authoring_frame_revision = next_revision;
+        host.next_editor_authoring_frame_revision =
+            next_authoring_revision.expect("prepared editor frame has a reserved revision");
     }
     submitted_ids.0 = active;
     submitted_rects.0 = framebuffer_by_source;
-    pending_observation.revision = host.snapshot.revision;
-    pending_observation.surface_focus = host.snapshot.surface.focus.clone();
-    pending_observation.viewport_count = host.viewports.len();
-    pending_observation.submission_interval_micros =
-        u64::try_from(time.delta().as_micros()).unwrap_or(u64::MAX);
-    pending_observation.progress_fingerprint = host.runtime.progress_state_fingerprint();
-    pending_observation.audio_capability = host.audio_capability();
-    pending_observation.present = true;
+    update_pending_observation(
+        &mut pending_observation,
+        &host,
+        u64::try_from(time.delta().as_micros()).unwrap_or(u64::MAX),
+    );
+}
+
+fn update_pending_observation(
+    pending: &mut PendingPuzzleBevyPlayerObservation,
+    host: &PuzzleBevyPlayerHost,
+    submission_interval_micros: u64,
+) {
+    pending.revision = host.snapshot.session_revision.0;
+    pending.surface_focus = host.snapshot.surface.focus.clone();
+    pending.viewport_count = host.viewports.len();
+    pending.submission_interval_micros = submission_interval_micros;
+    pending.progress_fingerprint = host.runtime.progress_state_fingerprint();
+    pending.audio_capability = host.audio_capability();
+    pending.present = true;
 }
 
 fn reconcile_view_camera_orders(
@@ -2692,18 +3203,6 @@ fn bevy_render_settings(
     }
 }
 
-fn preserve_presentation_event_queue(
-    queue_was_active: bool,
-    previous: Option<&RuntimePresentationContinuationToken>,
-    next: Option<&RuntimePresentationContinuationToken>,
-) -> bool {
-    queue_was_active
-        && matches!(
-            (previous, next),
-            (Some(previous), Some(next)) if previous.waits == next.waits
-        )
-}
-
 fn runtime_key_trigger(key: &Key) -> Option<RuntimeKeyTrigger> {
     match key {
         Key::Character(value) => runtime_key_trigger_for_logical_key(value),
@@ -2756,6 +3255,40 @@ mod tests {
     const TENETEN: &str = include_str!("../../../games/TENETEN.puzzle");
     const TENETEN3D: &str = include_str!("../../../games/TENETEN3D.puzzle");
     const ANIMATION_TEST_2D: &str = include_str!("../../../games/animation_test.puzzle");
+    const EDITOR_TWEEN: &str = r#"
+const title = "Editor Tween"
+
+puzzle default {
+render {
+tween = true
+tween_duration = 300ms
+}
+layers {
+actor = Player
+}
+rules {
+input right [ Player | no Player ] -> [ | Player ]
+}
+}
+
+visuals {
+Player {
+#fff
+0
+}
+}
+
+levels {
+legend {
+P = Player
+. = empty
+}
+level "one" {
+P.
+}
+}
+"#;
+
     const TIMED_WAIT: &str = r#"
 const title = bevy_timed_wait
 puzzle default {
@@ -3046,7 +3579,7 @@ level "start" { A }
         let request = host
             .pending_progress_save()
             .expect("the mutation that starts the wait must request persistence");
-        let waiting_revision = host.snapshot().revision;
+        let waiting_revision = host.snapshot().session_revision;
 
         host.process_presentation(0.0).unwrap();
         assert_eq!(host.wait_until_seconds, Some(0.1));
@@ -3065,12 +3598,24 @@ level "start" { A }
         assert!(host.pending_presentation_continuation.is_some());
 
         host.process_presentation(0.099).unwrap();
-        assert_eq!(host.snapshot().revision, waiting_revision);
-        assert!(host.snapshot().presentation_continuation.is_some());
+        assert_eq!(host.snapshot().session_revision, waiting_revision);
+        assert!(
+            host.snapshot()
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.continuation.as_ref())
+                .is_some()
+        );
 
         host.process_presentation(0.1).unwrap();
         assert!(!host.snapshot().busy);
-        assert!(host.snapshot().presentation_continuation.is_none());
+        assert!(
+            host.snapshot()
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.continuation.as_ref())
+                .is_none()
+        );
         assert!(host.pending_presentation_continuation.is_none());
         assert!(host.fatal_error().is_none());
     }
@@ -3147,9 +3692,31 @@ level "start" { A }
             Justify::Center
         );
         assert_eq!(
+            text_justify(None),
+            Justify::Center,
+            "scene text without an authored alignment uses the scene-owned centered default"
+        );
+        assert_eq!(
             text_justify(Some(puzzle_scene::SceneTextAlign::End)),
             Justify::End
         );
+    }
+
+    #[test]
+    fn scene_ui_uses_one_uniform_scale_for_wide_and_tall_windows() {
+        assert_eq!(
+            uniform_ui_scale(Vec2::new(960.0, 720.0), Vec2::new(480.0, 360.0)),
+            Some(2.0)
+        );
+        assert_eq!(
+            uniform_ui_scale(Vec2::new(960.0, 540.0), Vec2::new(480.0, 360.0)),
+            Some(1.5)
+        );
+        assert_eq!(
+            uniform_ui_scale(Vec2::new(360.0, 720.0), Vec2::new(480.0, 360.0)),
+            Some(0.75)
+        );
+        assert_eq!(uniform_ui_scale(Vec2::ZERO, Vec2::new(480.0, 360.0)), None);
     }
 
     #[test]
@@ -3346,9 +3913,15 @@ level "start" { A }
             .find(|component| component.modal)
             .map(|component| component.id.clone())
             .expect("the first TENETEN level message must remain modal");
-        assert!(host.snapshot().presentation_continuation.is_none());
+        assert!(
+            host.snapshot()
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.continuation.as_ref())
+                .is_none()
+        );
         host.process_presentation(0.0).unwrap();
-        assert!(host.snapshot().revision > 0);
+        assert!(host.snapshot().session_revision.0 > 0);
         assert!(
             host.snapshot()
                 .surface
@@ -3457,48 +4030,94 @@ level "start" { A }
     }
 
     #[test]
-    fn active_presentation_queue_is_preserved_only_for_the_same_timeline_waits() {
-        use puzzle_runtime_contract::RuntimeModelPresentationContinuationToken;
+    fn snapshot_refresh_preserves_active_queue_for_the_same_transition_identity() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(TIMED_WAIT, "bevy_timed_wait.puzzle")
+                .unwrap();
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "first".to_string(),
+            },
+            0.0,
+        )
+        .unwrap();
+        let transition = host
+            .snapshot()
+            .presentation
+            .as_ref()
+            .expect("the first input must install a presentation transition")
+            .id;
 
-        let previous = RuntimePresentationContinuationToken {
-            revision: 4,
-            waits: vec![RuntimeModelPresentationContinuationToken {
-                model: "board".to_string(),
-                sequence: 2,
-            }],
-        };
-        let next_revision = RuntimePresentationContinuationToken {
-            revision: 5,
-            waits: previous.waits.clone(),
-        };
-        let different_wait = RuntimePresentationContinuationToken {
-            revision: 5,
-            waits: vec![RuntimeModelPresentationContinuationToken {
-                model: "board".to_string(),
-                sequence: 3,
-            }],
+        host.process_presentation(0.0).unwrap();
+        assert_eq!(host.wait_until_seconds, Some(0.1));
+        host.dispatch_action(SessionAction::Snapshot, 0.05).unwrap();
+
+        assert_eq!(
+            host.snapshot()
+                .presentation
+                .as_ref()
+                .expect("snapshot refresh must retain the active transition")
+                .id,
+            transition
+        );
+        assert_eq!(
+            host.wait_until_seconds,
+            Some(0.1),
+            "refreshing the same transition must preserve its in-flight deadline"
+        );
+        assert!(host.pending_presentation.is_empty());
+    }
+
+    #[test]
+    fn discrete_sample_deadline_is_not_consumed_before_it_is_due() {
+        let mut sample = HostNextSample::Deadline { at_seconds: 1.25 };
+
+        assert!(!sample.consume_if_due(1.249));
+        assert!(sample.consume_if_due(1.25));
+    }
+
+    #[test]
+    fn unrelated_frame_rates_remain_independent_nearest_deadlines_in_the_host() {
+        let now_seconds = 4.0;
+        let mut samples = [7_u64, 11, 13, 19].map(|fps| HostNextSample::Deadline {
+            at_seconds: now_seconds + (1_000 / fps) as f64 / 1_000.0,
+        });
+
+        let nearest_deadline = samples
+            .iter()
+            .map(|sample| match sample {
+                HostNextSample::Deadline { at_seconds } => *at_seconds,
+                HostNextSample::DisplayRefresh { .. } => {
+                    panic!("discrete frame rates must remain deadline samples")
+                }
+            })
+            .reduce(f64::min)
+            .unwrap();
+        assert_eq!(nearest_deadline, now_seconds + 52.0 / 1_000.0);
+        assert_eq!(
+            samples
+                .iter_mut()
+                .map(|sample| sample.consume_if_due(nearest_deadline))
+                .filter(|due| *due)
+                .count(),
+            1,
+            "the host must wake only the channel with the nearest individual boundary"
+        );
+    }
+
+    #[test]
+    fn display_refresh_samples_once_per_increasing_time_until_finite_completion() {
+        let mut sample = HostNextSample::DisplayRefresh {
+            completion_at_seconds: 1.03,
+            last_sample_seconds: 1.0,
         };
 
-        assert!(preserve_presentation_event_queue(
-            true,
-            Some(&previous),
-            Some(&next_revision)
-        ));
-        assert!(!preserve_presentation_event_queue(
-            true,
-            Some(&previous),
-            Some(&different_wait)
-        ));
-        assert!(!preserve_presentation_event_queue(
-            true,
-            Some(&previous),
-            None
-        ));
-        assert!(!preserve_presentation_event_queue(
-            false,
-            Some(&previous),
-            Some(&next_revision)
-        ));
+        assert!(!sample.consume_if_due(1.0));
+        assert!(sample.consume_if_due(1.01));
+        assert!(!sample.consume_if_due(1.01));
+        assert!(sample.consume_if_due(1.02));
+        assert!(sample.consume_if_due(1.04));
+        assert!(!sample.consume_if_due(1.05));
     }
 
     #[test]
@@ -3514,23 +4133,41 @@ level "start" { A }
             0.0,
         )
         .unwrap();
-        let waiting_revision = host.snapshot().revision;
-        assert!(host.snapshot().presentation_continuation.is_some());
+        let waiting_revision = host.snapshot().session_revision;
+        assert!(
+            host.snapshot()
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.continuation.as_ref())
+                .is_some()
+        );
 
         host.process_presentation(0.0).unwrap();
         host.dispatch_action(SessionAction::Snapshot, 0.05).unwrap();
         host.process_presentation(0.099).unwrap();
-        assert_eq!(host.snapshot().revision, waiting_revision);
-        assert!(host.snapshot().presentation_continuation.is_some());
+        assert_eq!(host.snapshot().session_revision, waiting_revision);
+        assert!(
+            host.snapshot()
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.continuation.as_ref())
+                .is_some()
+        );
 
         host.process_presentation(0.1).unwrap();
-        let completed_revision = host.snapshot().revision;
+        let completed_revision = host.snapshot().session_revision;
         assert!(!host.snapshot().busy);
-        assert!(host.snapshot().presentation_continuation.is_none());
+        assert!(
+            host.snapshot()
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.continuation.as_ref())
+                .is_none()
+        );
         assert!(host.pending_presentation_continuation.is_none());
 
         host.process_presentation(1.0).unwrap();
-        assert_eq!(host.snapshot().revision, completed_revision);
+        assert_eq!(host.snapshot().session_revision, completed_revision);
         assert!(host.fatal_error().is_none());
     }
 
@@ -3548,9 +4185,60 @@ level "start" { A }
         .unwrap();
         let first_token = host
             .snapshot()
-            .presentation_continuation
-            .clone()
+            .presentation
+            .as_ref()
+            .and_then(|presentation| presentation.continuation.clone())
             .expect("the first input must wait");
+        host.process_presentation(0.0).unwrap();
+
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "second".to_string(),
+            },
+            0.01,
+        )
+        .unwrap();
+        let refreshed_token = host
+            .snapshot()
+            .presentation
+            .as_ref()
+            .and_then(|presentation| presentation.continuation.clone())
+            .expect("queuing input must retain the timeline wait");
+        assert_eq!(refreshed_token.waits, first_token.waits);
+        assert!(refreshed_token.session_revision > first_token.session_revision);
+        assert_eq!(
+            host.pending_presentation_continuation,
+            Some(refreshed_token)
+        );
+
+        host.process_presentation(0.049).unwrap();
+        assert!(host.snapshot().busy);
+        host.process_presentation(0.05).unwrap();
+        assert!(!host.snapshot().busy);
+        assert!(host.pending_presentation_continuation.is_none());
+        assert!(host.fatal_error().is_none());
+    }
+
+    #[test]
+    fn queued_input_policy_preserves_the_original_wait_deadline() {
+        let mut document =
+            puzzle_lang::parse_game_for_path(TIMED_WAIT, "bevy_timed_wait.puzzle").unwrap();
+        let puzzle_lang::LoadedDocumentModel::Puzzle2d { game, .. } = &mut document.models[0]
+        else {
+            panic!("timed wait fixture must be 2D");
+        };
+        game.input_buffer.busy_input = puzzle_lang::BusyInputPolicy::Queue;
+        let mut host = PuzzleBevyPlayerHost::from_image_free_runtime(
+            RuntimeSession::from_document(document).unwrap(),
+        )
+        .unwrap();
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "first".to_string(),
+            },
+            0.0,
+        )
+        .unwrap();
         host.process_presentation(0.0).unwrap();
 
         host.dispatch_action(
@@ -3560,22 +4248,117 @@ level "start" { A }
             0.05,
         )
         .unwrap();
-        let refreshed_token = host
-            .snapshot()
-            .presentation_continuation
-            .clone()
-            .expect("queuing input must retain the timeline wait");
-        assert_eq!(refreshed_token.waits, first_token.waits);
-        assert!(refreshed_token.revision > first_token.revision);
-        assert_eq!(
-            host.pending_presentation_continuation,
-            Some(refreshed_token)
-        );
-
         host.process_presentation(0.099).unwrap();
         assert!(host.snapshot().busy);
         host.process_presentation(0.1).unwrap();
         assert!(!host.snapshot().busy);
+    }
+
+    #[test]
+    fn accelerate_policy_shortens_the_wait_to_its_minimum_duration() {
+        let mut document =
+            puzzle_lang::parse_game_for_path(TIMED_WAIT, "bevy_timed_wait.puzzle").unwrap();
+        let puzzle_lang::LoadedDocumentModel::Puzzle2d { game, .. } = &mut document.models[0]
+        else {
+            panic!("timed wait fixture must be 2D");
+        };
+        game.input_buffer.busy_input = puzzle_lang::BusyInputPolicy::Accelerate { min_wait_ms: 50 };
+        let mut host = PuzzleBevyPlayerHost::from_image_free_runtime(
+            RuntimeSession::from_document(document).unwrap(),
+        )
+        .unwrap();
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "first".to_string(),
+            },
+            0.0,
+        )
+        .unwrap();
+        host.process_presentation(0.0).unwrap();
+
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "second".to_string(),
+            },
+            0.01,
+        )
+        .unwrap();
+        host.process_presentation(0.049).unwrap();
+        assert!(host.snapshot().busy);
+        host.process_presentation(0.05).unwrap();
+        assert!(!host.snapshot().busy);
+        assert!(host.pending_presentation_continuation.is_none());
+    }
+
+    #[test]
+    fn reject_policy_does_not_queue_busy_model_input() {
+        let mut document =
+            puzzle_lang::parse_game_for_path(TIMED_WAIT, "bevy_timed_wait.puzzle").unwrap();
+        let puzzle_lang::LoadedDocumentModel::Puzzle2d { game, .. } = &mut document.models[0]
+        else {
+            panic!("timed wait fixture must be 2D");
+        };
+        game.input_buffer.busy_input = puzzle_lang::BusyInputPolicy::Reject;
+        let mut host = PuzzleBevyPlayerHost::from_image_free_runtime(
+            RuntimeSession::from_document(document).unwrap(),
+        )
+        .unwrap();
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "first".to_string(),
+            },
+            0.0,
+        )
+        .unwrap();
+        host.process_presentation(0.0).unwrap();
+        let waiting_revision = host.snapshot().session_revision;
+
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "second".to_string(),
+            },
+            0.01,
+        )
+        .unwrap();
+
+        assert_eq!(host.snapshot().session_revision, waiting_revision);
+        assert!(!host.snapshot().queued_model_input);
+        host.process_presentation(0.099).unwrap();
+        assert!(host.snapshot().busy);
+    }
+
+    #[test]
+    fn skip_policy_completes_the_wait_and_runs_the_queued_input_immediately() {
+        let mut document =
+            puzzle_lang::parse_game_for_path(TIMED_WAIT, "bevy_timed_wait.puzzle").unwrap();
+        let puzzle_lang::LoadedDocumentModel::Puzzle2d { game, .. } = &mut document.models[0]
+        else {
+            panic!("timed wait fixture must be 2D");
+        };
+        game.input_buffer.busy_input = puzzle_lang::BusyInputPolicy::Skip;
+        let mut host = PuzzleBevyPlayerHost::from_image_free_runtime(
+            RuntimeSession::from_document(document).unwrap(),
+        )
+        .unwrap();
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "first".to_string(),
+            },
+            0.0,
+        )
+        .unwrap();
+        host.process_presentation(0.0).unwrap();
+
+        host.dispatch_action(
+            SessionAction::Input {
+                name: "second".to_string(),
+            },
+            0.01,
+        )
+        .unwrap();
+
+        assert!(!host.snapshot().busy);
+        assert!(host.wait_until_seconds.is_none());
         assert!(host.pending_presentation_continuation.is_none());
         assert!(host.fatal_error().is_none());
     }
@@ -3615,15 +4398,27 @@ level "start" { A }
             .find(|component| component.modal)
             .map(|component| component.id.clone())
             .expect("message must project a modal component");
-        let revision = host.snapshot().revision;
+        let revision = host.snapshot().session_revision;
         assert!(host.snapshot().busy);
-        assert!(host.snapshot().presentation_continuation.is_none());
+        assert!(
+            host.snapshot()
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.continuation.as_ref())
+                .is_none()
+        );
 
         host.process_presentation(1.0).unwrap();
 
-        assert_eq!(host.snapshot().revision, revision);
+        assert_eq!(host.snapshot().session_revision, revision);
         assert!(host.snapshot().busy);
-        assert!(host.snapshot().presentation_continuation.is_none());
+        assert!(
+            host.snapshot()
+                .presentation
+                .as_ref()
+                .and_then(|presentation| presentation.continuation.as_ref())
+                .is_none()
+        );
         assert!(
             host.snapshot()
                 .surface
@@ -3944,11 +4739,58 @@ step board
     }
 
     #[test]
+    fn removed_ui_entities_are_despawned_once_per_removed_subtree() {
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let child = world.spawn_empty().id();
+        let grandchild = world.spawn_empty().id();
+        let identity = |tree_path| PuzzleBevyUiIdentity {
+            component: "scene".to_string(),
+            tree_path,
+        };
+        let existing = HashMap::from([
+            (identity(Vec::new()), root),
+            (identity(vec![0]), child),
+            (identity(vec![0, 0]), grandchild),
+        ]);
+
+        assert_eq!(
+            removed_ui_subtree_roots(&existing, &BTreeSet::new()),
+            vec![root]
+        );
+        assert_eq!(
+            removed_ui_subtree_roots(&existing, &BTreeSet::from([identity(Vec::new())])),
+            vec![child]
+        );
+    }
+
+    #[test]
     fn animation_batch_routes_to_exact_component_and_source() {
         let mut host =
-            PuzzleBevyPlayerHost::from_image_free_source(TENETEN3D, "games/TENETEN3D.puzzle")
+            PuzzleBevyPlayerHost::from_image_free_source(EDITOR_TWEEN, "player_tween.puzzle")
                 .unwrap();
+        host.dispatch_action(
+            SessionAction::Key {
+                trigger: RuntimeKeyTrigger::ArrowRight,
+            },
+            1.0,
+        )
+        .unwrap();
         let original_source = host.viewports.keys().next().unwrap().clone();
+        let animations = host
+            .snapshot
+            .presentation
+            .as_ref()
+            .unwrap()
+            .steps
+            .iter()
+            .find_map(|event| match event {
+                RuntimePresentationEvent::AnimationBatch { animations, .. } => {
+                    Some(animations.clone())
+                }
+                _ => None,
+            })
+            .expect("fixture input must emit an animation batch");
         let sibling_source = RuntimeViewportSourceId {
             model: original_source.model.clone(),
             component: original_source.component.clone(),
@@ -3957,31 +4799,169 @@ step board
         let mut sibling = host.viewports[&original_source].clone();
         sibling.source = sibling_source.clone();
         host.viewports.insert(sibling_source.clone(), sibling);
-        let animation = RuntimeAnimationEvent::Animation {
-            name: "pulse".to_string(),
-            position: puzzle_runtime_contract::RuntimeCoord {
-                x: 0,
-                y: 0,
-                z: Some(0),
-            },
-            resolved_visual: None,
-        };
+        let sibling_origin = host.animation_origins[&original_source].clone();
+        host.animation_origins
+            .insert(sibling_source.clone(), sibling_origin);
         host.pending_presentation = VecDeque::from([QueuedPresentationEvent {
             event: RuntimePresentationEvent::AnimationBatch {
                 source: sibling_source.clone(),
                 level_index: Some(0),
-                animations: vec![animation.clone()],
+                animations,
             },
         }]);
         host.process_presentation(1.0).unwrap();
-        assert!(
-            host.viewports[&original_source]
-                .active_animations
-                .is_empty()
+        assert!(host.viewports[&original_source].active_animation.is_none());
+        assert!(host.viewports[&sibling_source].active_animation.is_some());
+    }
+
+    #[test]
+    fn animation_wait_releases_only_after_the_final_sample_is_published() {
+        let source = EDITOR_TWEEN.replace(
+            "input right [ Player | no Player ] -> [ | Player ]",
+            "input right [ Player | no Player ] -> [ | Player ] wait animation",
+        );
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(&source, "player_waiting_tween.puzzle")
+                .unwrap();
+        host.dispatch_action(
+            SessionAction::Key {
+                trigger: RuntimeKeyTrigger::ArrowRight,
+            },
+            1.0,
+        )
+        .unwrap();
+        host.process_presentation(1.0).unwrap();
+        let transition = host
+            .waiting_for_animation_publication
+            .expect("fixture must wait for the animation publication");
+
+        let initial = host.resolve_frames(1.0).unwrap();
+        assert!(!initial.is_empty());
+        assert_eq!(
+            host.completed_animation_transition_at(1.0).unwrap(),
+            None,
+            "sampling the first frame must not release the continuation"
+        );
+
+        let final_sample = host.resolve_frames(1.31).unwrap();
+        assert!(!final_sample.is_empty());
+        assert_eq!(
+            host.completed_animation_transition_at(1.31).unwrap(),
+            Some(transition)
         );
         assert_eq!(
-            host.viewports[&sibling_source].active_animations,
-            vec![animation]
+            host.waiting_for_animation_publication,
+            Some(transition),
+            "resolving the final sample is not a renderer publication acknowledgement"
+        );
+
+        host.acknowledge_animation_publication(transition).unwrap();
+        assert_eq!(host.waiting_for_animation_publication, None);
+        assert!(
+            host.viewports
+                .values()
+                .all(|viewport| viewport.active_animation.is_none())
+        );
+    }
+
+    #[cfg(feature = "editor-debug")]
+    #[test]
+    fn player_model_input_does_not_invalidate_unchanged_scene_ui() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(EDITOR_TWEEN, "player_tween.puzzle")
+                .unwrap();
+        let surface_before_input = host.snapshot.surface.clone();
+        let ui_generation_before_input = host.ui_projection_generation;
+        let revision_before_input = host.snapshot.session_revision;
+
+        host.dispatch_action(
+            SessionAction::Key {
+                trigger: RuntimeKeyTrigger::ArrowRight,
+            },
+            1.0,
+        )
+        .unwrap();
+
+        assert!(host.snapshot.session_revision > revision_before_input);
+        assert_eq!(host.snapshot.surface, surface_before_input);
+        assert_eq!(
+            host.ui_projection_generation, ui_generation_before_input,
+            "model input must update the renderer frame without reconfiguring unchanged scene UI"
+        );
+    }
+
+    #[cfg(feature = "editor-debug")]
+    #[test]
+    fn editor_authoring_input_keeps_runtime_tween_events_on_the_player_timeline() {
+        let mut host =
+            PuzzleBevyPlayerHost::from_image_free_source(EDITOR_TWEEN, "editor_tween.puzzle")
+                .unwrap();
+        let puzzle_runtime_contract::SolverStateSnapshot::TwoD {
+            width,
+            height,
+            layer_count,
+            slots,
+            variables,
+            level_fired_rules,
+        } = host.editor_development_snapshot().solver_state
+        else {
+            panic!("editor tween fixture must be two-dimensional")
+        };
+        let state = RuntimeStateSnapshot::TwoD(puzzle_runtime_contract::RuntimeStateSnapshot2d {
+            kind: puzzle_runtime_contract::RuntimeModelKind::TwoD,
+            width,
+            height,
+            layer_count,
+            slots,
+            variables,
+            level_fired_rules,
+        });
+        host.hydrate_editor_model_state(
+            "default",
+            &state,
+            0,
+            false,
+            EditorAuthoringPresentation {
+                surface: puzzle_editor_preview_contract::EditorAuthoringSurface {
+                    surface_id: "preview".to_string(),
+                    interaction: puzzle_editor_preview_contract::EditorAuthoringInteraction::Play,
+                },
+                renderer: EditorRendererStrategy::Grid2d,
+            },
+            0.0,
+        )
+        .unwrap();
+
+        let ui_generation_before_input = host.ui_projection_generation;
+        let revision_before_input = host.snapshot.session_revision;
+        host.dispatch_editor_key(RuntimeKeyTrigger::ArrowRight, false, 1.0)
+            .unwrap();
+        assert!(
+            host.snapshot.session_revision > revision_before_input,
+            "the fixture must exercise a new runtime revision"
+        );
+        assert_eq!(
+            host.ui_projection_generation, ui_generation_before_input,
+            "model input must update the renderer frame without remounting the editor UI viewport"
+        );
+        assert!(
+            host.snapshot
+                .presentation
+                .as_ref()
+                .is_some_and(|presentation| presentation
+                    .steps
+                    .iter()
+                    .any(|event| matches!(event, RuntimePresentationEvent::AnimationBatch { .. }))),
+            "editor input must retain the runtime tween event: {:?}",
+            host.snapshot.presentation
+        );
+        host.process_presentation(1.0).unwrap();
+
+        assert!(
+            host.viewports
+                .values()
+                .any(|viewport| viewport.active_animation.is_some()),
+            "editor input must use the same runtime animation queue as standalone input"
         );
     }
 
@@ -4133,7 +5113,7 @@ step board
         let frame = RuntimeResolvedRenderFrame {
             batches: Vec::new(),
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
         let view = |order, x| PuzzleBevy3dView {
             active: true,

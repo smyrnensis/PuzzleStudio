@@ -39,23 +39,25 @@ use puzzle_runtime_contract::SolverStateSnapshot;
 use puzzle_runtime_contract::{
     RuntimeChoiceDirection, RuntimeGridMode, RuntimeKeyTrigger,
     RuntimeModelPresentationContinuationToken, RuntimePresentationContinuationToken,
-    RuntimePresentationEvent, RuntimeProgressPersistenceOperation, RuntimeProgressSaveRequest,
-    RuntimePuzzle3Resources, RuntimePuzzle3Snapshot, RuntimeResolvedCompositionGroup,
-    RuntimeResolvedFitMode, RuntimeResolvedPlayback, RuntimeResolvedRenderCell,
-    RuntimeResolvedRenderInstance, RuntimeResolvedRenderScene, RuntimeResolvedSampling,
-    RuntimeResolvedVisualClip, RuntimeResolvedVisualFrame, RuntimeResolvedVisualLayout,
-    RuntimeSceneActionId, RuntimeSceneActionToken, RuntimeViewportSourceId,
+    RuntimePresentationEvent, RuntimePresentationTransitionId, RuntimeProgressPersistenceOperation,
+    RuntimeProgressSaveRequest, RuntimePuzzle3Resources, RuntimePuzzle3Snapshot,
+    RuntimeResolvedCompositionGroup, RuntimeResolvedFitMode, RuntimeResolvedPlayback,
+    RuntimeResolvedRenderCell, RuntimeResolvedRenderInstance, RuntimeResolvedRenderScene,
+    RuntimeResolvedSampling, RuntimeResolvedVisualClip, RuntimeResolvedVisualFrame,
+    RuntimeResolvedVisualLayout, RuntimeSceneActionId, RuntimeSceneActionToken,
+    RuntimeSessionRevision, RuntimeStateCommitId, RuntimeViewportSourceId,
     RuntimeVisualComposition, RuntimeVisualSpace, RuntimeVisualTransform, SessionAction,
 };
 #[cfg(feature = "editor-debug")]
 use puzzle_runtime_contract::{RuntimeStateSnapshot2d, RuntimeStateSnapshot3d};
 use puzzle_scene::{ComponentActionCell, component_action_cells, component_choice_cells};
 use puzzle_session_contract::{
-    RuntimeAnimationSettings, RuntimeComponentPresentation, RuntimeInputBinding,
-    RuntimeInputBufferSettings, RuntimeKeyBinding, RuntimePuzzle2Cell, RuntimePuzzle2Layer,
-    RuntimePuzzle2Snapshot, RuntimeRendererState, RuntimeResolvedEventBinding,
-    RuntimeResolvedScene, RuntimeResolvedSceneComponent, RuntimeSessionSnapshot, RuntimeSurface,
-    RuntimeSurfaceComponent, RuntimeTheme, RuntimeTweenSettings, RuntimeViewportDimension,
+    RuntimeAnimationSettings, RuntimeBusyInputPolicy, RuntimeComponentPresentation,
+    RuntimeInputBinding, RuntimeInputBufferSettings, RuntimeKeyBinding,
+    RuntimePresentationTransition, RuntimePuzzle2Cell, RuntimePuzzle2Layer, RuntimePuzzle2Snapshot,
+    RuntimeRendererState, RuntimeResolvedEventBinding, RuntimeResolvedScene,
+    RuntimeResolvedSceneComponent, RuntimeSessionSnapshot, RuntimeSurface, RuntimeSurfaceComponent,
+    RuntimeTheme, RuntimeTweenSettings, RuntimeViewportDimension,
 };
 #[cfg(any(feature = "editor-debug", test))]
 use puzzle_session_contract::{
@@ -85,7 +87,11 @@ fn solver_session_is_not_available(runtime: &RuntimeSession) {
 )]
 pub struct RuntimeSession {
     model: Box<dyn StandaloneSessionModel>,
-    revision: u64,
+    session_revision: RuntimeSessionRevision,
+    state_commit: RuntimeStateCommitId,
+    next_presentation_transition: u64,
+    active_presentation: Option<RuntimePresentationTransition>,
+    pending_transition_from: Option<RuntimeStateCommitId>,
     queued_input: Option<String>,
     progress_persistence_enabled: bool,
     has_persisted_progress: bool,
@@ -94,10 +100,38 @@ pub struct RuntimeSession {
     last_progress_save: ProgressSaveData,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct CommittedStateIdentity {
+    level_index: Option<usize>,
+    level_count: usize,
+    accepts_model_input: bool,
+    viewport_sources: BTreeMap<RuntimeViewportSourceId, RuntimeRendererState>,
+    surface: RuntimeSurface,
+    busy: bool,
+    can_undo: bool,
+    can_redo: bool,
+}
+
+impl From<RuntimeSessionSnapshot> for CommittedStateIdentity {
+    fn from(snapshot: RuntimeSessionSnapshot) -> Self {
+        Self {
+            level_index: snapshot.level_index,
+            level_count: snapshot.level_count,
+            accepts_model_input: snapshot.accepts_model_input,
+            viewport_sources: snapshot.viewport_sources,
+            surface: snapshot.surface,
+            busy: snapshot.busy,
+            can_undo: snapshot.can_undo,
+            can_redo: snapshot.can_redo,
+        }
+    }
+}
+
 #[cfg(feature = "editor-debug")]
 pub struct RuntimeDebugDispatch {
     pub snapshot: RuntimeSessionSnapshot,
     pub debug: Value,
+    presentation_steps: Vec<RuntimePresentationEvent>,
 }
 
 #[cfg(feature = "editor-debug")]
@@ -117,9 +151,10 @@ pub struct RuntimeEditorModelProjection {
 trait StandaloneSessionModel {
     fn player_snapshot(
         &self,
-        revision: u64,
+        session_revision: RuntimeSessionRevision,
+        state_commit: RuntimeStateCommitId,
+        presentation: Option<RuntimePresentationTransition>,
         condition_context: SceneConditionContext,
-        presentation_events: &[RuntimePresentationEvent],
     ) -> RuntimeSessionSnapshot;
     #[cfg(any(feature = "editor-debug", test))]
     fn development_projection(
@@ -156,7 +191,7 @@ trait StandaloneSessionModel {
         &mut self,
         model: &str,
         input_name: &str,
-    ) -> Result<(), String>;
+    ) -> Result<Vec<RuntimePresentationEvent>, String>;
     #[cfg(feature = "editor-debug")]
     fn apply_editor_model_debug_input_name(
         &mut self,
@@ -329,11 +364,17 @@ impl RuntimeSession {
     }
 
     pub fn from_document(document: LoadedDocument) -> Result<Self, String> {
+        puzzle_lang::validate_loaded_document_sound_references(&document)
+            .map_err(|error| error.to_string())?;
         let model = standalone_session_model(document)?;
         let last_progress_save = model.progress_save_data();
         Ok(Self {
             model,
-            revision: 0,
+            session_revision: RuntimeSessionRevision(0),
+            state_commit: RuntimeStateCommitId(0),
+            next_presentation_transition: 1,
+            active_presentation: None,
+            pending_transition_from: None,
             queued_input: None,
             progress_persistence_enabled: true,
             has_persisted_progress: false,
@@ -345,16 +386,17 @@ impl RuntimeSession {
 
     #[cfg(any(feature = "editor-debug", test))]
     pub fn snapshot_json(&self) -> String {
-        self.snapshot_json_with_events(&[])
+        puzzle_presentation_json::to_string(&self.development_snapshot())
+            .expect("snapshot JSON should serialize")
     }
 
     pub fn snapshot(&self) -> RuntimeSessionSnapshot {
-        self.snapshot_with_events(&[])
+        self.snapshot_with_presentation(self.current_presentation())
     }
 
-    #[cfg(feature = "editor-debug")]
+    #[cfg(any(feature = "editor-debug", test))]
     pub fn development_snapshot(&self) -> RuntimeDevelopmentSessionSnapshot {
-        self.development_snapshot_with_events(&[])
+        self.compose_development_snapshot(self.snapshot())
     }
 
     #[cfg(feature = "editor-debug")]
@@ -363,6 +405,11 @@ impl RuntimeSession {
         player: RuntimeSessionSnapshot,
     ) -> RuntimeDevelopmentSessionSnapshot {
         self.compose_development_snapshot(player)
+    }
+
+    #[cfg(feature = "editor-debug")]
+    pub fn editor_input_bindings(&self) -> Vec<RuntimeInputBinding> {
+        self.model.input_bindings()
     }
 
     #[cfg(feature = "editor-debug")]
@@ -386,9 +433,16 @@ impl RuntimeSession {
         materialize_level_start: bool,
     ) -> Result<RuntimeSessionSnapshot, String> {
         let next_revision = self.next_revision()?;
+        let from_state_commit = self.state_commit;
+        let before_state = self.committed_state_identity();
         self.model
             .commit_editor_model_state(model, state, level_index, materialize_level_start)?;
-        self.revision = next_revision;
+        self.session_revision = next_revision;
+        if self.committed_state_identity() != before_state {
+            self.state_commit = self.next_state_commit()?;
+        }
+        self.pending_transition_from = Some(from_state_commit);
+        self.active_presentation = None;
         Ok(self.snapshot())
     }
 
@@ -405,28 +459,65 @@ impl RuntimeSession {
     }
 
     fn response_snapshot(&mut self) -> RuntimeSessionSnapshot {
-        let events = self.model.take_presentation_events();
-        self.snapshot_with_events(&events)
+        let steps = self.model.take_presentation_events();
+        self.install_presentation_transition(steps)
     }
 
-    #[cfg(any(feature = "editor-debug", test))]
-    fn snapshot_json_with_events(&self, events: &[RuntimePresentationEvent]) -> String {
-        puzzle_presentation_json::to_string(&self.development_snapshot_with_events(events))
-            .expect("snapshot JSON should serialize")
+    fn current_presentation(&self) -> Option<RuntimePresentationTransition> {
+        let mut presentation = self.active_presentation.clone()?;
+        if let Some(continuation) = &mut presentation.continuation {
+            continuation.session_revision = self.session_revision;
+        }
+        Some(presentation)
     }
 
-    fn snapshot_with_events(&self, events: &[RuntimePresentationEvent]) -> RuntimeSessionSnapshot {
-        self.model
-            .player_snapshot(self.revision, self.scene_condition_context(), events)
-    }
-
-    #[cfg(any(feature = "editor-debug", test))]
-    fn development_snapshot_with_events(
+    fn snapshot_with_presentation(
         &self,
-        events: &[RuntimePresentationEvent],
-    ) -> RuntimeDevelopmentSessionSnapshot {
-        let player = self.snapshot_with_events(events);
-        self.compose_development_snapshot(player)
+        presentation: Option<RuntimePresentationTransition>,
+    ) -> RuntimeSessionSnapshot {
+        let mut snapshot = self.model.player_snapshot(
+            self.session_revision,
+            self.state_commit,
+            presentation,
+            self.scene_condition_context(),
+        );
+        snapshot.queued_model_input = self.queued_input.is_some();
+        snapshot
+    }
+
+    fn install_presentation_transition(
+        &mut self,
+        steps: Vec<RuntimePresentationEvent>,
+    ) -> RuntimeSessionSnapshot {
+        let waits = self.model.presentation_waits();
+        if steps.is_empty() && waits.is_empty() {
+            self.active_presentation = None;
+            self.pending_transition_from = None;
+            return self.snapshot();
+        }
+        let id = RuntimePresentationTransitionId(self.next_presentation_transition);
+        self.next_presentation_transition = self
+            .next_presentation_transition
+            .checked_add(1)
+            .expect("presentation transition identity exhausted");
+        let from_state_commit = self
+            .pending_transition_from
+            .take()
+            .unwrap_or(self.state_commit);
+        let continuation = (!waits.is_empty()).then_some(RuntimePresentationContinuationToken {
+            session_revision: self.session_revision,
+            transition: id,
+            waits,
+        });
+        let presentation = RuntimePresentationTransition {
+            id,
+            from_state_commit,
+            to_state_commit: self.state_commit,
+            steps,
+            continuation,
+        };
+        self.active_presentation = Some(presentation.clone());
+        self.snapshot_with_presentation(Some(presentation))
     }
 
     #[cfg(any(feature = "editor-debug", test))]
@@ -463,7 +554,7 @@ impl RuntimeSession {
                         .to_string(),
                 );
             }
-            let snapshot = self.snapshot_with_events(&[]);
+            let snapshot = self.snapshot();
             let inputs = self.model.input_bindings();
             let Some(action) = session_action_for_key(&snapshot, &inputs, trigger) else {
                 return Ok(snapshot);
@@ -478,7 +569,7 @@ impl RuntimeSession {
                 }
                 if self.model.queues_input_while_waiting() {
                     self.queued_input = Some(name.clone());
-                    self.revision = self.next_revision()?;
+                    self.session_revision = self.next_revision()?;
                 }
                 return Ok(self.snapshot());
             }
@@ -506,15 +597,26 @@ impl RuntimeSession {
         }
 
         let should_persist = !matches!(action, SessionAction::ChoiceMove { .. });
+        let before_state = self.committed_state_identity();
         match action {
             SessionAction::Initialize | SessionAction::Snapshot | SessionAction::Key { .. } => {
                 unreachable!("snapshot request returned above")
             }
             SessionAction::PresentationComplete { token } => {
-                if token.revision != self.revision {
+                if token.session_revision != self.session_revision {
                     return Err(format!(
                         "presentation continuation revision {} is stale; current revision is {}",
-                        token.revision, self.revision
+                        token.session_revision.0, self.session_revision.0
+                    ));
+                }
+                if self
+                    .active_presentation
+                    .as_ref()
+                    .is_none_or(|presentation| presentation.id != token.transition)
+                {
+                    return Err(format!(
+                        "presentation transition {} is no longer active",
+                        token.transition.0
                     ));
                 }
                 if token.waits.is_empty() {
@@ -525,10 +627,12 @@ impl RuntimeSession {
                 }
                 self.model.validate_presentation_waits(&token.waits)?;
                 self.model.complete_presentation_waits(&token.waits)?;
+                self.active_presentation = None;
                 if !self.model.is_waiting()
-                    && let Some(input) = self.queued_input.take()
+                    && let Some(input) = self.queued_input.as_deref()
                 {
-                    self.model.apply_input_name(&input)?;
+                    self.model.apply_input_name(input)?;
+                    self.queued_input = None;
                 }
             }
             SessionAction::Undo => {
@@ -566,12 +670,24 @@ impl RuntimeSession {
             }
         }
 
-        self.finish_mutation(should_persist)?;
+        self.finish_mutation(should_persist, before_state)?;
         Ok(self.response_snapshot())
     }
 
-    fn finish_mutation(&mut self, should_persist: bool) -> Result<(), String> {
-        self.revision = self.next_revision()?;
+    fn committed_state_identity(&self) -> CommittedStateIdentity {
+        self.snapshot_with_presentation(None).into()
+    }
+
+    fn finish_mutation(
+        &mut self,
+        should_persist: bool,
+        before_state: CommittedStateIdentity,
+    ) -> Result<(), String> {
+        self.pending_transition_from = Some(self.state_commit);
+        self.session_revision = self.next_revision()?;
+        if self.committed_state_identity() != before_state {
+            self.state_commit = self.next_state_commit()?;
+        }
         if self.model.take_progress_clear_request() {
             self.request_progress_persistence(RuntimeProgressPersistenceOperation::Delete)?;
         } else if should_persist {
@@ -613,13 +729,14 @@ impl RuntimeSession {
         &mut self,
         input_name: &str,
     ) -> Result<RuntimeDebugDispatch, String> {
+        let before_state = self.committed_state_identity();
         let condition_context = self.scene_condition_context();
         let mut dispatch = self
             .model
             .apply_debug_input_name(input_name, condition_context)?;
-        let events = dispatch.snapshot.presentation_events.clone();
-        self.finish_mutation(true)?;
-        dispatch.snapshot = self.snapshot_with_events(&events);
+        let steps = std::mem::take(&mut dispatch.presentation_steps);
+        self.finish_mutation(true, before_state)?;
+        dispatch.snapshot = self.install_presentation_transition(steps);
         Ok(dispatch)
     }
 
@@ -636,7 +753,7 @@ impl RuntimeSession {
                 "`any_input` is a binding wildcard and cannot be dispatched as a key".to_string(),
             );
         }
-        let snapshot = self.snapshot_with_events(&[]);
+        let snapshot = self.snapshot();
         let inputs = self.model.input_bindings();
         let Some(action) = session_action_for_key(&snapshot, &inputs, trigger) else {
             return Ok(RuntimeEditorKeyDispatch {
@@ -671,7 +788,7 @@ impl RuntimeSession {
                 "`any_input` is a binding wildcard and cannot be dispatched as a key".to_string(),
             );
         }
-        let mut snapshot = self.snapshot_with_events(&[]);
+        let mut snapshot = self.snapshot();
         let inputs = self.model.editor_model_input_bindings(model)?;
         snapshot.accepts_model_input = true;
         let Some(action) = session_model_input_action_for_key(&snapshot, &inputs, trigger) else {
@@ -682,24 +799,26 @@ impl RuntimeSession {
         };
         if let SessionAction::Input { name } = action {
             if trace_model_input {
+                let before_state = self.committed_state_identity();
                 let condition_context = self.scene_condition_context();
                 let mut dispatch = self.model.apply_editor_model_debug_input_name(
                     model,
                     &name,
                     condition_context,
                 )?;
-                let events = dispatch.snapshot.presentation_events.clone();
-                self.finish_mutation(true)?;
-                dispatch.snapshot = self.snapshot_with_events(&events);
+                let steps = std::mem::take(&mut dispatch.presentation_steps);
+                self.finish_mutation(true, before_state)?;
+                dispatch.snapshot = self.install_presentation_transition(steps);
                 return Ok(RuntimeEditorKeyDispatch {
                     snapshot: dispatch.snapshot,
                     debug: Some(dispatch.debug),
                 });
             }
-            self.model.apply_editor_model_input_name(model, &name)?;
-            self.finish_mutation(true)?;
+            let before_state = self.committed_state_identity();
+            let steps = self.model.apply_editor_model_input_name(model, &name)?;
+            self.finish_mutation(true, before_state)?;
             return Ok(RuntimeEditorKeyDispatch {
-                snapshot: self.response_snapshot(),
+                snapshot: self.install_presentation_transition(steps),
                 debug: None,
             });
         }
@@ -764,10 +883,20 @@ impl RuntimeSession {
         self.model.accepts_model_input()
     }
 
-    fn next_revision(&self) -> Result<u64, String> {
-        self.revision
+    fn next_revision(&self) -> Result<RuntimeSessionRevision, String> {
+        self.session_revision
+            .0
             .checked_add(1)
+            .map(RuntimeSessionRevision)
             .ok_or_else(|| "runtime session revision counter exhausted".to_string())
+    }
+
+    fn next_state_commit(&self) -> Result<RuntimeStateCommitId, String> {
+        self.state_commit
+            .0
+            .checked_add(1)
+            .map(RuntimeStateCommitId)
+            .ok_or_else(|| "runtime state commit counter exhausted".to_string())
     }
 
     fn refresh_progress_save_request(&mut self) -> Result<(), String> {
@@ -1087,20 +1216,25 @@ impl DocumentSessionRuntime {
 impl StandaloneSessionModel for DocumentSessionRuntime {
     fn player_snapshot(
         &self,
-        revision: u64,
+        session_revision: RuntimeSessionRevision,
+        state_commit: RuntimeStateCommitId,
+        presentation: Option<RuntimePresentationTransition>,
         condition_context: SceneConditionContext,
-        presentation_events: &[RuntimePresentationEvent],
     ) -> RuntimeSessionSnapshot {
         let primary = self.primary_snapshot_index();
         let mut snapshots = self
             .models
             .iter()
-            .map(|model| model.player_snapshot(revision, condition_context, presentation_events))
+            .map(|model| {
+                model.player_snapshot(
+                    session_revision,
+                    state_commit,
+                    presentation.clone(),
+                    condition_context,
+                )
+            })
             .collect::<Vec<_>>();
         let mut snapshot = snapshots.remove(primary);
-        let waits = self.presentation_waits();
-        snapshot.presentation_continuation =
-            (!waits.is_empty()).then_some(RuntimePresentationContinuationToken { revision, waits });
         for model_snapshot in snapshots {
             snapshot
                 .viewport_sources
@@ -1200,7 +1334,7 @@ impl StandaloneSessionModel for DocumentSessionRuntime {
         &mut self,
         model: &str,
         input_name: &str,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<RuntimePresentationEvent>, String> {
         let index = document_editor_model_index(&self.models, model)?;
         self.models[index].apply_editor_model_input_name(model, input_name)
     }
@@ -1600,15 +1734,38 @@ where
         Ok((
             candidate,
             RuntimeEditorModelProjection {
-                source: RuntimeViewportSourceId {
-                    model: self.model_name.clone(),
-                    component: "editor-authoring".to_string(),
-                    source: "model".to_string(),
-                },
+                source: self.editor_viewport_source(),
                 renderer,
                 solver_state,
             },
         ))
+    }
+
+    fn editor_viewport_source(&self) -> RuntimeViewportSourceId {
+        RuntimeViewportSourceId {
+            model: self.model_name.clone(),
+            component: "editor-authoring".to_string(),
+            source: "model".to_string(),
+        }
+    }
+
+    fn take_editor_presentation_events(&mut self) -> Vec<RuntimePresentationEvent> {
+        let source = self.editor_viewport_source();
+        self.take_presentation_events()
+            .into_iter()
+            .map(|event| match event {
+                RuntimePresentationEvent::AnimationBatch {
+                    level_index,
+                    animations,
+                    ..
+                } => RuntimePresentationEvent::AnimationBatch {
+                    source: source.clone(),
+                    level_index,
+                    animations,
+                },
+                event => event,
+            })
+            .collect()
     }
 
     fn current_editor_projection(
@@ -1626,11 +1783,7 @@ where
             .active_level_index()
             .ok_or_else(|| format!("editor model {:?} has no active level", self.model_name))?;
         Ok(RuntimeEditorModelProjection {
-            source: RuntimeViewportSourceId {
-                model: self.model_name.clone(),
-                component: "editor-authoring".to_string(),
-                source: "model".to_string(),
-            },
+            source: self.editor_viewport_source(),
             renderer: self.projection.editor_renderer_state(
                 &self.loaded,
                 self.session.state(),
@@ -1671,15 +1824,25 @@ where
                     })
             })
             .transpose()?;
-        let presentation_events = self.take_presentation_events();
+        let presentation_events = if targeted_model {
+            self.take_editor_presentation_events()
+        } else {
+            self.take_presentation_events()
+        };
         Ok(RuntimeDebugDispatch {
-            snapshot: self.player_snapshot(0, condition_context, &presentation_events),
+            snapshot: self.player_snapshot(
+                RuntimeSessionRevision(0),
+                RuntimeStateCommitId(0),
+                None,
+                condition_context,
+            ),
             debug: debug_transition_value_grid_with_snapshots(
                 &self.loaded,
                 debug.as_ref(),
                 Some(self.projection.editor_hydration_state(&initial_state)),
                 snapshots.as_deref(),
             ),
+            presentation_steps: presentation_events,
         })
     }
 }
@@ -1692,9 +1855,10 @@ where
 {
     fn player_snapshot(
         &self,
-        revision: u64,
+        session_revision: RuntimeSessionRevision,
+        state_commit: RuntimeStateCommitId,
+        presentation: Option<RuntimePresentationTransition>,
         condition_context: SceneConditionContext,
-        presentation_events: &[RuntimePresentationEvent],
     ) -> RuntimeSessionSnapshot {
         let busy = self.session.is_waiting();
         let mut projected =
@@ -1725,25 +1889,18 @@ where
             .viewport_sources
             .retain(|source, _| referenced_sources.contains(source));
         RuntimeSessionSnapshot {
-            revision,
+            session_revision,
+            state_commit,
             has_progress_save: condition_context.has_progress_save,
             theme: self.theme,
             default_wait_ms: self.loaded.default_wait_ms,
             input_buffer: input_buffer_settings(&self.loaded),
             animation: animation_settings(&self.loaded),
-            presentation_events: presentation_events.to_vec(),
-            presentation_continuation: self.session.presentation_continuation().map(
-                |continuation| RuntimePresentationContinuationToken {
-                    revision,
-                    waits: vec![RuntimeModelPresentationContinuationToken {
-                        model: self.model_name.clone(),
-                        sequence: continuation.sequence,
-                    }],
-                },
-            ),
+            presentation,
             level_index: self.session.active_level_index(),
             level_count: self.loaded.levels.len(),
             accepts_model_input: self.session.accepts_model_input(&self.loaded),
+            queued_model_input: false,
             viewport_sources: projected.viewport_sources,
             surface,
             busy,
@@ -1828,7 +1985,7 @@ where
         &mut self,
         model: &str,
         input_name: &str,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<RuntimePresentationEvent>, String> {
         if model != self.model_name {
             return Err(format!(
                 "editor model identity {model:?} does not match compiled model {:?}",
@@ -1839,7 +1996,8 @@ where
             .ok_or_else(|| format!("unknown input: {input_name}"))?;
         self.session
             .apply_targeted_model_input(&self.loaded, input)
-            .map_err(|error| format!("{error:?}"))
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(self.take_editor_presentation_events())
     }
 
     #[cfg(feature = "editor-debug")]
@@ -1890,7 +2048,10 @@ where
     }
 
     fn queues_input_while_waiting(&self) -> bool {
-        self.loaded.input_buffer.queue_during_wait
+        !matches!(
+            &self.loaded.input_buffer.busy_input,
+            puzzle_lang::BusyInputPolicy::Reject
+        )
     }
 
     fn has_input_name(&self, input_name: &str) -> bool {
@@ -3679,9 +3840,16 @@ fn input_buffer_settings<const D: usize, Size: GridSize<D>>(
     loaded: &LoadedGridGame<D, Size>,
 ) -> RuntimeInputBufferSettings {
     RuntimeInputBufferSettings {
-        queue_during_wait: loaded.input_buffer.queue_during_wait,
-        fast_forward_wait: loaded.input_buffer.fast_forward_wait,
-        min_wait_ms: loaded.input_buffer.min_wait_ms,
+        busy_input: match &loaded.input_buffer.busy_input {
+            puzzle_lang::BusyInputPolicy::Reject => RuntimeBusyInputPolicy::Reject,
+            puzzle_lang::BusyInputPolicy::Queue => RuntimeBusyInputPolicy::Queue,
+            puzzle_lang::BusyInputPolicy::Skip => RuntimeBusyInputPolicy::Skip,
+            puzzle_lang::BusyInputPolicy::Accelerate { min_wait_ms } => {
+                RuntimeBusyInputPolicy::Accelerate {
+                    min_wait_ms: *min_wait_ms,
+                }
+            }
+        },
     }
 }
 
@@ -3866,7 +4034,9 @@ fn session_model_input_action_for_key(
     inputs: &[RuntimeInputBinding],
     trigger: RuntimeKeyTrigger,
 ) -> Option<SessionAction> {
-    if snapshot.accepts_model_input || (snapshot.busy && snapshot.input_buffer.queue_during_wait) {
+    if snapshot.accepts_model_input
+        || (snapshot.busy && snapshot.input_buffer.busy_input.queues_input())
+    {
         if let Some(input) = inputs.iter().find(|binding| {
             binding
                 .triggers
@@ -4133,7 +4303,7 @@ mod tests {
     }
 
     fn presentation_complete_action(snapshot: &Value) -> SessionAction {
-        let token = serde_json::from_value(snapshot["presentationContinuation"].clone())
+        let token = serde_json::from_value(snapshot["presentation"]["continuation"].clone())
             .expect("a presentation timeline must project its typed continuation");
         SessionAction::PresentationComplete { token }
     }
@@ -4372,7 +4542,7 @@ step board
             );
         });
 
-        let _development = runtime.development_snapshot_with_events(&[]);
+        let _development = runtime.development_snapshot();
         DEVELOPMENT_PROJECTION_COUNT.with(|count| {
             assert!(
                 count.get() > 0,
@@ -4401,7 +4571,7 @@ step board
             .dispatch_typed(SessionAction::SceneAction { token })
             .unwrap();
 
-        assert_eq!(snapshot.revision, 1);
+        assert_eq!(snapshot.session_revision, RuntimeSessionRevision(1));
         assert_eq!(snapshot.level_count, 2);
         assert!(
             snapshot
@@ -4451,7 +4621,7 @@ step board
     fn runtime_projects_grid_mode_to_resolved_view_and_unique_line_plan() {
         let source = runtime_scene_fixture_source().replacen(
             "puzzle board {\n",
-            "puzzle board {\nrender { grid { type = \"all_cells\" } }\n",
+            "puzzle board {\nrender { grid { type = all_cells } }\n",
             1,
         );
         let mut runtime =
@@ -4497,7 +4667,7 @@ step board
     fn snapshot_theme_is_resolved_and_contains_no_authoring_tokens() {
         let source = runtime_scene_fixture_source().replacen(
             "const title = \"Runtime Scene Fixture\"",
-            "const title = \"Runtime Scene Fixture\"\ntheme {\npreset = \"clean\"\nbackground_color = #000\naccent_color = #ff000080\n}",
+            "const title = \"Runtime Scene Fixture\"\ntheme = clean\n\ntheme {\nbackground_color = #000\naccent_color = #ff000080\n}",
             1,
         );
         let runtime =
@@ -4519,7 +4689,7 @@ step board
     fn unresolved_theme_color_is_rejected_before_a_session_is_created() {
         let source = runtime_scene_fixture_source().replacen(
             "const title = \"Runtime Scene Fixture\"",
-            "const title = \"Runtime Scene Fixture\"\ntheme {\npreset = \"clean\"\naccent_color = not-a-color\n}",
+            "const title = \"Runtime Scene Fixture\"\ntheme = clean\n\ntheme {\naccent_color = not-a-color\n}",
             1,
         );
         let error =
@@ -4538,7 +4708,7 @@ step board
             "typed_key_priority_fixture.puzzle",
         )
         .unwrap();
-        let development = runtime.development_snapshot_with_events(&[]);
+        let development = runtime.development_snapshot();
         let mut snapshot = development.player;
         let mut inputs = development.inputs;
         let selected = snapshot
@@ -4734,7 +4904,7 @@ step board
             .expect("Space must confirm the selected title choice");
 
         assert_eq!(snapshot.surface.focus, "playing");
-        assert_eq!(snapshot.revision, 1);
+        assert_eq!(snapshot.session_revision, RuntimeSessionRevision(1));
     }
 
     #[test]
@@ -4849,18 +5019,22 @@ A
         assert!(cell_has_object(&waiting_view["cells"][0], "C"));
         assert!(!cell_has_object(&waiting_view["cells"][0], "B"));
         assert_eq!(waiting["busy"], true);
-        assert_eq!(waiting["presentationEvents"][0]["kind"], json!("wait"));
-        assert_eq!(waiting["presentationEvents"][0]["milliseconds"], 100);
+        assert_eq!(waiting["presentation"]["steps"][0]["kind"], json!("wait"));
         assert_eq!(
-            waiting["presentationContinuation"],
+            waiting["presentation"]["steps"][0]["completion"],
+            json!({"kind": "duration", "milliseconds": 100})
+        );
+        assert_eq!(
+            waiting["presentation"]["continuation"],
             json!({
-                "revision": 1,
+                "sessionRevision": 1,
+                "transition": 1,
                 "waits": [{"model": "default", "sequence": 1}]
             })
         );
         let inspected: Value =
             serde_json::from_str(&bridge.dispatch(SessionAction::Snapshot).unwrap()).unwrap();
-        assert_eq!(inspected["presentationEvents"], json!([]));
+        assert_eq!(inspected["presentation"], waiting["presentation"]);
         assert_eq!(inspected["busy"], true);
         assert_eq!(
             bridge.dispatch(SessionAction::Undo).unwrap_err(),
@@ -4920,12 +5094,59 @@ level "start" { A }
 
         assert!(snapshot.busy, "the modal must block further model input");
         assert!(
-            snapshot.presentation_continuation.is_none(),
+            snapshot
+                .presentation
+                .as_ref()
+                .is_none_or(|presentation| presentation.continuation.is_none()),
             "awaited component events are completed only through RuntimeSceneActionToken events"
         );
         assert!(snapshot.surface.components.iter().any(|component| {
             component.modal && component.await_event.as_deref() == Some("dismiss")
         }));
+    }
+
+    #[test]
+    fn presentation_only_action_advances_session_and_transition_without_state_commit() {
+        let source = r#"
+const title = presentation_only_identity
+sounds {
+sfx tick {
+seed = presentation_only_tick
+type = hit
+}
+}
+scene title {
+layout {
+button "Sound" -> sfx tick
+puzzle board_view = board
+}
+}
+puzzle board {
+layers { actor = A }
+rules {}
+levels {
+legend { A = A }
+level "start" { A }
+}
+}
+"#;
+        let mut runtime =
+            RuntimeSession::from_source(source, "presentation_only_identity.puzzle").unwrap();
+        let projected: Value = serde_json::from_str(&runtime.snapshot_json()).unwrap();
+        let token = projected_action_for_label(&projected, "Sound");
+
+        let after = runtime
+            .dispatch_typed(SessionAction::SceneAction { token })
+            .unwrap();
+        assert_eq!(after.session_revision, RuntimeSessionRevision(1));
+        assert_eq!(after.state_commit, RuntimeStateCommitId(0));
+        let transition = after.presentation.expect("audio must form a transition");
+        assert_eq!(transition.from_state_commit, RuntimeStateCommitId(0));
+        assert_eq!(transition.to_state_commit, RuntimeStateCommitId(0));
+        assert!(matches!(
+            transition.steps.as_slice(),
+            [RuntimePresentationEvent::Audio { .. }]
+        ));
     }
 
     #[test]
@@ -5154,14 +5375,9 @@ puzzle second_view = second
             0,
             "the document scene owner must remain stable when another model owns a pending wait"
         );
-        let snapshot = runtime.player_snapshot(7, SceneConditionContext::default(), &[]);
-        let continuation = snapshot
-            .presentation_continuation
-            .expect("the focused model timeline wait must project one document continuation");
-        assert_eq!(continuation.revision, 7);
+        let waits = runtime.presentation_waits();
         assert_eq!(
-            continuation
-                .waits
+            waits
                 .iter()
                 .map(|wait| wait.model.as_str())
                 .collect::<Vec<_>>(),
@@ -5216,22 +5432,30 @@ puzzle second_view = second
             .dispatch_typed(SessionAction::Initialize)
             .expect("the document scene owner must initialize");
 
+        let presentation = initialized
+            .presentation
+            .as_ref()
+            .expect("shared scene presentation must be one typed transition");
         assert_eq!(
-            initialized.presentation_events.len(),
+            presentation.steps.len(),
             2,
             "shared scene presentation must not be repeated by model replicas"
         );
         assert!(matches!(
-            initialized.presentation_events[0],
+            presentation.steps[0],
             RuntimePresentationEvent::Audio { .. }
         ));
         assert!(matches!(
-            initialized.presentation_events[1],
-            RuntimePresentationEvent::Wait { milliseconds: 100 }
+            presentation.steps[1],
+            RuntimePresentationEvent::Wait {
+                completion: puzzle_runtime_contract::RuntimePresentationWait::Duration {
+                    milliseconds: 100
+                }
+            }
         ));
         assert!(
-            initialized.presentation_continuation.is_none(),
-            "scene lifecycle waits are ordered presentation effects, not model turn continuations"
+            presentation.continuation.is_some(),
+            "scene lifecycle waits must suspend the authored effect suffix"
         );
     }
 
@@ -5352,17 +5576,26 @@ puzzle second_view = second
         let before: Value = serde_json::from_str(&runtime.snapshot_json()).unwrap();
         let token = projected_action_for_label(&before, "Invalid");
 
-        let error = runtime
+        let waiting = runtime
             .dispatch_typed(SessionAction::SceneAction { token })
-            .expect_err("the invalid trailing effect must reject the whole scene transaction");
+            .expect("the explicit wait must commit the prefix before its continuation");
+        assert!(waiting.busy);
+        let continuation = waiting
+            .presentation
+            .as_ref()
+            .and_then(|presentation| presentation.continuation.clone())
+            .expect("scene wait must expose its typed continuation");
+
+        let error = runtime
+            .dispatch_typed(SessionAction::PresentationComplete {
+                token: continuation,
+            })
+            .expect_err("the invalid suffix must fail when the wait resumes");
         assert!(error.contains("unknown component target"), "{error}");
-        let after = runtime
-            .dispatch_typed(SessionAction::Initialize)
-            .expect("a rejected scene action must leave the session usable");
-        assert_eq!(after.revision, 0);
-        assert!(!after.busy);
-        assert!(after.presentation_events.is_empty());
-        assert!(after.presentation_continuation.is_none());
+        let after = runtime.snapshot();
+        assert_eq!(after.session_revision, RuntimeSessionRevision(1));
+        assert!(after.busy);
+        assert_eq!(after.presentation, waiting.presentation);
         assert_eq!(after.surface.focus, "playing");
     }
 
@@ -5417,8 +5650,8 @@ level "start" { A }
         )
         .unwrap();
         assert_eq!(
-            queued["revision"],
-            waiting["revision"].as_u64().unwrap() + 1
+            queued["sessionRevision"],
+            waiting["sessionRevision"].as_u64().unwrap() + 1
         );
         assert_eq!(queued["busy"], true);
 
@@ -5446,6 +5679,105 @@ level "start" { A }
             &first_viewport_state(&second_undo)["cells"][0],
             "A"
         ));
+    }
+
+    #[test]
+    fn typed_document_with_unknown_sound_reference_is_rejected_at_session_construction() {
+        let source = r#"
+const title = runtime_sound_contract
+sounds {
+sfx tick { seed = tick01; type = hit }
+}
+puzzle default {
+layers {
+actor = Player
+}
+rules {
+[ Player ] -> [ Player ] sfx tick
+}
+levels {
+legend {
+P = Player
+}
+level "first"
+P
+}
+}
+"#;
+        let mut document =
+            puzzle_lang::parse_game_for_path(source, "runtime_sound_contract.puzzle").unwrap();
+        match &mut document.models[0] {
+            LoadedDocumentModel::Puzzle2d { game, .. } => game.sounds.sfx.clear(),
+            LoadedDocumentModel::Puzzle3d { .. } => panic!("fixture must compile as 2D"),
+        }
+
+        let error = match RuntimeSession::from_document(document) {
+            Ok(_) => panic!("unknown sound reference must reject the typed document"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains(
+                "typed document model sound catalog does not match the document sound catalog"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn typed_document_validates_model_owned_scene_sound_references() {
+        let source = r#"
+const title = runtime_model_scene_sound_contract
+sounds {
+sfx tick { seed = tick01; type = hit }
+}
+puzzle default {
+layers {
+actor = Player
+}
+rules {
+
+}
+levels {
+legend {
+P = Player
+}
+level "first"
+P
+}
+}
+scene title {
+layout {
+button "Play" -> sfx tick
+}
+}
+"#;
+        let mut document =
+            puzzle_lang::parse_game_for_path(source, "runtime_model_scene_sound_contract.puzzle")
+                .unwrap();
+        let game = match &mut document.models[0] {
+            LoadedDocumentModel::Puzzle2d { game, .. } => game,
+            LoadedDocumentModel::Puzzle3d { .. } => panic!("fixture must compile as 2D"),
+        };
+        let scene = game
+            .scenes
+            .iter_mut()
+            .find(|scene| scene.name == "title")
+            .unwrap();
+        let puzzle_lang::SceneComponent::Button(button) = &mut scene.components[0] else {
+            panic!("fixture must contain a button");
+        };
+        button.effect = puzzle_lang::SceneEffect::PlaySfx {
+            name: "missing".to_string(),
+        };
+
+        let error = match RuntimeSession::from_document(document) {
+            Ok(_) => panic!("model-owned scene sound reference must be validated"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("unknown sfx sound reference `missing`"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -5500,23 +5832,34 @@ P.
         .unwrap();
         let mut event_kinds = Vec::new();
         loop {
-            let events = snapshot["presentationEvents"].as_array().unwrap();
-            event_kinds.extend(events.iter().map(|event| {
-                if event["kind"] == "audio" {
-                    event["command"]["kind"].as_str().unwrap().to_string()
-                } else {
-                    event["kind"].as_str().unwrap().to_string()
-                }
-            }));
-            if snapshot["busy"] != true {
-                break;
-            }
             let modal = snapshot["surface"]["components"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .rev()
                 .find(|component| component["modal"] == true);
+            match snapshot["presentation"]["steps"].as_array() {
+                Some(events) => event_kinds.extend(events.iter().map(|event| {
+                    if event["kind"] == "audio" {
+                        event["command"]["kind"].as_str().unwrap().to_string()
+                    } else {
+                        event["kind"].as_str().unwrap().to_string()
+                    }
+                })),
+                None if modal.is_some() => {
+                    assert!(
+                        snapshot["presentation"].is_null(),
+                        "an awaited modal is a component-event boundary, not a timeline transition"
+                    );
+                }
+                None if snapshot["busy"] != true => break,
+                None => {
+                    panic!("a busy timeline must expose either a transition or an awaited modal")
+                }
+            }
+            if snapshot["busy"] != true {
+                break;
+            }
             snapshot = if let Some(component) = modal {
                 assert_eq!(component["presentation"]["components"][0]["value"], "ready");
                 assert_eq!(
@@ -5758,7 +6101,10 @@ levels main of main {
         let body: Value =
             serde_json::from_str(&bridge.apply_debug_input_name_json("right").unwrap()).unwrap();
 
-        assert_eq!(body["snapshot"]["revision"], ordinary_snapshot.revision);
+        assert_eq!(
+            body["snapshot"]["sessionRevision"],
+            ordinary_snapshot.session_revision.0
+        );
         assert_eq!(
             bridge.progress_save_request(),
             ordinary.progress_save_request(),
@@ -5994,7 +6340,7 @@ step board
         .unwrap();
         assert_eq!(after_input["surface"]["focus"], json!("level_select"));
         assert_eq!(after_input["viewportSources"], json!([]));
-        assert_eq!(after_input["presentationEvents"], json!([]));
+        assert_eq!(after_input["presentation"], Value::Null);
     }
 
     #[cfg(feature = "editor-debug")]
@@ -6040,13 +6386,13 @@ step board
             serde_json::from_value(compiled_state_value(&loaded.levels[1].initial_state))
                 .expect("compiled editor state must satisfy the typed runtime contract");
         let mut bridge = RuntimeSession::from_source(source, "editor_state_start.puzzle").unwrap();
-        let before_revision = bridge.snapshot().revision;
+        let before_revision = bridge.snapshot().session_revision;
 
         bridge
             .commit_editor_model_state("board", &editor_state, 0, false)
             .expect("editor state should start level 0");
         let started: Value = serde_json::from_str(&bridge.snapshot_json()).unwrap();
-        assert_eq!(started["revision"], before_revision + 1);
+        assert_eq!(started["sessionRevision"], json!(before_revision.0 + 1));
         assert_eq!(started["levelIndex"], json!(0));
         assert!(cell_has_object(
             &first_viewport_state(&started)["cells"][0],
@@ -6265,9 +6611,9 @@ scene playing {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(moved["presentationEvents"][0]["kind"], "animation_batch");
+        assert_eq!(moved["presentation"]["steps"][0]["kind"], "animation_batch");
         assert_eq!(
-            moved["presentationEvents"][0]["animations"][0],
+            moved["presentation"]["steps"][0]["animations"][0],
             json!({
                 "kind": "move",
                 "name": "tween",
@@ -6278,6 +6624,28 @@ scene playing {
             }),
             "unexpected moved snapshot: {moved}"
         );
+
+        #[cfg(feature = "editor-debug")]
+        {
+            let mut editor =
+                RuntimeSession::from_source(source, "runtime_tween_fixture.puzzle").unwrap();
+            let targeted = editor
+                .dispatch_editor_model_key("mover", RuntimeKeyTrigger::ArrowRight, false)
+                .unwrap();
+            assert!(matches!(
+                targeted
+                    .snapshot
+                    .presentation
+                    .as_ref()
+                    .map(|presentation| presentation.steps.as_slice()),
+                Some([RuntimePresentationEvent::AnimationBatch { source, .. }])
+                    if *source == RuntimeViewportSourceId {
+                        model: "mover".to_string(),
+                        component: "editor-authoring".to_string(),
+                        source: "model".to_string(),
+                    }
+            ));
+        }
     }
 
     #[test]
@@ -6323,7 +6691,7 @@ levels default of mover {
 
         assert_eq!(moved["animation"]["tween"]["intervalMs"], 120);
         assert_eq!(
-            moved["presentationEvents"],
+            moved["presentation"]["steps"],
             json!([{
                 "source": {
                     "model": "mover",
@@ -6790,7 +7158,7 @@ scene playing {
             level_fired_rules: level_fired_rules.clone(),
         });
 
-        let revision_before = runtime.snapshot().revision;
+        let revision_before = runtime.snapshot().session_revision;
         let mut invalid_state = draft.clone();
         let puzzle_runtime_contract::RuntimeStateSnapshot::TwoD(invalid) = &mut invalid_state
         else {
@@ -6802,7 +7170,7 @@ scene playing {
                 .commit_editor_model_state("first", &invalid_state, 0, false)
                 .is_err()
         );
-        assert_eq!(runtime.snapshot().revision, revision_before);
+        assert_eq!(runtime.snapshot().session_revision, revision_before);
         assert_eq!(
             runtime
                 .current_editor_model_projection("first")
@@ -6821,7 +7189,10 @@ scene playing {
             .commit_editor_model_state("first", &draft, 0, false)
             .expect("named offscreen model must commit");
 
-        assert_eq!(snapshot.revision, revision_before + 1);
+        assert_eq!(
+            snapshot.session_revision,
+            RuntimeSessionRevision(revision_before.0 + 1)
+        );
         assert!(matches!(
             runtime
                 .current_editor_model_projection("first")

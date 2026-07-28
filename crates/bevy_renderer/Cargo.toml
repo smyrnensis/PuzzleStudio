@@ -11,5 +11,6 @@ puzzle-runtime-contract = { path = "../runtime_contract" }
 
 [dev-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png"] }
+naga = { version = "29.0.1", features = ["wgsl-in"] }
 puzzle-presentation = { path = "../presentation" }
 wgpu = { version = "29.0.4", default-features = false }

@@ -320,7 +320,8 @@ fn try_build_surface_document_from_scan(
     >,
 ) -> Result<SurfaceDocument, DiagnosticReport> {
     let mut sink = SurfaceSink::default();
-    let structural_blocks = surface_structural_blocks(&scan);
+    let structural_blocks =
+        surface_structural_blocks(scan, parser_catalog.map(|product| &product.recognition));
     sink.set_structural_blocks(structural_blocks.clone());
     sink.set_unmatched_open_braces(
         scan.unmatched_open_braces()
@@ -435,7 +436,10 @@ pub(crate) fn build_surface_document_from_source_scan(
     .expect("surface document scan failed")
 }
 
-fn surface_structural_blocks(scan: &source::SurfaceSourceScan) -> Vec<SurfaceStructuralBlock> {
+fn surface_structural_blocks(
+    scan: &source::SurfaceSourceScan,
+    parser_recognition: Option<&crate::surface::ParserRecognition>,
+) -> Vec<SurfaceStructuralBlock> {
     let mut blocks = Vec::<SurfaceStructuralBlock>::new();
     let mut stack = Vec::<usize>::new();
     for line in &scan.lines {
@@ -492,6 +496,8 @@ fn surface_structural_blocks(scan: &source::SurfaceSourceScan) -> Vec<SurfaceStr
                         *virtual_braces,
                         parent,
                         &blocks,
+                        parser_recognition,
+                        line_start_offset(&line.content, line.start),
                     );
                     let block = SurfaceStructuralBlock {
                         header: header.clone(),
@@ -544,6 +550,8 @@ fn surface_outline_block(
     virtual_braces: bool,
     parent: Option<usize>,
     blocks: &[SurfaceStructuralBlock],
+    parser_recognition: Option<&crate::surface::ParserRecognition>,
+    start: usize,
 ) -> Option<SurfaceOutlineBlock> {
     if role != SurfaceStructuralBlockRole::SourceTree {
         return None;
@@ -553,6 +561,16 @@ fn surface_outline_block(
     }
     let first = tokens.first().cloned().unwrap_or_default();
     let visual_shape_entry = scope == SourceScope::VisualShapeEntry;
+    if visual_shape_entry
+        && parser_recognition.is_some_and(|recognition| {
+            recognition
+                .visual_products
+                .iter()
+                .any(|visual| visual.body_span.start <= start && start < visual.body_span.end)
+        })
+    {
+        return None;
+    }
     let visual_entry = authoring_kind == Some(authoring_grammar::AuthoringKind::VisualConfig)
         || (visual_shape_entry
             && parent

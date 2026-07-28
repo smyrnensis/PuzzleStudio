@@ -2,8 +2,8 @@ const title = "TENETEN"
 const author = "smyrnensis"
 const homepage = "smyrnensis.itch.io"
 
+theme = puzzlescript
 theme {
-preset = "puzzlescript"
 background_color = #243
 } 
 

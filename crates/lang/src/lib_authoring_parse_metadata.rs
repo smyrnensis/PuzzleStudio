@@ -25,15 +25,9 @@ fn parse_theme_block(
                 "theme entry must have one value",
             ));
         };
-        if definition.key == "preset" {
-            let spec = authoring_grammar::authoring_definition_spec(node.kind, &definition.key)
-                .expect("theme preset definition exists");
-            set_theme_preset_from_spec(theme, spec, value, &definition.source_line)?;
-        } else {
-            let name = normalize_theme_setting_name(&definition.key, &definition.source_line)?;
-            validate_theme_value(value, &definition.source_line)?;
-            upsert_theme_variable(theme, name, value.to_string());
-        }
+        let name = normalize_theme_setting_name(&definition.key, &definition.source_line)?;
+        validate_theme_value(value, &definition.source_line)?;
+        upsert_theme_variable(theme, name, value.to_string());
     }
     Ok(next_i)
 }
@@ -53,7 +47,7 @@ fn parse_theme_statement(
     else {
         return Err(parse_error(
             &lines[start],
-            "theme must be: theme = \"preset\" or theme { ... }",
+            "theme must be: theme = <preset> or theme { ... }",
         ));
     };
     if definition.key != "theme" {

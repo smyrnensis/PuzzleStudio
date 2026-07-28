@@ -641,13 +641,13 @@ fn ps_viewport_focus(
 }
 
 fn push_theme_colors(out: &mut Vec<String>, colors: &[(String, String)]) {
+    out.push("theme = puzzlescript".to_string());
     if colors.is_empty() {
-        out.push("theme = \"puzzlescript\"".to_string());
         out.push(String::new());
         return;
     }
+    out.push(String::new());
     out.push("theme {".to_string());
-    out.push("  preset = \"puzzlescript\"".to_string());
     for (name, value) in colors {
         out.push(format!("  {name} = {value}"));
     }
@@ -691,7 +691,7 @@ fn parse_sound_def_tokens(tokens: &[&str]) -> Option<PsSoundDef> {
             })
         }
         [name, seed] if is_identifier(name) && is_sound_atom(seed) => Some(PsSoundDef {
-            name: (*name).to_string(),
+            name: name.to_ascii_lowercase(),
             seed: (*seed).to_string(),
             trigger: PsSoundTrigger::Named,
         }),

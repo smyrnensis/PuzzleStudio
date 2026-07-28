@@ -1516,7 +1516,7 @@ ASCII row を区別できる場合は、`shape = {}` 自体を省略して row �
 
 visual shape は時間 × Z × Y × X の共通モデルを使う。ASCIIの列は +X（right）、行は +Y（back）、layerは +Z（down）へ進む。slice 1は最初のASCII layerで、slice番号も同じ順に増える。`>` だけの行は次の animation frame、`-` だけの行は同じ frame 内の次の +Z layer を表す。shape 内に空行は書かない。2D model に属する `visuals` は Z depth 1 だけを受け付けるため `-` は使えず、3D model に属する `visuals` では複数 layer を書ける。2D/3D は `visuals` の綴りではなく、`of <model>` または所有 model の `puzzle` / `puzzle` から決まる。
 
-visual entry は、名前を header に置き、block の中に色行、空間操作、ASCII pattern の順で書ける。名前が object / group / schema selector に解決できる場合は concrete object visual へ展開して結び付け、解決できない名前は standalone visual asset として保持する。人間向けには `translate local (1, 0)` / `rotate local 90deg` の簡潔形を使え、world は既定なので省略できる。2D の `rotate directions from up` は `rotate (directions - up)` と同じで、名前が bind した angle expression から基準 angle を引く。`rotate local directions from up` のように space と合成できる。script/editor は `translate { space = world; value = (...) }` / `rotate { space = local; angle = ...; from = ...; axis = ... }` の明示blockを生成できる。色行は `colors` keyword を省略できる。`transparent` は通常のpalette色であり、`.` のempty cellとは異なる。
+visual entry は、名前を header に置き、block の中に色行、空間操作、ASCII pattern の順で書ける。名前が object / group / schema selector に解決できる場合は concrete object visual へ展開して結び付け、解決できない名前は standalone visual asset として保持する。人間向けには `translate local (1, 0)` / `rotate local 90deg` の簡潔形を使え、world は既定なので省略できる。方向集合を使う `rotate <direction-set> from <direction>` は、展開後の方向と基準方向を座標ベクトルとして扱い、その集合が張る平面の正の座標軸を法線にした回転へ解決する。たとえば2Dの `rotate directions from up` は +Z 軸回り、3Dの `rotate xz_plane from up` は +Y 軸回りになる。平面を一意に定めない方向集合では `around` が必須である。`rotate local directions from up` のように space と合成できる。script/editor は `translate { space = world; value = (...) }` / `rotate { space = local; angle = ...; from = ...; axis = ... }` の明示blockを生成できる。色行は `colors` keyword を省略できる。`transparent` は通常のpalette色であり、`.` のempty cellとは異なる。
 
 block entry の完全形は `visual <name> { ... }`。`<name> { ... }` は同じ entry の sugar である。名前は header に置き、body property にはしない。
 
@@ -1526,7 +1526,7 @@ block entry の完全形は `visual <name> { ... }`。`<name> { ... }` は同じ
 
 shape lookup は value expression を読める。たとえば `edge:rotate(directions)` は、selector で bind された `directions` 値を `rotate` map で置換してから shape table を引く。再利用したい pattern は `shape` と object block 内の色行 + `shape <ref>` で分けて書く。
 
-2D translateはvec2、3D translateはvec3を要求する。2D rotateは`rotate [world|local] <angle> [from <angle>]`、3D rotateは`rotate [world|local] <angle> [from <angle>] [around <direction-or-vec3>]`を使う。`from`は主angleから基準angleを引くsugarなので、旧`rotate from <angle>`は受理しない。3Dでaxisを省略した2D形は+Z（`down`）axisとして扱う。4方向のvariant visualは`Arrow:horizontal { rotate horizontal from front }`と書けば、frontを0度としてright/front/left/backが-90/0/90/-180度へ展開される。操作はsource順のaffine列で、world操作は左合成、local操作は右合成する。旧`offset`、`rotate using`、包括的な`transform` nodeは受理しない。
+2D translateはvec2、3D translateはvec3を要求する。2D rotateは`rotate [world|local] <angle> [from <angle>]`、3D rotateは`rotate [world|local] <angle> [from <angle>] [around <direction-or-vec3>]`を使う。数値 angle の `from` は主 angle から基準 angle を引く。方向同士の `from` は方向集合の平面から回転軸と符号付き角度を幾何的に解決する。3Dで数値 angle のaxisを省略した2D形は+Z（`down`）axisとして扱う。操作はsource順のaffine列で、world操作は左合成、local操作は右合成する。旧`rotate from <angle>`、`rotate using`、包括的な`transform` nodeは受理しない。
 
 `visuals` はvisual alias、palette、shape、空間操作を定義する。`shapes`はvisual dataだけを所有し、rotation派生を所有しない。同じnamed shapeを異なる姿勢で使う場合は各visual参照側へ`rotate`を書く。
 
@@ -1624,22 +1624,45 @@ theme の見た目の identity は HTML adapter の CSS preset が持つ。`.puz
 `theme` 宣言は preset 名の選択と、作者に公開する少数の調整項目だけを持つ。
 
 ```txt
-theme clean {
-accent_color #2f7ebc
-ui_font sans-serif
+theme = clean
+theme {
+accent_color = #2f7ebc
+ui_font = sans-serif
 }
 ```
 
-`theme <theme>` は preset 名だけを選ぶ。`theme <theme> { ... }` は同じ preset を選び、詳細設定を上書きする。各行は公開された調整項目
-`<setting> <value>` を canonical とする。互換 syntax として `<setting> = <value>` も読む。
+`theme = <preset>` は builtin preset catalog から preset 名を選ぶ。preset 名は
+theme schema が所有する closed enum value なので quoted string にはしない。
+`theme { ... }` は詳細設定の上書きだけを持ち、preset は block 内に書かない。
+各行は公開された調整項目 `<setting> = <value>` とする。
 公開項目のうち、色は `accent_color`、`background_color`、`text_color` の 3 つだけである。
 UI の線、選択状態、panel、popup、盤面背景は preset がこの 3 色の alpha だけで作る。
 追加の非色設定は `ui_font`、`title_font`、`control_radius`、`panel_radius`。
 これらは HTML adapter の CSS custom property に lower され、preset CSS の値を上書きする。
 値は space を含まない compact CSS token にする。
-複数 theme 宣言は import 展開後の順序で preset 名または同じ項目を上書きする。theme 未指定時の default theme name は `clean`。
+theme preset の宣言は一度だけで、複数の `theme { ... }` が同じ項目を指定した場合は
+import 展開後の順序で上書きする。theme 未指定時の default theme name は `clean`。
 
-標準 preset は `clean`、`terminal`、`paper`、`pixel`、`candy`、`blueprint`、`noir`。HTML adapter は対応する `theme-clean` / `theme-terminal` / `theme-paper` / `theme-pixel` / `theme-candy` / `theme-blueprint` / `theme-noir` CSS preset を同梱し、そこで各 theme の見た目の identity を定義する。
+標準 preset は `clean`、`terminal`、`paper`、`pixel`、`puzzlescript`、`candy`、`blueprint`、`noir`。HTML adapter は対応する CSS preset を同梱し、そこで各 theme の見た目の identity を定義する。
+
+## Busy Input Policy
+
+presentation wait 中の入力は top-level `input_buffer` が所有する。
+
+```txt
+input_buffer {
+busy_input = queue
+queued_presentation = accelerate
+min_wait = 50ms
+}
+```
+
+`busy_input = reject` は wait 中の入力を受け付けず、他の設定を持たない。
+`busy_input = queue` は一件の入力を queue し、`queued_presentation` を必須とする。
+`preserve` は現在の animation をそのまま完了させ、`skip` は完了状態へ進め、
+`accelerate` は `min_wait` まで短縮する。`accelerate` の `min_wait` 省略値は
+`50ms`。これらの値はそれぞれの owner schema が持つ closed enum value であり、
+quoted string にはしない。
 
 外部画像や音声などの静的 file は `assets` block で明示する。puzzle と同じ folder からの相対 path だけを書ける。
 
@@ -1809,12 +1832,14 @@ button "Levels" -> goto level_select
 ```txt
 puzzle sokoban {
 render {
-grid occupied_cells
+grid {
+type = occupied_cells
+}
 }
 }
 ```
 
-`grid occupied_cells` は object が存在する cell の外周を表示する読み取り補助。`grid all_cells` にすると空セルも含めて全 cell に grid を表示する。どちらも floor や当たり判定を追加するものではなく、level、rule、win condition には影響しない。省略時は表示しない。
+`type = occupied_cells` は object が存在する cell の外周を表示する読み取り補助。`type = all_cells` にすると空セルも含めて全 cell に grid を表示する。値は `grid` schema が所有する bare enum value である。どちらも floor や当たり判定を追加するものではなく、level、rule、win condition には影響しない。省略時は表示しない。
 
 3D camera の初期 view と操作可否は scene ではなく 3D model の `render` block に書く。
 
@@ -1829,7 +1854,9 @@ yaw = 53
 pitch = 56
 color = #ffffff
 }
-grid occupied_cells
+grid {
+type = occupied_cells
+}
 viewport {
 smoothscreen 7 7
 focus Player
@@ -1850,13 +1877,13 @@ Scene layout は `puzzle` を固定 4:3 display として扱う。`puzzle` は�
 
 3D model `rules` では `set yaw = <deg>` / `set pitch = <deg>` / `set zoom = <n>` を、rule 発火時の camera view-state 更新として書ける。`reset_camera` は camera view を `render { camera { ... } }` の初期値に戻す。これは盤面 state ではなく表示 command なので、solver、win condition、undo/restart の state には入らない。
 
-`grid occupied_cells` は object が存在する cell の外周 edge を表示する読み取り補助。floor や volume の追加ではなく、level、collision、rule、win condition には影響しない。省略時は表示しない。
+`grid { type = occupied_cells }` は object が存在する cell の外周 edge を表示する読み取り補助。floor や volume の追加ではなく、level、collision、rule、win condition には影響しない。省略時は表示しない。
 
 `pixelate` / `pixelate scale=4` は Three.js の描画解像度を `scale` 分の1にし、nearest-neighbor で表示サイズへ拡大する。省略時の `scale` は `4`。`smoothing` は低解像度描画時の WebGL antialiasing を制御する。省略時は pixel 化しない。
 
 `render { shade }` は 3D visual voxel の面ごとの明暗付けを有効にする表示設定。visual data や puzzle state には影響しない。省略時も on。
 
-3D object は、その `puzzle` model に属する `visuals` に同名 visual が定義されている場合だけ voxel visual を描く。visual 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid occupied_cells` などの debug 表示を使う。
+3D object は、その `puzzle` model に属する `visuals` に同名 visual が定義されている場合だけ voxel visual を描く。visual 未指定の object に暗黙の cube や色は割り当てない。位置や占有を読みたい場合は `grid { type = occupied_cells }` などの debug 表示を使う。
 
 3D visual も2Dと同じ visual entry、palette、shape、animation frame 文法を使う。`-` だけの行が次の +Z（down）layer、`>` だけの行が次の frame であり、separator の前後に空行は入れない。色行だけなら 1x1x1 の filled cube visual になる。再利用する voxel pattern は `shapes { <name> { ... } }` で定義し、visual entry 側では `shape = <name>` と書く。
 

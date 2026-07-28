@@ -12,14 +12,11 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 use bevy::prelude::{NonSend, NonSendMut, Res, Time, Vec2};
 use puzzle_bevy_player::PuzzleBevyPlayerHost;
 use puzzle_editor_preview_contract::{EditorPreviewControlRequest, EditorPreviewObservation};
+use puzzle_runtime_contract::RuntimeProgressPersistenceOperation;
 use serde_json::{Map, Value};
 
 #[cfg(target_arch = "wasm32")]
-use bevy::{
-    app::{App, Update},
-    prelude::{DefaultPlugins, PluginGroup},
-    window::{Window, WindowPlugin},
-};
+use bevy::{app::Update, prelude::IntoScheduleConfigs};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -38,6 +35,24 @@ struct EditorPreviewBridge {
 }
 
 struct EditorPreviewDocument(puzzle_lang::LoadedDocument);
+
+#[derive(Default)]
+struct EditorPreviewProgressStorage {
+    save_json: Option<String>,
+}
+
+impl EditorPreviewProgressStorage {
+    fn apply(&mut self, operation: &RuntimeProgressPersistenceOperation) {
+        match operation {
+            RuntimeProgressPersistenceOperation::Write { save_json } => {
+                self.save_json = Some(save_json.clone());
+            }
+            RuntimeProgressPersistenceOperation::Delete => {
+                self.save_json = None;
+            }
+        }
+    }
+}
 
 impl EditorPreviewBridge {
     fn submit_json(&self, request_json: &str) -> Result<(), String> {
@@ -269,7 +284,7 @@ fn process_editor_preview_controls(
                 observations
                     .into_iter()
                     .map(|observation| QueuedEditorPreviewObservation {
-                        required_revision: Some(host.snapshot().revision),
+                        required_revision: Some(host.snapshot().session_revision.0),
                         observation,
                     }),
             );
@@ -282,7 +297,7 @@ fn process_editor_preview_controls(
             if matches!(observation, EditorPreviewObservation::RuntimeError { .. }) {
                 None
             } else {
-                Some(host.snapshot().revision)
+                Some(host.snapshot().session_revision.0)
             };
         QueuedEditorPreviewObservation {
             required_revision,
@@ -298,7 +313,7 @@ fn process_editor_preview_controls(
             .observations
             .borrow_mut()
             .push_back(QueuedEditorPreviewObservation {
-                required_revision: Some(host.snapshot().revision),
+                required_revision: Some(host.snapshot().session_revision.0),
                 observation: EditorPreviewObservation::EditorAuthoringFrame {
                     surface_id: frame.surface_id.clone(),
                     frame_revision: frame.revision,
@@ -307,6 +322,33 @@ fn process_editor_preview_controls(
     }
     #[cfg(target_arch = "wasm32")]
     dispatch_committed_observations(&bridge, committed.latest().map(|value| value.revision));
+}
+
+fn persist_editor_preview_progress(
+    time: Res<Time>,
+    mut host: NonSendMut<PuzzleBevyPlayerHost>,
+    mut storage: NonSendMut<EditorPreviewProgressStorage>,
+    bridge: NonSend<EditorPreviewBridge>,
+) {
+    let Some(request) = host.pending_progress_save() else {
+        return;
+    };
+    storage.apply(&request.operation);
+    if let Err(error) =
+        host.confirm_progress_persistence_applied(request.request_id, time.elapsed_secs_f64())
+    {
+        bridge
+            .observations
+            .borrow_mut()
+            .push_back(QueuedEditorPreviewObservation {
+                required_revision: None,
+                observation: EditorPreviewObservation::RuntimeError {
+                    command_id: 0,
+                    label: "progress persistence acknowledgement failed",
+                    message: error.to_string(),
+                },
+            });
+    }
 }
 
 fn take_committed_observations(
@@ -342,11 +384,9 @@ thread_local! {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = startEditorPreview)]
 pub fn start_editor_preview(export_json: &str, canvas_selector: &str) -> Result<(), JsValue> {
-    validate_canvas_selector(canvas_selector).map_err(js_error)?;
     let decoded = puzzle_player_bootstrap::decode_editor_preview_export(export_json)
         .map_err(|error| js_error(format!("editor preview export is invalid: {error}")))?;
-    let (mut runtime, visual_images, _, document) = decoded.into_parts();
-    runtime.set_progress_persistence_enabled(false);
+    let (runtime, visual_images, _, document) = decoded.into_parts();
     let host = PuzzleBevyPlayerHost::from_runtime_with_visual_images(runtime, visual_images)
         .map_err(|error| js_error(format!("editor preview initialization failed: {error}")))?;
     let bridge = EditorPreviewBridge::default();
@@ -362,20 +402,23 @@ pub fn start_editor_preview(export_json: &str, canvas_selector: &str) -> Result<
         Ok(())
     })?;
 
-    let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "PuzzleStudio Editor Preview".to_string(),
-            canvas: Some(canvas_selector.to_string()),
-            fit_canvas_to_parent: true,
-            ..Default::default()
-        }),
-        ..Default::default()
-    }));
-    puzzle_bevy_player::install_puzzle_bevy_player(&mut app, host);
+    let mut app = puzzle_bevy_player::build_browser_player_app(
+        host,
+        canvas_selector,
+        "PuzzleStudio Editor Preview",
+    )
+    .map_err(js_error)?;
     app.insert_non_send(EditorPreviewDocument(document))
         .insert_non_send(bridge)
-        .add_systems(Update, process_editor_preview_controls);
+        .insert_non_send(EditorPreviewProgressStorage::default())
+        .add_systems(
+            Update,
+            (
+                process_editor_preview_controls,
+                persist_editor_preview_progress,
+            )
+                .chain(),
+        );
     app.run();
     Ok(())
 }
@@ -429,28 +472,6 @@ fn with_active_bridge(
 }
 
 #[cfg(target_arch = "wasm32")]
-fn validate_canvas_selector(canvas_selector: &str) -> Result<(), String> {
-    if canvas_selector.trim().is_empty() {
-        return Err("editor preview canvas selector must not be empty".to_string());
-    }
-    let document = web_sys::window()
-        .and_then(|window| window.document())
-        .ok_or_else(|| "editor preview requires a browser document".to_string())?;
-    let element = document
-        .query_selector(canvas_selector)
-        .map_err(|error| format!("invalid editor preview canvas selector: {error:?}"))?
-        .ok_or_else(|| {
-            format!("editor preview canvas selector `{canvas_selector}` matched no element")
-        })?;
-    if !element.is_instance_of::<web_sys::HtmlCanvasElement>() {
-        return Err(format!(
-            "editor preview canvas selector `{canvas_selector}` must match a canvas element"
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(target_arch = "wasm32")]
 fn js_error(message: impl Into<String>) -> JsValue {
     JsValue::from_str(&message.into())
 }
@@ -499,7 +520,7 @@ P.
         let mut host =
             PuzzleBevyPlayerHost::from_image_free_source(SOURCE, "editor_bevy_host.puzzle")
                 .expect("editor fixture should initialize");
-        let before_revision = host.snapshot().revision;
+        let before_revision = host.snapshot().session_revision;
 
         let observation = apply_editor_control(
             &mut host,
@@ -528,8 +549,11 @@ P.
         };
         assert_eq!(command_id, 7);
         assert!(!debug.is_null());
-        assert_eq!(host.snapshot().revision, before_revision + 1);
-        assert_eq!(snapshot["revision"], host.snapshot().revision);
+        assert_eq!(host.snapshot().session_revision.0, before_revision.0 + 1);
+        assert_eq!(
+            snapshot["sessionRevision"],
+            host.snapshot().session_revision.0
+        );
     }
 
     #[test]
@@ -537,7 +561,7 @@ P.
         let mut host =
             PuzzleBevyPlayerHost::from_image_free_source(SOURCE, "editor_bevy_host.puzzle")
                 .expect("editor fixture should initialize");
-        let before_revision = host.snapshot().revision;
+        let before_revision = host.snapshot().session_revision;
 
         let observation = apply_editor_control(
             &mut host,
@@ -577,8 +601,8 @@ P.
             panic!("valid hydration must emit a state observation");
         };
         assert_eq!(command_id, 9);
-        assert_eq!(host.snapshot().revision, before_revision + 1);
-        assert_eq!(state["revision"], host.snapshot().revision);
+        assert_eq!(host.snapshot().session_revision.0, before_revision.0 + 1);
+        assert_eq!(state["sessionRevision"], host.snapshot().session_revision.0);
         assert_eq!(state["scene"]["cells"][1]["objectIds"][0], 1);
     }
 
@@ -714,6 +738,17 @@ P.
                 "hit": null,
             })
         );
+    }
+
+    #[test]
+    fn editor_progress_storage_uses_the_runtime_persistence_operations_in_memory() {
+        let mut storage = EditorPreviewProgressStorage::default();
+        storage.apply(&RuntimeProgressPersistenceOperation::Write {
+            save_json: "{\"version\":1}".to_string(),
+        });
+        assert_eq!(storage.save_json.as_deref(), Some("{\"version\":1}"));
+        storage.apply(&RuntimeProgressPersistenceOperation::Delete);
+        assert_eq!(storage.save_json, None);
     }
 
     #[test]

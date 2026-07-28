@@ -12,8 +12,7 @@ impl EditorPreviewState {
         puzzle_path: String,
         visual_images: EncodedVisualImageBundle,
     ) -> Result<Self, String> {
-        let mut runtime = puzzle_game_runtime::RuntimeSession::from_document(document.clone())?;
-        runtime.set_progress_persistence_enabled(false);
+        let runtime = puzzle_game_runtime::RuntimeSession::from_document(document.clone())?;
         let progress_storage = standalone_progress_storage(&document);
         Ok(Self {
             standalone_export: StandaloneRuntimeExport::new(

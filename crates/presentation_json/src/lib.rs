@@ -3,8 +3,9 @@ use puzzle_scene::{
 };
 use puzzle_session_contract::{
     RuntimeComponentPresentation, RuntimeDevelopmentRendererState,
-    RuntimeDevelopmentSessionSnapshot, RuntimeRendererState, RuntimeResolvedScene,
-    RuntimeResolvedSceneComponent, RuntimeSurfaceComponent, RuntimeViewportDimension,
+    RuntimeDevelopmentSessionSnapshot, RuntimeInputBinding, RuntimeRendererState,
+    RuntimeResolvedScene, RuntimeResolvedSceneComponent, RuntimeSurfaceComponent,
+    RuntimeViewportDimension,
 };
 use serde::ser::Error as _;
 use serde_json::{Map, Value, json};
@@ -18,16 +19,17 @@ pub fn to_string(
 pub fn to_value(snapshot: &RuntimeDevelopmentSessionSnapshot) -> Result<Value, serde_json::Error> {
     let player = &snapshot.player;
     Ok(json!({
-        "revision": player.revision,
+        "sessionRevision": player.session_revision,
+        "stateCommit": player.state_commit,
         "has_progress_save": player.has_progress_save,
         "theme": player.theme,
         "defaultWaitMs": player.default_wait_ms,
         "inputBuffer": player.input_buffer,
         "animation": player.animation,
-        "presentationEvents": player.presentation_events,
-        "presentationContinuation": player.presentation_continuation,
+        "presentation": player.presentation,
         "levelIndex": player.level_index,
         "levelCount": player.level_count,
+        "queuedModelInput": player.queued_model_input,
         "levels": snapshot.levels.iter().map(|(name, level)| (name.clone(), json!({
             "id": level.id,
             "name": level.name,
@@ -58,11 +60,7 @@ pub fn to_value(snapshot: &RuntimeDevelopmentSessionSnapshot) -> Result<Value, s
         "busy": player.busy,
         "canUndo": player.can_undo,
         "canRedo": player.can_redo,
-        "inputs": snapshot.inputs.iter().map(|input| json!({
-            "id": input.id,
-            "name": input.name,
-            "triggers": input.triggers,
-        })).collect::<Vec<_>>(),
+        "inputs": input_bindings_value(&snapshot.inputs),
     }))
 }
 
@@ -106,7 +104,8 @@ pub fn to_editor_preview_state_value(
         &viewports,
     );
     Ok(json!({
-        "revision": player.revision,
+        "sessionRevision": player.session_revision,
+        "stateCommit": player.state_commit,
         "screen": player.surface.focus,
         "focus": player.surface.focus,
         "activeModel": focused.active_model,
@@ -124,12 +123,23 @@ pub fn to_editor_preview_state_value(
         "busy": player.busy,
         "canUndo": player.can_undo,
         "canRedo": player.can_redo,
-        "inputs": snapshot.inputs.iter().map(|input| json!({
-            "id": input.id,
-            "name": input.name,
-            "triggers": input.triggers,
-        })).collect::<Vec<_>>(),
+        "inputs": input_bindings_value(&snapshot.inputs),
     }))
+}
+
+pub fn input_bindings_value(inputs: &[RuntimeInputBinding]) -> Value {
+    Value::Array(
+        inputs
+            .iter()
+            .map(|input| {
+                json!({
+                    "id": input.id,
+                    "name": input.name,
+                    "triggers": input.triggers,
+                })
+            })
+            .collect(),
+    )
 }
 
 fn editor_preview_level_cells(

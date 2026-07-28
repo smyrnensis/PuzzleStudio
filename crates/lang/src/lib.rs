@@ -18,6 +18,7 @@ mod puzzlescript;
 mod rule_syntax;
 mod semantic;
 mod solver_surface;
+mod sound_validation;
 mod source;
 mod source_analysis;
 mod source_folding;
@@ -68,7 +69,7 @@ pub use highlight::{
 };
 use level::{LevelBlock, parse_level};
 pub use loaded::{
-    AnimationDef, ArrowKey, AsciiLegend, AssetsDef, ComponentDef, ComponentOrder,
+    AnimationDef, ArrowKey, AsciiLegend, AssetsDef, BusyInputPolicy, ComponentDef, ComponentOrder,
     ComponentPlacement, ComponentProperty, ComponentVisibility, Controls, GoalClause, GoalClauseOf,
     GoalCondition, GoalConditionOf, GoalExpr, GoalExprOf, GoalValue, GoalValueOf, GridQueryExpr,
     GridSolverStrategy, InputBufferDef, KeyBinding, KeyTrigger, Level, LevelId, LevelRegionDef,
@@ -90,6 +91,7 @@ pub use loaded::{
     VisualSampling, VisualSpace, VisualTransform, VisualsDef, scene_level_record_key,
 };
 pub use model_syntax::ModelDimension;
+pub use sound_validation::validate_loaded_document_sound_references;
 
 const BLOCK_CLOSE: &str = "}";
 

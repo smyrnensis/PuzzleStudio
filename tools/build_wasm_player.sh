@@ -16,7 +16,7 @@ if [[ "$wasm_profile" == "release" ]]; then
   player_cargo_profile_args=(--profile wasm-player-release)
   player_target_profile_dir="wasm-player-release"
 else
-  player_cargo_profile_args=()
+  player_cargo_profile_args=(--profile dev)
   player_target_profile_dir="debug"
 fi
 max_player_wasm_bytes=45000000

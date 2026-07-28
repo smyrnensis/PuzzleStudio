@@ -4213,6 +4213,12 @@ function visualSourceContractError(contract) {
   if (!contract || typeof contract !== "object") {
     return "";
   }
+  const diagnostic = Array.isArray(contract.diagnostics)
+    ? contract.diagnostics.map((message) => String(message || "").trim()).find(Boolean)
+    : "";
+  if (diagnostic) {
+    return diagnostic;
+  }
   const shapeName = typeof contract.shapeRef === "string" ? contract.shapeRef.trim() : "";
   const shapeRows = Array.isArray(contract.resolvedShapeRows)
     ? contract.resolvedShapeRows.map((row) => String(row || "").trim()).filter(Boolean)

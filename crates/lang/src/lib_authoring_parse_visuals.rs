@@ -2266,6 +2266,7 @@ fn parse_visual_color_table(
 pub(crate) fn eval_visual_transforms(
     expressions: &[(crate::visual_authoring::VisualPropertySyntax, String)],
     bindings: &HashMap<String, String>,
+    catalog: &Catalog,
     line: &str,
 ) -> Result<Vec<VisualTransform>, DiagnosticReport> {
     expressions
@@ -2277,17 +2278,48 @@ pub(crate) fn eval_visual_transforms(
                 axis,
                 space,
             } => {
-                let mut degrees = eval_visual_angle_expr(angle, bindings, expression_line)?;
-                if let Some(from) = from {
-                    degrees = degrees.sub(eval_visual_angle_expr(from, bindings, expression_line)?);
-                }
+                let direction_rotation = from
+                    .as_deref()
+                    .and_then(|from| {
+                        resolve_visual_direction(angle, bindings, catalog.dimension)
+                            .zip(resolve_visual_direction(from, bindings, catalog.dimension))
+                    })
+                    .map(|(to, from)| {
+                        eval_visual_direction_rotation(
+                            angle,
+                            from,
+                            to,
+                            axis.as_deref(),
+                            bindings,
+                            catalog,
+                            expression_line,
+                        )
+                    })
+                    .transpose()?;
+                let (degrees, axis) = match direction_rotation {
+                    Some(rotation) => rotation,
+                    None => {
+                        let mut degrees = eval_visual_angle_expr(angle, bindings, expression_line)?;
+                        if let Some(from) = from {
+                            degrees = degrees.sub(eval_visual_angle_expr(
+                                from,
+                                bindings,
+                                expression_line,
+                            )?);
+                        }
+                        (
+                            degrees.as_f64(),
+                            eval_visual_axis_expr(
+                                axis.as_deref().unwrap_or("down"),
+                                bindings,
+                                expression_line,
+                            )?,
+                        )
+                    }
+                };
                 Ok(VisualTransform::Rotate {
-                    degrees: degrees.as_f64(),
-                    axis: eval_visual_axis_expr(
-                        axis.as_deref().unwrap_or("down"),
-                        bindings,
-                        expression_line,
-                    )?,
+                    degrees,
+                    axis,
                     space: visual_space(*space),
                 })
             }
@@ -2309,6 +2341,128 @@ pub(crate) fn eval_visual_transforms(
             )),
         })
         .collect()
+}
+
+fn resolve_visual_direction(
+    expression: &str,
+    bindings: &HashMap<String, String>,
+    dimension: crate::ModelDimension,
+) -> Option<[i16; 3]> {
+    let expression = strip_expression_parentheses(expression.trim());
+    let value = bindings
+        .get(expression)
+        .map(String::as_str)
+        .unwrap_or(expression);
+    crate::spatial_orientation::SpatialDomain::new(dimension)
+        .direction_vector(value)
+        .map(|vector| vector.axes())
+}
+
+fn eval_visual_direction_rotation(
+    angle_expression: &str,
+    from: [i16; 3],
+    to: [i16; 3],
+    explicit_axis: Option<&str>,
+    bindings: &HashMap<String, String>,
+    catalog: &Catalog,
+    line: &str,
+) -> Result<(f64, [f64; 3]), DiagnosticReport> {
+    let axis = match explicit_axis {
+        Some(axis) => eval_visual_axis_expr(axis, bindings, line)?,
+        None => infer_visual_rotation_axis(angle_expression, from, catalog, line)?,
+    };
+    let from = from.map(f64::from);
+    let to = to.map(f64::from);
+    let from_axis = dot3(from, axis);
+    let to_axis = dot3(to, axis);
+    if from_axis.abs() > f64::EPSILON || to_axis.abs() > f64::EPSILON {
+        return Err(parse_error(
+            line,
+            "visual direction rotation axis must be perpendicular to both directions",
+        ));
+    }
+    let sine = dot3(axis, cross3(from, to));
+    let cosine = dot3(from, to);
+    if sine.abs() <= f64::EPSILON && cosine > 0.0 {
+        return Ok((0.0, axis));
+    }
+    if sine.abs() <= f64::EPSILON && cosine < 0.0 {
+        return Ok((180.0, axis));
+    }
+    if cosine.abs() <= f64::EPSILON {
+        return Ok((sine.signum() * 90.0, axis));
+    }
+    Err(parse_error(
+        line,
+        "visual direction rotation requires cardinal directions in one plane",
+    ))
+}
+
+fn infer_visual_rotation_axis(
+    angle_expression: &str,
+    from: [i16; 3],
+    catalog: &Catalog,
+    line: &str,
+) -> Result<[f64; 3], DiagnosticReport> {
+    let expression = strip_expression_parentheses(angle_expression.trim());
+    if catalog.axis_types.get(expression) != Some(&ValueType::Direction) {
+        return Err(parse_error(
+            line,
+            "visual direction rotation requires a direction-typed set",
+        ));
+    }
+    let values = catalog.value_sets.get(expression).ok_or_else(|| {
+        parse_error(
+            line,
+            "visual direction rotation without around requires a bound direction set",
+        )
+    })?;
+    let domain = crate::spatial_orientation::SpatialDomain::new(catalog.dimension);
+    let mut vectors = values
+        .iter()
+        .map(|value| {
+            domain
+                .direction_vector(value)
+                .map(|vector| vector.axes())
+                .ok_or_else(|| {
+                    parse_error(line, "visual direction set contains a non-direction value")
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    vectors.push(from);
+    let zero_axes = (0..3)
+        .filter(|axis| vectors.iter().all(|vector| vector[*axis] == 0))
+        .collect::<Vec<_>>();
+    let [normal_axis] = zero_axes.as_slice() else {
+        return Err(parse_error(
+            line,
+            "visual direction set must identify exactly one rotation plane; use around for non-planar sets",
+        ));
+    };
+    let spans_plane = (0..3)
+        .filter(|axis| axis != normal_axis)
+        .all(|axis| vectors.iter().any(|vector| vector[axis] != 0));
+    if !spans_plane {
+        return Err(parse_error(
+            line,
+            "visual direction set does not span a rotation plane; use around to select an axis",
+        ));
+    }
+    let mut axis = [0.0; 3];
+    axis[*normal_axis] = 1.0;
+    Ok(axis)
+}
+
+fn dot3(left: [f64; 3], right: [f64; 3]) -> f64 {
+    (0..3).map(|axis| left[axis] * right[axis]).sum()
+}
+
+fn cross3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ]
 }
 
 fn visual_space(
@@ -2572,7 +2726,7 @@ fn add_ascii_visuals(
     visuals: &mut VisualsDef,
 ) -> Result<(), DiagnosticReport> {
     for target in resolve_visual_targets(selector, line, catalog)? {
-        let transforms = eval_visual_transforms(transform_exprs, &target.bindings, line)?;
+        let transforms = eval_visual_transforms(transform_exprs, &target.bindings, catalog, line)?;
         let env = visual_value_env(&target.bindings);
         if value_expr_result_axis(shape_value_expr, &env, &catalog.maps, line)? != shape.axis {
             return Err(parse_error(line, "visual shape tag set mismatch"));
@@ -2651,7 +2805,7 @@ fn add_inline_ascii_visuals(
         }
     }
     for target in resolve_visual_targets(selector, line, catalog)? {
-        let transforms = eval_visual_transforms(transform_exprs, &target.bindings, line)?;
+        let transforms = eval_visual_transforms(transform_exprs, &target.bindings, catalog, line)?;
         let colors = color_exprs
             .iter()
             .map(|(token, expr)| {
@@ -2705,7 +2859,7 @@ fn add_solid_visuals(
     visuals: &mut VisualsDef,
 ) -> Result<(), DiagnosticReport> {
     for target in resolve_visual_targets(selector, line, catalog)? {
-        let transforms = eval_visual_transforms(transform_exprs, &target.bindings, line)?;
+        let transforms = eval_visual_transforms(transform_exprs, &target.bindings, catalog, line)?;
         let visual = visual_name_for_object(&target.object_name);
         let color = resolve_visual_color_expr(
             color_expr,
@@ -2749,7 +2903,7 @@ fn add_image_visuals(
     visuals: &mut VisualsDef,
 ) -> Result<(), DiagnosticReport> {
     for target in resolve_visual_targets(selector, line, catalog)? {
-        let transforms = eval_visual_transforms(transform_exprs, &target.bindings, line)?;
+        let transforms = eval_visual_transforms(transform_exprs, &target.bindings, catalog, line)?;
         let visual = visual_name_for_object(&target.object_name);
         if target.bind_object {
             visuals.aliases.push(VisualAliasDef {

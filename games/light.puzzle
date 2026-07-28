@@ -1,7 +1,7 @@
 const title = "light"
 
+theme = puzzlescript
 theme {
-preset = "puzzlescript"
 background_color = #fff
 text_color = #000
 }

@@ -12,7 +12,7 @@ dimension = 3
       interactive_zoom = false
     }
     grid {
-      type = "occupied_cells"
+      type = occupied_cells
     }
     viewport {
       smoothscreen 9 7

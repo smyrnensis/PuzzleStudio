@@ -289,7 +289,9 @@ fn parse_input_buffer_block(
         ));
     }
 
-    let mut parsed = input_buffer.clone();
+    let mut busy_input = None;
+    let mut queued_presentation = None;
+    let mut min_wait_ms = None;
     for definition in &node.definition_rows {
         if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
             return Err(parse_error(
@@ -304,14 +306,32 @@ fn parse_input_buffer_block(
             ));
         };
         match definition.key.as_str() {
-            "queue_during_wait" => {
-                parsed.queue_during_wait = parse_boolean_option(value, &definition.source_line)?;
+            "busy_input" => {
+                if busy_input.is_some() {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "busy_input must be declared only once",
+                    ));
+                }
+                busy_input = Some(value);
             }
-            "fast_forward_wait" => {
-                parsed.fast_forward_wait = parse_boolean_option(value, &definition.source_line)?;
+            "queued_presentation" => {
+                if queued_presentation.is_some() {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "queued_presentation must be declared only once",
+                    ));
+                }
+                queued_presentation = Some(value);
             }
             "min_wait" => {
-                parsed.min_wait_ms = parse_wait_duration_ms(value, &definition.source_line)?;
+                if min_wait_ms.is_some() {
+                    return Err(parse_error(
+                        &definition.source_line,
+                        "min_wait must be declared only once",
+                    ));
+                }
+                min_wait_ms = Some(parse_wait_duration_ms(value, &definition.source_line)?);
             }
             other => {
                 return Err(parse_error(
@@ -322,7 +342,39 @@ fn parse_input_buffer_block(
         }
     }
 
-    *input_buffer = parsed;
+    input_buffer.busy_input = match (busy_input, queued_presentation, min_wait_ms) {
+        (Some("reject"), None, None) => BusyInputPolicy::Reject,
+        (Some("queue"), Some("preserve"), None) => BusyInputPolicy::Queue,
+        (Some("queue"), Some("skip"), None) => BusyInputPolicy::Skip,
+        (Some("queue"), Some("accelerate"), min_wait_ms) => BusyInputPolicy::Accelerate {
+            min_wait_ms: min_wait_ms.unwrap_or(50),
+        },
+        (None, _, _) => {
+            return Err(parse_error(
+                &lines[start],
+                "input_buffer requires `busy_input = reject` or `busy_input = queue`",
+            ));
+        }
+        (Some("reject"), _, _) => {
+            return Err(parse_error(
+                &lines[start],
+                "busy_input = reject does not accept queued_presentation or min_wait",
+            ));
+        }
+        (Some("queue"), None, _) => {
+            return Err(parse_error(
+                &lines[start],
+                "busy_input = queue requires queued_presentation = preserve, skip, or accelerate",
+            ));
+        }
+        (Some("queue"), Some("preserve" | "skip"), Some(_)) => {
+            return Err(parse_error(
+                &lines[start],
+                "min_wait is valid only with queued_presentation = accelerate",
+            ));
+        }
+        _ => unreachable!("schema validates input_buffer enum values"),
+    };
     Ok(next_i)
 }
 

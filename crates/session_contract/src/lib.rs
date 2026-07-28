@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 pub use puzzle_runtime_contract::RuntimeTheme;
 use puzzle_runtime_contract::{
     RuntimeKeyTrigger, RuntimePresentationContinuationToken, RuntimePresentationEvent,
-    RuntimePuzzle3Snapshot, RuntimeResolvedRenderScene, RuntimeResolvedView2d,
-    RuntimeSceneActionToken, RuntimeViewportSourceId, RuntimeVisualComposition,
-    SolverStateSnapshot,
+    RuntimePresentationTransitionId, RuntimePuzzle3Snapshot, RuntimeResolvedRenderScene,
+    RuntimeResolvedView2d, RuntimeSceneActionToken, RuntimeSessionRevision, RuntimeStateCommitId,
+    RuntimeViewportSourceId, RuntimeVisualComposition, SolverStateSnapshot,
 };
 use puzzle_scene::{
     ComponentPlacement, ComponentVisibility, SceneLayout as SceneLayoutDef,
@@ -28,22 +28,33 @@ pub trait RuntimePresentationBackend {
 
 #[derive(Clone, Debug)]
 pub struct RuntimeSessionSnapshot {
-    pub revision: u64,
+    pub session_revision: RuntimeSessionRevision,
+    pub state_commit: RuntimeStateCommitId,
     pub has_progress_save: bool,
     pub theme: RuntimeTheme,
     pub default_wait_ms: u64,
     pub input_buffer: RuntimeInputBufferSettings,
     pub animation: RuntimeAnimationSettings,
-    pub presentation_events: Vec<RuntimePresentationEvent>,
-    pub presentation_continuation: Option<RuntimePresentationContinuationToken>,
+    pub presentation: Option<RuntimePresentationTransition>,
     pub level_index: Option<usize>,
     pub level_count: usize,
     pub accepts_model_input: bool,
+    pub queued_model_input: bool,
     pub viewport_sources: BTreeMap<RuntimeViewportSourceId, RuntimeRendererState>,
     pub surface: RuntimeSurface,
     pub busy: bool,
     pub can_undo: bool,
     pub can_redo: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePresentationTransition {
+    pub id: RuntimePresentationTransitionId,
+    pub from_state_commit: RuntimeStateCommitId,
+    pub to_state_commit: RuntimeStateCommitId,
+    pub steps: Vec<RuntimePresentationEvent>,
+    pub continuation: Option<RuntimePresentationContinuationToken>,
 }
 
 /// Development-only state paired with a player snapshot for editor inspection.
@@ -229,9 +240,30 @@ pub struct RuntimeRender2d {}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeInputBufferSettings {
-    pub queue_during_wait: bool,
-    pub fast_forward_wait: bool,
-    pub min_wait_ms: u64,
+    pub busy_input: RuntimeBusyInputPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RuntimeBusyInputPolicy {
+    #[default]
+    Reject,
+    Queue,
+    Skip,
+    Accelerate {
+        min_wait_ms: u64,
+    },
+}
+
+impl RuntimeBusyInputPolicy {
+    pub fn queues_input(self) -> bool {
+        !matches!(self, Self::Reject)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

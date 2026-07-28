@@ -70,6 +70,7 @@ fn parse_game2d_from_document_parts(
     game.scenes = add_implicit_model_scenes(scenes, [("puzzle", &model_name)]);
     resolve_scene_actions(&mut game.scenes, &game.input_labels, None)?;
     add_scene_input_key_controls(&game.scenes, &game.input_labels, &mut game.controls);
+    crate::sound_validation::validate_loaded_game_sound_references(&game)?;
     Ok(game)
 }
 
@@ -475,7 +476,9 @@ fn parse_loaded_document_parts(
             }
         }
     }
-    Ok(loaded_document_from_shell(shell, scenes, loaded_models))
+    let document = loaded_document_from_shell(shell, scenes, loaded_models);
+    crate::validate_loaded_document_sound_references(&document)?;
+    Ok(document)
 }
 
 fn qualify_loaded_model_resource_paths(
@@ -962,6 +965,7 @@ fn parse_document_shell_entries(
     entries: &[model_syntax::PuzzleEntrySyntax],
 ) -> Result<DocumentShell, DiagnosticReport> {
     let mut shell = DocumentShell::default();
+    let mut theme_preset_seen = false;
     for entry in entries {
         let tokens = split_header_tokens(&entry.header.text);
         match entry.directive {
@@ -970,8 +974,15 @@ fn parse_document_shell_entries(
                     shell.default_wait_ms = parse_default_wait_time_directive(&entry.header)?;
                 }
                 ["theme", ..] => {
+                    if theme_preset_seen {
+                        return Err(parse_error(
+                            &entry.header,
+                            "theme preset must be declared only once",
+                        ));
+                    }
                     let lines = document_entry_lines(entry);
                     parse_theme_statement(&lines, 0, &mut shell.theme)?;
+                    theme_preset_seen = true;
                 }
                 _ => {
                     return Err(parse_error(&entry.header, "unknown document setting"));
@@ -1735,6 +1746,7 @@ fn lower_model_with_shell_inner(
             "run_rules_on_level_start cannot be combined with on_level_start".to_string(),
         ));
     }
+    validate_model_sound_specs(&model_sound_triggers, &model_operation_sounds, &sounds)?;
     let model_sound_triggers = resolve_model_sound_triggers(&model_sound_triggers, &catalog)?;
     let model_operation_sounds = resolve_model_operation_sounds(&model_operation_sounds);
     let mut warnings = collect_dynamic_selector_warnings(

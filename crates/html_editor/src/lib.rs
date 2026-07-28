@@ -3419,7 +3419,7 @@ step board
         let workspace = TestWorkspace::new();
         let themed_source = editor_fixture_source("Themed Preview").replace(
             "puzzle default {",
-            "theme {\npreset = \"puzzlescript\"\nbackground_color = #ffffff\ntext_color = #000000\n}\n\npuzzle default {",
+            "theme = puzzlescript\n\ntheme {\nbackground_color = #ffffff\ntext_color = #000000\n}\n\npuzzle default {",
         );
         let game_path = workspace.write("games/themed_preview/game.puzzle", &themed_source);
         let service = EditorService::open(&game_path).expect("open themed editor fixture");

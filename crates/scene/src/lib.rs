@@ -702,9 +702,10 @@ pub enum SceneTextRole {
     Caption,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SceneTextAlign {
     Start,
+    #[default]
     Center,
     End,
 }

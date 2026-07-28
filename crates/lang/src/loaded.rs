@@ -245,17 +245,22 @@ impl<const D: usize, Size: GridSize<D>> LoadedGridGame<D, Size> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputBufferDef {
-    pub queue_during_wait: bool,
-    pub fast_forward_wait: bool,
-    pub min_wait_ms: u64,
+    pub busy_input: BusyInputPolicy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BusyInputPolicy {
+    Reject,
+    Queue,
+    Skip,
+    Accelerate { min_wait_ms: u64 },
 }
 
 impl Default for InputBufferDef {
     fn default() -> Self {
         Self {
-            queue_during_wait: true,
-            fast_forward_wait: true,
-            min_wait_ms: 50,
+            busy_input: BusyInputPolicy::Accelerate { min_wait_ms: 50 },
         }
     }
 }
@@ -338,7 +343,7 @@ pub struct AssetsDef {
     pub files: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SoundsDef {
     pub sfx: Vec<SfxSoundDef>,
     pub music: Vec<MusicSoundDef>,

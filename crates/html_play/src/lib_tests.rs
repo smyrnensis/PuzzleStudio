@@ -136,6 +136,7 @@ levels default of cube {
             "PuzzleStudioEditorPreviewObservation",
             "PuzzleStudioEditorPointer",
             "PuzzleStudioPreviewRuntimeError",
+            "PuzzleStudioRuntimeAssetRequest",
         ] {
             assert!(
                 html.contains(required),
@@ -149,6 +150,7 @@ levels default of cube {
             "WasmStandaloneSession",
             "PuzzleRenderer",
             "Puzzle3DFixture",
+            "window.PuzzleStandaloneEmbeddedWasm",
         ] {
             assert!(
                 !html.contains(forbidden),

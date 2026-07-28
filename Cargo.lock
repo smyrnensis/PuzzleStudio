@@ -5778,6 +5778,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "image",
+ "naga",
  "puzzle-assets",
  "puzzle-presentation",
  "puzzle-runtime-contract",
@@ -5970,6 +5971,7 @@ dependencies = [
  "puzzle-lang",
  "puzzle-player-bootstrap",
  "puzzle-presentation-json",
+ "puzzle-runtime-contract",
  "serde",
  "serde_json",
  "wasm-bindgen",

@@ -1,16 +1,34 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    sync::Arc,
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    sync::{Arc, Mutex},
 };
 
 use bevy::{
-    asset::RenderAssetUsages,
-    camera::{ClearColorConfig, ScalingMode, visibility::RenderLayers},
+    asset::{AssetId, RenderAssetUsages},
+    camera::{
+        ClearColorConfig, RenderTarget, ScalingMode, Viewport,
+        visibility::{NoFrustumCulling, RenderLayers},
+    },
     image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     mesh::Indices,
     prelude::*,
-    render::render_resource::{Extent3d, PrimitiveTopology, TextureDimension, TextureFormat},
-    sprite_render::AlphaMode2d,
+    render::{
+        Render, RenderApp, RenderSystems,
+        camera::ExtractedCamera,
+        extract_component::{ExtractComponent, ExtractComponentPlugin},
+        mesh::RenderMesh,
+        render_asset::RenderAssets,
+        render_resource::{
+            Extent3d, PipelineCache, PrimitiveTopology, TextureDimension, TextureFormat,
+        },
+        sync_world::MainEntity,
+        view::RenderVisibleEntities,
+    },
+    sprite_render::{
+        AlphaMode2d, PreparedMaterial2d, RenderMaterial2dInstances, RenderMesh2dInstances,
+        SpecializedMaterial2dPipelineCache,
+    },
+    window::WindowRef,
 };
 use puzzle_assets::{DecodedVisualImageCatalog, VisualImageAssetId, VisualImageAssetRevision};
 use puzzle_runtime_contract::{
@@ -19,13 +37,14 @@ use puzzle_runtime_contract::{
 };
 
 use super::{
-    BevyRenderError, PuzzleBevyFramebufferRect, PuzzleBevyRenderView, PuzzleBevyRendererSystems,
+    BevyPublicationGroupId, BevyPublicationGroups, BevyPublicationMember, BevyRenderError,
+    PuzzleBevyFramebufferRect, PuzzleBevyRenderView, PuzzleBevyRendererSystems,
     PuzzleBevyViewDimension, PuzzleBevyViewId, checked_transform, finite_unit, resolved_color,
     runtime_affine,
 };
 
 const MESH_Z_STEP: f32 = 0.001;
-const FIRST_2D_RENDER_LAYER: usize = 3;
+const FIRST_2D_RENDER_LAYER: usize = 4;
 
 #[derive(Clone, Debug)]
 pub struct PuzzleBevy2dView {
@@ -66,21 +85,88 @@ impl PuzzleBevy2dView {
     }
 }
 
+/// Fits an authored 2D world into a render surface without changing the
+/// physical scale between the x and y axes.
+pub fn fitted_2d_content_rect(surface_size: Vec2, view_size: Vec2) -> Option<Rect> {
+    if !surface_size.is_finite()
+        || !view_size.is_finite()
+        || surface_size.x <= 0.0
+        || surface_size.y <= 0.0
+        || view_size.x <= 0.0
+        || view_size.y <= 0.0
+    {
+        return None;
+    }
+    let scale = (surface_size.x / view_size.x).min(surface_size.y / view_size.y);
+    let content_size = view_size * scale;
+    let min = (surface_size - content_size) * 0.5;
+    Some(Rect::from_corners(min, min + content_size))
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PuzzleBevy2dPlugin;
 
 impl Plugin for PuzzleBevy2dPlugin {
     fn build(&self, app: &mut App) {
+        if !app.is_plugin_added::<super::PuzzleBevyPublicationPlugin>() {
+            app.add_plugins(super::PuzzleBevyPublicationPlugin);
+        }
+        let gpu_backed = app.get_sub_app(RenderApp).is_some();
+        let readiness = RenderReadinessBridge2d::new(gpu_backed);
         app.init_resource::<BevyResolvedFrameQueue2d>()
+            .init_resource::<BevyPublishedViewFrames2d>()
             .init_resource::<RenderedFrameState2d>()
+            .init_resource::<StagedFrameState2d>()
+            .insert_resource(readiness.clone())
             .add_systems(Startup, setup_renderer_2d)
             .add_systems(
                 PostUpdate,
-                apply_pending_frame_2d.in_set(PuzzleBevyRendererSystems::ApplySubmittedFrames),
+                apply_pending_frame_2d
+                    .in_set(PuzzleBevyRendererSystems::ApplySubmittedFrames)
+                    .before(bevy::transform::TransformSystems::Propagate),
             );
+        if gpu_backed {
+            app.add_plugins(ExtractComponentPlugin::<FrameBankGeneration2d>::default());
+            app.add_plugins(ExtractComponentPlugin::<CameraPublication2d>::default());
+            app.add_plugins(ExtractComponentPlugin::<StagingPublication2d>::default());
+        }
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.insert_resource(readiness).add_systems(
+                Render,
+                acknowledge_ready_frames_2d
+                    .after(RenderSystems::Render)
+                    .before(RenderSystems::Cleanup),
+            );
+        }
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BevyPublishedViewFrame2d {
+    pub view_id: PuzzleBevyViewId,
+    pub generation: u64,
+}
+
+#[derive(Resource, Default)]
+pub struct BevyPublishedViewFrames2d {
+    frames: VecDeque<BevyPublishedViewFrame2d>,
+}
+
+impl BevyPublishedViewFrames2d {
+    pub fn drain(&mut self) -> impl Iterator<Item = BevyPublishedViewFrame2d> + '_ {
+        self.frames.drain(..)
+    }
+
+    fn acknowledge(&mut self, view_id: PuzzleBevyViewId, generation: u64) {
+        self.frames.push_back(BevyPublishedViewFrame2d {
+            view_id,
+            generation,
+        });
+    }
+}
+
+/// Renderer-owned draw slot. Mutable game state never participates in this
+/// key; the complete draw payload is replaced on every submitted frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PreparedPixelMeshKey {
     pub batch_index: usize,
@@ -111,7 +197,6 @@ pub struct PreparedBevy2dFrame {
     pub meshes: Vec<PreparedPixelMesh>,
     pub raster_quads: Vec<PreparedRasterQuad>,
     pub line_meshes: Vec<PreparedLineMesh2d>,
-    pub continue_animation: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -230,7 +315,6 @@ pub fn prepare_resolved_frame_2d(
         meshes,
         raster_quads,
         line_meshes,
-        continue_animation: frame.continue_animation,
     })
 }
 
@@ -338,8 +422,8 @@ fn prepare_pixel_mesh(
     Ok(PreparedPixelMesh {
         key: PreparedPixelMeshKey { batch_index },
         transform,
-        render_order: batch.render_order,
-        object_ids: batch.object_ids.clone(),
+        render_order: batch.identity.render_order,
+        object_ids: batch.identity.object_ids.clone(),
         mesh: PreparedLogicalMesh {
             key,
             positions,
@@ -408,8 +492,8 @@ fn prepare_raster_quad(
     Ok(PreparedRasterQuad {
         key: PreparedRasterQuadKey { batch_index },
         transform,
-        render_order: batch.render_order,
-        object_ids: batch.object_ids.clone(),
+        render_order: batch.identity.render_order,
+        object_ids: batch.identity.object_ids.clone(),
         opacity,
         texture: PreparedRasterTexture {
             key: RasterTextureKey {
@@ -450,7 +534,11 @@ fn batch_transform(
 ) -> Result<Transform, BevyRenderError> {
     let affine = runtime_affine(batch.transform, batch_index)?;
     let y_flip = Mat4::from_scale(Vec3::new(1.0, -1.0, 1.0));
-    let cell_center = Vec3::new(batch.cell[0] as f32 + 0.5, batch.cell[1] as f32 + 0.5, 0.0);
+    let cell_center = Vec3::new(
+        batch.identity.cell[0] as f32 + 0.5,
+        batch.identity.cell[1] as f32 + 0.5,
+        0.0,
+    );
     checked_transform(
         y_flip * Mat4::from_translation(cell_center) * affine * y_flip,
         batch_index,
@@ -461,10 +549,11 @@ fn prepare_line_meshes_2d(
     frame: &RuntimeResolvedRenderFrame,
     view: &PuzzleBevy2dView,
 ) -> Result<Vec<PreparedLineMesh2d>, BevyRenderError> {
-    let scale = Vec2::new(
+    let pixels_per_world_unit = Vec2::new(
         view.framebuffer.physical_size.x as f32 / view.size.x,
         view.framebuffer.physical_size.y as f32 / view.size.y,
-    );
+    )
+    .min_element();
     let decoration_z = (frame.batches.len() as f32 + 1.0) * MESH_Z_STEP;
     let mut prepared = Vec::with_capacity(frame.decorations.len());
     for (decoration_index, decoration) in frame.decorations.iter().enumerate() {
@@ -495,7 +584,7 @@ fn prepare_line_meshes_2d(
                         field: "width",
                     });
                 }
-                (cell_fraction as f32 * scale.x.min(scale.y)).max(min_physical_pixels as f32)
+                (cell_fraction as f32 * pixels_per_world_unit).max(min_physical_pixels as f32)
             }
             RuntimeResolvedStrokeWidth::PhysicalPixels { pixels } => {
                 if !pixels.is_finite() || pixels <= 0.0 {
@@ -528,13 +617,13 @@ fn prepare_line_meshes_2d(
                 });
             }
             if (start.x - end.x).abs() <= f32::EPSILON {
-                let half_width = width_pixels * 0.5 / scale.x;
+                let half_width = width_pixels * 0.5 / pixels_per_world_unit;
                 vertical.push(LineRect2d {
                     min: Vec2::new(start.x - half_width, start.y.min(end.y)),
                     max: Vec2::new(start.x + half_width, start.y.max(end.y)),
                 });
             } else if (start.y - end.y).abs() <= f32::EPSILON {
-                let half_width = width_pixels * 0.5 / scale.y;
+                let half_width = width_pixels * 0.5 / pixels_per_world_unit;
                 horizontal.push(LineRect2d {
                     min: Vec2::new(start.x.min(end.x), start.y - half_width),
                     max: Vec2::new(start.x.max(end.x), start.y + half_width),
@@ -694,7 +783,7 @@ pub fn remove_render_view_2d(
     queue.remove(view_id)
 }
 
-#[derive(Resource, Default)]
+#[derive(Clone, Resource, Default)]
 pub struct BevyResolvedFrameQueue2d {
     next_generation: u64,
     registry: super::BevyViewRegistry,
@@ -733,6 +822,28 @@ impl BevyResolvedFrameQueue2d {
         catalog: Arc<DecodedVisualImageCatalog>,
         frame: PreparedBevy2dFrame,
     ) -> Result<u64, BevyRenderError> {
+        self.submit_prepared_with_group(view_id, view, catalog, frame, None)
+    }
+
+    pub fn submit_prepared_in_group(
+        &mut self,
+        view_id: PuzzleBevyViewId,
+        view: PuzzleBevy2dView,
+        catalog: Arc<DecodedVisualImageCatalog>,
+        frame: PreparedBevy2dFrame,
+        publication_group: BevyPublicationGroupId,
+    ) -> Result<u64, BevyRenderError> {
+        self.submit_prepared_with_group(view_id, view, catalog, frame, Some(publication_group))
+    }
+
+    fn submit_prepared_with_group(
+        &mut self,
+        view_id: PuzzleBevyViewId,
+        view: PuzzleBevy2dView,
+        catalog: Arc<DecodedVisualImageCatalog>,
+        frame: PreparedBevy2dFrame,
+        publication_group: Option<BevyPublicationGroupId>,
+    ) -> Result<u64, BevyRenderError> {
         view_id.validate()?;
         view_id.validate_dimension(PuzzleBevyViewDimension::TwoD)?;
         view.validate()?;
@@ -750,6 +861,7 @@ impl BevyResolvedFrameQueue2d {
                 view,
                 catalog,
                 frame,
+                publication_group,
             }),
         );
         Ok(generation)
@@ -774,6 +886,7 @@ impl BevyResolvedFrameQueue2d {
     }
 }
 
+#[derive(Clone)]
 struct SubmittedFrame2d {
     generation: u64,
     view_id: PuzzleBevyViewId,
@@ -782,11 +895,97 @@ struct SubmittedFrame2d {
     view: PuzzleBevy2dView,
     catalog: Arc<DecodedVisualImageCatalog>,
     frame: PreparedBevy2dFrame,
+    publication_group: Option<BevyPublicationGroupId>,
 }
 
+#[derive(Clone)]
 enum PendingViewChange2d {
     Submit(SubmittedFrame2d),
     Remove,
+}
+
+#[derive(Clone, Default)]
+struct GpuDependencies2d {
+    meshes: HashSet<AssetId<Mesh>>,
+    materials: HashSet<AssetId<ColorMaterial>>,
+    target: ReadinessTarget2d,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+enum ReadinessTarget2d {
+    #[default]
+    Assets,
+    FrameBank {
+        expected_entities: usize,
+        render_layer: usize,
+    },
+    Camera {
+        render_layer: usize,
+    },
+}
+
+#[derive(Default)]
+struct RenderReadinessState2d {
+    requested: HashMap<u64, GpuDependencies2d>,
+    ready: HashSet<u64>,
+}
+
+/// Main/render-world handshake for atomic frame publication. Main-world asset
+/// existence is not sufficient: only the render world can prove that every
+/// GPU dependency for a generation is prepared.
+#[derive(Resource, Clone)]
+struct RenderReadinessBridge2d {
+    gpu_backed: bool,
+    state: Arc<Mutex<RenderReadinessState2d>>,
+}
+
+impl RenderReadinessBridge2d {
+    fn new(gpu_backed: bool) -> Self {
+        Self {
+            gpu_backed,
+            state: Arc::new(Mutex::new(RenderReadinessState2d::default())),
+        }
+    }
+
+    fn request(&self, generation: u64, dependencies: GpuDependencies2d) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("2D render readiness lock poisoned");
+        state.ready.remove(&generation);
+        state.requested.insert(generation, dependencies);
+    }
+
+    fn cancel(&self, generation: u64) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("2D render readiness lock poisoned");
+        state.requested.remove(&generation);
+        state.ready.remove(&generation);
+    }
+
+    fn take_ready(&self) -> HashSet<u64> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("2D render readiness lock poisoned");
+        std::mem::take(&mut state.ready)
+    }
+
+    #[cfg(test)]
+    fn mark_ready(&self, generation: u64) {
+        self.state
+            .lock()
+            .expect("2D render readiness lock poisoned")
+            .ready
+            .insert(generation);
+    }
+}
+
+#[derive(Resource, Default)]
+struct StagedFrameState2d {
+    views: HashMap<PuzzleBevyViewId, SubmittedFrame2d>,
 }
 
 #[derive(Component, Clone, Debug)]
@@ -811,8 +1010,29 @@ pub struct PuzzleRasterQuad {
 #[derive(Component)]
 struct PuzzleRendererCamera2d;
 
+#[derive(Component, Clone, Copy, Debug, ExtractComponent)]
+struct FrameBankGeneration2d {
+    generation: u64,
+    render_layer: usize,
+}
+
+#[derive(Component, Clone, Copy, Debug, ExtractComponent)]
+struct CameraPublication2d {
+    generation: u64,
+    render_layer: usize,
+}
+
+#[derive(Component, Clone, Copy, Debug, ExtractComponent)]
+struct StagingPublication2d {
+    generation: u64,
+    render_layer: usize,
+}
+
 #[derive(Resource)]
 struct RenderAssets2d {
+    // Render-world extraction can outlive the main-world entity update that
+    // stopped using an asset. Strong handles therefore live with the player
+    // app and are released when that app is dropped.
     material: Handle<ColorMaterial>,
     meshes: HashMap<LogicalMeshKey, Handle<Mesh>>,
     raster_meshes: HashMap<RasterMeshKey, Handle<Mesh>>,
@@ -820,17 +1040,54 @@ struct RenderAssets2d {
     raster_materials: HashMap<RasterMaterialKey, Handle<ColorMaterial>>,
 }
 
-struct RenderedViewState2d {
+struct RenderedFrameBank2d {
     generation: u64,
+    render_layer: usize,
     entities: HashMap<PreparedPixelMeshKey, Entity>,
     raster_entities: HashMap<PreparedRasterQuadKey, Entity>,
     line_entities: HashMap<PreparedLineMesh2dKey, Entity>,
-    mesh_keys: HashSet<LogicalMeshKey>,
-    raster_mesh_keys: HashSet<RasterMeshKey>,
-    raster_texture_keys: HashSet<RasterTextureKey>,
-    raster_material_keys: HashSet<RasterMaterialKey>,
-    camera: Entity,
-    render_layer: usize,
+}
+
+impl RenderedFrameBank2d {
+    fn new(render_layer: usize) -> Self {
+        Self {
+            generation: 0,
+            render_layer,
+            entities: HashMap::new(),
+            raster_entities: HashMap::new(),
+            line_entities: HashMap::new(),
+        }
+    }
+}
+
+enum PublicationPhase2d {
+    Idle,
+    Building {
+        bank: usize,
+        generation: u64,
+        view: PuzzleBevy2dView,
+        camera_order: isize,
+        publication_group: Option<BevyPublicationGroupId>,
+    },
+    AwaitingGroup {
+        bank: usize,
+        generation: u64,
+        view: PuzzleBevy2dView,
+        camera_order: isize,
+        publication_group: BevyPublicationGroupId,
+    },
+    Switching {
+        bank: usize,
+        generation: u64,
+        publication_group: Option<BevyPublicationGroupId>,
+    },
+}
+
+struct RenderedViewState2d {
+    banks: [RenderedFrameBank2d; 2],
+    cameras: [Entity; 2],
+    active_bank: usize,
+    phase: PublicationPhase2d,
 }
 
 #[derive(Resource, Default)]
@@ -848,237 +1105,709 @@ fn setup_renderer_2d(mut commands: Commands, mut materials: ResMut<Assets<ColorM
     });
 }
 
+fn acknowledge_ready_frames_2d(
+    meshes: Res<RenderAssets<RenderMesh>>,
+    materials: Res<RenderAssets<PreparedMaterial2d<ColorMaterial>>>,
+    mesh_instances: Res<RenderMesh2dInstances>,
+    material_instances: Res<RenderMaterial2dInstances<ColorMaterial>>,
+    specialized_pipelines: Res<SpecializedMaterial2dPipelineCache<ColorMaterial>>,
+    pipeline_cache: Res<PipelineCache>,
+    readiness: Res<RenderReadinessBridge2d>,
+    frame_entities: Query<(&MainEntity, &FrameBankGeneration2d)>,
+    cameras: Query<(&CameraPublication2d, &RenderLayers, &ExtractedCamera)>,
+    staging_cameras: Query<(
+        &MainEntity,
+        &StagingPublication2d,
+        &RenderLayers,
+        &ExtractedCamera,
+        &RenderVisibleEntities,
+    )>,
+) {
+    let mut state = readiness
+        .state
+        .lock()
+        .expect("2D render readiness lock poisoned");
+    let ready = state
+        .requested
+        .iter()
+        .filter_map(|(generation, dependencies)| {
+            let assets_ready = dependencies
+                .meshes
+                .iter()
+                .all(|id| meshes.get(*id).is_some())
+                && dependencies
+                    .materials
+                    .iter()
+                    .all(|id| materials.get(*id).is_some());
+            let target_ready = match dependencies.target {
+                ReadinessTarget2d::Assets => true,
+                ReadinessTarget2d::FrameBank {
+                    expected_entities,
+                    render_layer,
+                } => {
+                    let bank_entities = frame_entities
+                        .iter()
+                        .filter_map(|(main_entity, marker)| {
+                            (marker.render_layer == render_layer)
+                                .then_some((*main_entity, marker.generation))
+                        })
+                        .collect::<Vec<_>>();
+                    let bank_complete = bank_entities.len() == expected_entities
+                        && bank_entities
+                            .iter()
+                            .all(|(_, entity_generation)| entity_generation == generation);
+                    let staging_ready = staging_cameras.iter().any(
+                        |(camera_entity, marker, layers, extracted, visible)| {
+                            if marker.generation != *generation
+                                || marker.render_layer != render_layer
+                                || !layers.iter().eq(std::iter::once(render_layer))
+                                || extracted.target.is_none()
+                            {
+                                return false;
+                            }
+                            let visible_entities = visible
+                                .get::<Mesh2d>()
+                                .into_iter()
+                                .flat_map(|entities| entities.iter_visible().map(|(_, main)| *main))
+                                .collect::<Vec<_>>();
+                            if visible_entities.len() != expected_entities {
+                                return false;
+                            }
+                            let view_pipelines = specialized_pipelines.get(camera_entity);
+                            bank_entities.iter().all(|(main_entity, _)| {
+                                visible_entities.contains(main_entity)
+                                    && mesh_instances.contains_key(main_entity)
+                                    && material_instances.contains_key(main_entity)
+                                    && view_pipelines
+                                        .and_then(|pipelines| pipelines.get(main_entity))
+                                        .is_some_and(|pipeline| {
+                                            pipeline_cache.get_render_pipeline(*pipeline).is_some()
+                                        })
+                            })
+                        },
+                    );
+                    bank_complete && staging_ready
+                }
+                ReadinessTarget2d::Camera { render_layer } => {
+                    cameras.iter().any(|(marker, layers, extracted)| {
+                        marker.generation == *generation
+                            && marker.render_layer == render_layer
+                            && layers.iter().eq(std::iter::once(render_layer))
+                            && extracted.target.is_some()
+                    })
+                }
+            };
+            (assets_ready && target_ready).then_some(*generation)
+        })
+        .collect::<Vec<_>>();
+    for generation in ready {
+        state.requested.remove(&generation);
+        state.ready.insert(generation);
+    }
+}
+
+fn prewarm_submitted_frame_2d(
+    submitted: &SubmittedFrame2d,
+    render_assets: &mut RenderAssets2d,
+    meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
+    materials: &mut Assets<ColorMaterial>,
+) -> GpuDependencies2d {
+    let mut dependencies = GpuDependencies2d::default();
+    if !submitted.frame.meshes.is_empty() || !submitted.frame.line_meshes.is_empty() {
+        dependencies.materials.insert(render_assets.material.id());
+    }
+    for prepared in &submitted.frame.meshes {
+        dependencies
+            .meshes
+            .insert(mesh_for(&prepared.mesh, render_assets, meshes).id());
+    }
+    for prepared in &submitted.frame.raster_quads {
+        let mesh_key = raster_mesh_key(prepared);
+        dependencies
+            .meshes
+            .insert(raster_mesh_for(prepared, &mesh_key, render_assets, meshes).id());
+        let material_key = RasterMaterialKey {
+            texture: prepared.texture.key.clone(),
+            opacity: prepared.opacity.to_bits(),
+        };
+        dependencies.materials.insert(
+            raster_material_for(
+                prepared,
+                &material_key,
+                &submitted.catalog,
+                render_assets,
+                images,
+                materials,
+            )
+            .id(),
+        );
+    }
+    for prepared in &submitted.frame.line_meshes {
+        dependencies
+            .meshes
+            .insert(mesh_for(&prepared.mesh, render_assets, meshes).id());
+    }
+    dependencies
+}
+
+fn remove_rendered_view_2d(
+    commands: &mut Commands,
+    state: &mut RenderedFrameState2d,
+    queue: &mut BevyResolvedFrameQueue2d,
+    view_id: &PuzzleBevyViewId,
+) {
+    if let Some(view) = state.views.remove(view_id) {
+        for bank in view.banks {
+            for entity in bank.entities.into_values() {
+                commands.entity(entity).despawn();
+            }
+            for entity in bank.raster_entities.into_values() {
+                commands.entity(entity).despawn();
+            }
+            for entity in bank.line_entities.into_values() {
+                commands.entity(entity).despawn();
+            }
+        }
+        for camera in view.cameras {
+            commands.entity(camera).despawn();
+        }
+    }
+    queue.registry.finish_removal(view_id);
+}
+
+fn spawn_rendered_view_2d(
+    commands: &mut Commands,
+    submitted: &SubmittedFrame2d,
+    gpu_backed: bool,
+) -> RenderedViewState2d {
+    let back_layer = submitted
+        .render_layer
+        .checked_add(1)
+        .expect("validated paired 2D render layer must have a back layer");
+    let mut spawn_bank_camera = |render_layer| {
+        commands
+            .spawn((
+                Camera2d,
+                Camera {
+                    is_active: false,
+                    ..default()
+                },
+                PuzzleRendererCamera2d,
+                PuzzleBevyRenderView {
+                    id: submitted.view_id.clone(),
+                },
+                RenderLayers::none().with(render_layer),
+            ))
+            .id()
+    };
+    let cameras = [
+        spawn_bank_camera(submitted.render_layer),
+        spawn_bank_camera(back_layer),
+    ];
+    if gpu_backed {
+        configure_staging_camera_2d(
+            commands,
+            cameras[1],
+            back_layer,
+            submitted.generation,
+            &submitted.view,
+        );
+    }
+    RenderedViewState2d {
+        banks: [
+            RenderedFrameBank2d::new(submitted.render_layer),
+            RenderedFrameBank2d::new(back_layer),
+        ],
+        cameras,
+        active_bank: 0,
+        phase: PublicationPhase2d::Idle,
+    }
+}
+
+fn configure_staging_camera_2d(
+    commands: &mut Commands,
+    camera: Entity,
+    render_layer: usize,
+    generation: u64,
+    view: &PuzzleBevy2dView,
+) {
+    let target_size = view.framebuffer.physical_size;
+    let camera_transform = camera_transform(view);
+    let staging_order = isize::MIN
+        .checked_add(
+            isize::try_from(render_layer)
+                .expect("validated 2D render layer must fit the camera order domain"),
+        )
+        .expect("2D staging camera order must not overflow");
+    commands
+        .entity(camera)
+        .remove::<CameraPublication2d>()
+        .insert((
+            Camera2d,
+            Camera {
+                is_active: true,
+                order: staging_order,
+                viewport: Some(Viewport {
+                    physical_position: view.framebuffer.physical_position,
+                    physical_size: target_size,
+                    ..default()
+                }),
+                clear_color: ClearColorConfig::Custom(view.clear_color.clone()),
+                ..default()
+            },
+            RenderTarget::Window(WindowRef::Primary),
+            Projection::Orthographic(orthographic_projection(view)),
+            camera_transform,
+            GlobalTransform::from(camera_transform),
+            RenderLayers::none().with(render_layer),
+            StagingPublication2d {
+                generation,
+                render_layer,
+            },
+        ));
+}
+
+fn deactivate_bank_camera_2d(commands: &mut Commands, camera: Entity) {
+    commands
+        .entity(camera)
+        .remove::<(CameraPublication2d, StagingPublication2d)>()
+        .insert(Camera {
+            is_active: false,
+            ..default()
+        });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_frame_bank_2d(
+    commands: &mut Commands,
+    bank: &mut RenderedFrameBank2d,
+    submitted: &SubmittedFrame2d,
+    render_assets: &mut RenderAssets2d,
+    meshes: &mut Assets<Mesh>,
+    images: &mut Assets<Image>,
+    materials: &mut Assets<ColorMaterial>,
+) -> usize {
+    let render_layers = RenderLayers::none().with(bank.render_layer);
+    let generation = submitted.generation;
+    let mut retained = HashMap::with_capacity(submitted.frame.meshes.len());
+    for prepared in &submitted.frame.meshes {
+        let entity = bank
+            .entities
+            .remove(&prepared.key)
+            .unwrap_or_else(|| commands.spawn_empty().id());
+        let mesh = mesh_for(&prepared.mesh, render_assets, meshes);
+        let transform = prepared.transform;
+        commands.entity(entity).insert((
+            Mesh2d(mesh),
+            MeshMaterial2d(render_assets.material.clone()),
+            transform,
+            GlobalTransform::from(transform),
+            render_layers.clone(),
+            PuzzleBevyRenderView {
+                id: submitted.view_id.clone(),
+            },
+            PuzzlePixelMesh {
+                key: prepared.key,
+                render_order: prepared.render_order,
+                object_ids: prepared.object_ids.clone(),
+            },
+            FrameBankGeneration2d {
+                generation,
+                render_layer: bank.render_layer,
+            },
+            NoFrustumCulling,
+            Visibility::Inherited,
+        ));
+        retained.insert(prepared.key, entity);
+    }
+
+    let mut retained_rasters = HashMap::with_capacity(submitted.frame.raster_quads.len());
+    for prepared in &submitted.frame.raster_quads {
+        let entity = bank
+            .raster_entities
+            .remove(&prepared.key)
+            .unwrap_or_else(|| commands.spawn_empty().id());
+        let mesh_key = raster_mesh_key(prepared);
+        let mesh = raster_mesh_for(prepared, &mesh_key, render_assets, meshes);
+        let material_key = RasterMaterialKey {
+            texture: prepared.texture.key.clone(),
+            opacity: prepared.opacity.to_bits(),
+        };
+        let material = raster_material_for(
+            prepared,
+            &material_key,
+            &submitted.catalog,
+            render_assets,
+            images,
+            materials,
+        );
+        let transform = prepared.transform;
+        commands.entity(entity).insert((
+            Mesh2d(mesh),
+            MeshMaterial2d(material),
+            transform,
+            GlobalTransform::from(transform),
+            render_layers.clone(),
+            PuzzleBevyRenderView {
+                id: submitted.view_id.clone(),
+            },
+            PuzzleRasterQuad {
+                key: prepared.key,
+                render_order: prepared.render_order,
+                object_ids: prepared.object_ids.clone(),
+            },
+            FrameBankGeneration2d {
+                generation,
+                render_layer: bank.render_layer,
+            },
+            NoFrustumCulling,
+            Visibility::Inherited,
+        ));
+        retained_rasters.insert(prepared.key, entity);
+    }
+
+    let mut retained_lines = HashMap::with_capacity(submitted.frame.line_meshes.len());
+    for prepared in &submitted.frame.line_meshes {
+        let entity = bank
+            .line_entities
+            .remove(&prepared.key)
+            .unwrap_or_else(|| commands.spawn_empty().id());
+        let mesh = mesh_for(&prepared.mesh, render_assets, meshes);
+        commands.entity(entity).insert((
+            Mesh2d(mesh),
+            MeshMaterial2d(render_assets.material.clone()),
+            Transform::IDENTITY,
+            GlobalTransform::IDENTITY,
+            render_layers.clone(),
+            PuzzleBevyRenderView {
+                id: submitted.view_id.clone(),
+            },
+            PuzzleLineMesh2d { key: prepared.key },
+            FrameBankGeneration2d {
+                generation,
+                render_layer: bank.render_layer,
+            },
+            NoFrustumCulling,
+            Visibility::Inherited,
+        ));
+        retained_lines.insert(prepared.key, entity);
+    }
+
+    for entity in bank.entities.drain().map(|(_, entity)| entity) {
+        commands.entity(entity).despawn();
+    }
+    for entity in bank.raster_entities.drain().map(|(_, entity)| entity) {
+        commands.entity(entity).despawn();
+    }
+    for entity in bank.line_entities.drain().map(|(_, entity)| entity) {
+        commands.entity(entity).despawn();
+    }
+    bank.entities = retained;
+    bank.raster_entities = retained_rasters;
+    bank.line_entities = retained_lines;
+    bank.generation = generation;
+    bank.entities.len() + bank.raster_entities.len() + bank.line_entities.len()
+}
+
+fn publish_camera_2d(
+    commands: &mut Commands,
+    camera: Entity,
+    render_layer: usize,
+    generation: u64,
+    view: &PuzzleBevy2dView,
+    camera_order: isize,
+) {
+    let render_layers = RenderLayers::none().with(render_layer);
+    let camera_transform = camera_transform(view);
+    commands
+        .entity(camera)
+        .remove::<StagingPublication2d>()
+        .insert((
+            Camera {
+                is_active: view.active,
+                order: camera_order,
+                viewport: Some(view.framebuffer.viewport()),
+                clear_color: ClearColorConfig::Custom(view.clear_color.clone()),
+                ..default()
+            },
+            RenderTarget::Window(WindowRef::Primary),
+            Projection::Orthographic(orthographic_projection(view)),
+            camera_transform,
+            GlobalTransform::from(camera_transform),
+            render_layers,
+            CameraPublication2d {
+                generation,
+                render_layer,
+            },
+        ));
+}
+
+#[allow(clippy::too_many_arguments)]
 fn apply_pending_frame_2d(
     mut commands: Commands,
     mut queue: ResMut<BevyResolvedFrameQueue2d>,
+    mut published: ResMut<BevyPublishedViewFrames2d>,
+    mut publication_groups: ResMut<BevyPublicationGroups>,
+    mut staged: ResMut<StagedFrameState2d>,
     mut state: ResMut<RenderedFrameState2d>,
+    readiness: Res<RenderReadinessBridge2d>,
     mut render_assets: ResMut<RenderAssets2d>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    if queue.pending.is_empty() {
-        return;
-    }
+    let ready_generations = readiness.take_ready();
     let pending = std::mem::take(&mut queue.pending);
-    for (view_id, change) in pending {
-        match change {
-            PendingViewChange2d::Remove => {
-                if let Some(view) = state.views.remove(&view_id) {
-                    for entity in view.entities.into_values() {
-                        commands.entity(entity).despawn();
-                    }
-                    for entity in view.raster_entities.into_values() {
-                        commands.entity(entity).despawn();
-                    }
-                    for entity in view.line_entities.into_values() {
-                        commands.entity(entity).despawn();
-                    }
-                    commands.entity(view.camera).despawn();
+
+    if !readiness.gpu_backed {
+        for (view_id, change) in pending {
+            match change {
+                PendingViewChange2d::Remove => {
+                    remove_rendered_view_2d(&mut commands, &mut state, &mut queue, &view_id)
                 }
-                queue.registry.finish_removal(&view_id);
-            }
-            PendingViewChange2d::Submit(submitted) => {
-                let render_layers = RenderLayers::none().with(submitted.render_layer);
-                let mut view = state.views.remove(&view_id).unwrap_or_else(|| {
-                    let camera = commands
-                        .spawn((
-                            Camera2d,
-                            PuzzleRendererCamera2d,
-                            PuzzleBevyRenderView {
-                                id: submitted.view_id.clone(),
-                            },
-                            render_layers.clone(),
-                        ))
-                        .id();
-                    RenderedViewState2d {
-                        generation: 0,
-                        entities: HashMap::new(),
-                        raster_entities: HashMap::new(),
-                        line_entities: HashMap::new(),
-                        mesh_keys: HashSet::new(),
-                        raster_mesh_keys: HashSet::new(),
-                        raster_texture_keys: HashSet::new(),
-                        raster_material_keys: HashSet::new(),
-                        camera,
-                        render_layer: submitted.render_layer,
-                    }
-                });
-                debug_assert_eq!(view.render_layer, submitted.render_layer);
-                let mut retained = HashMap::with_capacity(submitted.frame.meshes.len());
-                let mut used_meshes = HashSet::new();
-                for prepared in submitted.frame.meshes {
-                    let entity = view
-                        .entities
-                        .remove(&prepared.key)
-                        .unwrap_or_else(|| commands.spawn_empty().id());
-                    let mesh = mesh_for(&prepared.mesh, &mut render_assets, &mut meshes);
-                    used_meshes.insert(prepared.mesh.key.clone());
-                    commands.entity(entity).insert((
-                        Mesh2d(mesh),
-                        MeshMaterial2d(render_assets.material.clone()),
-                        prepared.transform,
-                        render_layers.clone(),
-                        PuzzleBevyRenderView {
-                            id: submitted.view_id.clone(),
-                        },
-                        PuzzlePixelMesh {
-                            key: prepared.key,
-                            render_order: prepared.render_order,
-                            object_ids: prepared.object_ids,
-                        },
-                    ));
-                    retained.insert(prepared.key, entity);
-                }
-                let mut retained_rasters =
-                    HashMap::with_capacity(submitted.frame.raster_quads.len());
-                let mut used_raster_meshes = HashSet::new();
-                let mut used_raster_textures = HashSet::new();
-                let mut used_raster_materials = HashSet::new();
-                for prepared in submitted.frame.raster_quads {
-                    let entity = view
-                        .raster_entities
-                        .remove(&prepared.key)
-                        .unwrap_or_else(|| commands.spawn_empty().id());
-                    let mesh_key = raster_mesh_key(&prepared);
-                    let mesh =
-                        raster_mesh_for(&prepared, &mesh_key, &mut render_assets, &mut meshes);
-                    let material_key = RasterMaterialKey {
-                        texture: prepared.texture.key.clone(),
-                        opacity: prepared.opacity.to_bits(),
-                    };
-                    let material = raster_material_for(
-                        &prepared,
-                        &material_key,
-                        &submitted.catalog,
+                PendingViewChange2d::Submit(submitted) => {
+                    let generation = submitted.generation;
+                    let published_view_id = view_id.clone();
+                    let view = state.views.entry(view_id).or_insert_with(|| {
+                        spawn_rendered_view_2d(&mut commands, &submitted, false)
+                    });
+                    let bank = &mut view.banks[view.active_bank];
+                    materialize_frame_bank_2d(
+                        &mut commands,
+                        bank,
+                        &submitted,
                         &mut render_assets,
+                        &mut meshes,
                         &mut images,
                         &mut materials,
                     );
-                    used_raster_meshes.insert(mesh_key);
-                    used_raster_textures.insert(prepared.texture.key.clone());
-                    used_raster_materials.insert(material_key);
-                    commands.entity(entity).insert((
-                        Mesh2d(mesh),
-                        MeshMaterial2d(material),
-                        prepared.transform,
-                        render_layers.clone(),
-                        PuzzleBevyRenderView {
-                            id: submitted.view_id.clone(),
-                        },
-                        PuzzleRasterQuad {
-                            key: prepared.key,
-                            render_order: prepared.render_order,
-                            object_ids: prepared.object_ids,
-                        },
-                    ));
-                    retained_rasters.insert(prepared.key, entity);
+                    publish_camera_2d(
+                        &mut commands,
+                        view.cameras[view.active_bank],
+                        bank.render_layer,
+                        submitted.generation,
+                        &submitted.view,
+                        submitted.camera_order,
+                    );
+                    if submitted.publication_group.is_some() {
+                        publication_groups
+                            .mark_materialized(BevyPublicationMember {
+                                view_id: published_view_id,
+                                generation,
+                            })
+                            .expect(
+                                "direct grouped 2D candidate must belong to a registered publication",
+                            );
+                    } else {
+                        published.acknowledge(published_view_id, generation);
+                    }
                 }
-                let mut retained_lines = HashMap::with_capacity(submitted.frame.line_meshes.len());
-                for prepared in submitted.frame.line_meshes {
-                    let entity = view
-                        .line_entities
-                        .remove(&prepared.key)
-                        .unwrap_or_else(|| commands.spawn_empty().id());
-                    let mesh = mesh_for(&prepared.mesh, &mut render_assets, &mut meshes);
-                    used_meshes.insert(prepared.mesh.key.clone());
-                    commands.entity(entity).insert((
-                        Mesh2d(mesh),
-                        MeshMaterial2d(render_assets.material.clone()),
-                        Transform::IDENTITY,
-                        render_layers.clone(),
-                        PuzzleBevyRenderView {
-                            id: submitted.view_id.clone(),
-                        },
-                        PuzzleLineMesh2d { key: prepared.key },
-                    ));
-                    retained_lines.insert(prepared.key, entity);
-                }
-                for entity in view.entities.drain().map(|(_, entity)| entity) {
-                    commands.entity(entity).despawn();
-                }
-                for entity in view.raster_entities.drain().map(|(_, entity)| entity) {
-                    commands.entity(entity).despawn();
-                }
-                for entity in view.line_entities.drain().map(|(_, entity)| entity) {
-                    commands.entity(entity).despawn();
-                }
-                commands.entity(view.camera).insert((
-                    Camera {
-                        is_active: submitted.view.active,
-                        order: submitted.camera_order,
-                        viewport: Some(submitted.view.framebuffer.viewport()),
-                        clear_color: ClearColorConfig::Custom(submitted.view.clear_color.clone()),
-                        ..default()
-                    },
-                    Projection::Orthographic(orthographic_projection(&submitted.view)),
-                    camera_transform(&submitted.view),
-                    render_layers,
-                ));
-                view.entities = retained;
-                view.raster_entities = retained_rasters;
-                view.line_entities = retained_lines;
-                view.mesh_keys = used_meshes;
-                view.raster_mesh_keys = used_raster_meshes;
-                view.raster_texture_keys = used_raster_textures;
-                view.raster_material_keys = used_raster_materials;
-                view.generation = submitted.generation;
-                state.views.insert(view_id, view);
             }
         }
+        return;
     }
-    let used_meshes = state
-        .views
-        .values()
-        .flat_map(|view| view.mesh_keys.iter().cloned())
-        .collect::<HashSet<_>>();
-    render_assets.meshes.retain(|key, handle| {
-        if used_meshes.contains(key) {
-            true
-        } else {
-            meshes.remove(handle.id());
-            false
+
+    let mut removals = Vec::new();
+    let mut submissions = Vec::new();
+    for (view_id, change) in pending {
+        match change {
+            PendingViewChange2d::Remove => removals.push(view_id),
+            PendingViewChange2d::Submit(submitted) => submissions.push((view_id, submitted)),
         }
-    });
-    let used_raster_meshes = state
-        .views
-        .values()
-        .flat_map(|view| view.raster_mesh_keys.iter().cloned())
-        .collect::<HashSet<_>>();
-    render_assets.raster_meshes.retain(|key, handle| {
-        if used_raster_meshes.contains(key) {
-            true
-        } else {
-            meshes.remove(handle.id());
-            false
+    }
+    for view_id in removals {
+        if let Some(replaced) = staged.views.remove(&view_id) {
+            readiness.cancel(replaced.generation);
         }
-    });
-    let used_raster_materials = state
-        .views
-        .values()
-        .flat_map(|view| view.raster_material_keys.iter().cloned())
-        .collect::<HashSet<_>>();
-    render_assets.raster_materials.retain(|key, handle| {
-        if used_raster_materials.contains(key) {
-            true
-        } else {
-            materials.remove(handle.id());
-            false
+        if let Some(view) = state.views.get(&view_id) {
+            match &view.phase {
+                PublicationPhase2d::Building { generation, .. }
+                | PublicationPhase2d::AwaitingGroup { generation, .. }
+                | PublicationPhase2d::Switching { generation, .. } => readiness.cancel(*generation),
+                PublicationPhase2d::Idle => {}
+            }
         }
-    });
-    let used_raster_textures = state
-        .views
-        .values()
-        .flat_map(|view| view.raster_texture_keys.iter().cloned())
-        .collect::<HashSet<_>>();
-    render_assets.raster_textures.retain(|key, handle| {
-        if used_raster_textures.contains(key) {
-            true
-        } else {
-            images.remove(handle.id());
-            false
+        remove_rendered_view_2d(&mut commands, &mut state, &mut queue, &view_id);
+    }
+
+    let view_ids = state.views.keys().cloned().collect::<Vec<_>>();
+    for view_id in view_ids {
+        let Some(view) = state.views.get_mut(&view_id) else {
+            continue;
+        };
+        let phase = std::mem::replace(&mut view.phase, PublicationPhase2d::Idle);
+        view.phase = match phase {
+            PublicationPhase2d::Building {
+                bank,
+                generation,
+                view: settings,
+                camera_order,
+                publication_group,
+            } if ready_generations.contains(&generation) => {
+                if let Some(publication_group) = publication_group {
+                    publication_groups
+                        .mark_ready(BevyPublicationMember {
+                            view_id: view_id.clone(),
+                            generation,
+                        })
+                        .expect("grouped 2D candidate must belong to a registered publication");
+                    PublicationPhase2d::AwaitingGroup {
+                        bank,
+                        generation,
+                        view: settings,
+                        camera_order,
+                        publication_group,
+                    }
+                } else {
+                    publish_camera_2d(
+                        &mut commands,
+                        view.cameras[bank],
+                        view.banks[bank].render_layer,
+                        generation,
+                        &settings,
+                        camera_order,
+                    );
+                    deactivate_bank_camera_2d(&mut commands, view.cameras[view.active_bank]);
+                    readiness.request(
+                        generation,
+                        GpuDependencies2d {
+                            target: ReadinessTarget2d::Camera {
+                                render_layer: view.banks[bank].render_layer,
+                            },
+                            ..default()
+                        },
+                    );
+                    PublicationPhase2d::Switching {
+                        bank,
+                        generation,
+                        publication_group: None,
+                    }
+                }
+            }
+            PublicationPhase2d::AwaitingGroup {
+                bank,
+                generation,
+                view: settings,
+                camera_order,
+                publication_group,
+            } if publication_groups.is_authorized(&BevyPublicationMember {
+                view_id: view_id.clone(),
+                generation,
+            }) =>
+            {
+                publish_camera_2d(
+                    &mut commands,
+                    view.cameras[bank],
+                    view.banks[bank].render_layer,
+                    generation,
+                    &settings,
+                    camera_order,
+                );
+                deactivate_bank_camera_2d(&mut commands, view.cameras[view.active_bank]);
+                readiness.request(
+                    generation,
+                    GpuDependencies2d {
+                        target: ReadinessTarget2d::Camera {
+                            render_layer: view.banks[bank].render_layer,
+                        },
+                        ..default()
+                    },
+                );
+                PublicationPhase2d::Switching {
+                    bank,
+                    generation,
+                    publication_group: Some(publication_group),
+                }
+            }
+            PublicationPhase2d::Switching {
+                bank,
+                generation,
+                publication_group,
+            } if ready_generations.contains(&generation) => {
+                view.active_bank = bank;
+                if publication_group.is_some() {
+                    publication_groups
+                        .mark_published(BevyPublicationMember {
+                            view_id: view_id.clone(),
+                            generation,
+                        })
+                        .expect("grouped 2D publication must complete its registered member");
+                }
+                published.acknowledge(view_id.clone(), generation);
+                PublicationPhase2d::Idle
+            }
+            other => other,
+        };
+    }
+
+    // A render-world acknowledgement proves that the existing candidate is
+    // complete. Publish it before coalescing a newer desired frame; otherwise
+    // continuous tween submissions can repeatedly cancel an already complete
+    // generation and starve publication.
+    for (view_id, submitted) in submissions {
+        if let Some(replaced) = staged.views.insert(view_id, submitted) {
+            readiness.cancel(replaced.generation);
         }
-    });
+    }
+
+    let mut candidates = staged.views.keys().cloned().collect::<Vec<_>>();
+    candidates.sort();
+    for view_id in candidates {
+        let can_build = state
+            .views
+            .get(&view_id)
+            .is_none_or(|view| matches!(view.phase, PublicationPhase2d::Idle));
+        if !can_build {
+            continue;
+        }
+        let submitted = staged
+            .views
+            .remove(&view_id)
+            .expect("selected staged 2D candidate must exist");
+        let dependencies = prewarm_submitted_frame_2d(
+            &submitted,
+            &mut render_assets,
+            &mut meshes,
+            &mut images,
+            &mut materials,
+        );
+        let view = state
+            .views
+            .entry(view_id)
+            .or_insert_with(|| spawn_rendered_view_2d(&mut commands, &submitted, true));
+        let back_bank = 1 - view.active_bank;
+        configure_staging_camera_2d(
+            &mut commands,
+            view.cameras[back_bank],
+            view.banks[back_bank].render_layer,
+            submitted.generation,
+            &submitted.view,
+        );
+        let expected_entities = materialize_frame_bank_2d(
+            &mut commands,
+            &mut view.banks[back_bank],
+            &submitted,
+            &mut render_assets,
+            &mut meshes,
+            &mut images,
+            &mut materials,
+        );
+        let generation = submitted.generation;
+        let mut dependencies = dependencies;
+        dependencies.target = ReadinessTarget2d::FrameBank {
+            expected_entities,
+            render_layer: view.banks[back_bank].render_layer,
+        };
+        readiness.request(generation, dependencies);
+        view.phase = PublicationPhase2d::Building {
+            bank: back_bank,
+            generation,
+            view: submitted.view,
+            camera_order: submitted.camera_order,
+            publication_group: submitted.publication_group,
+        };
+    }
 }
 
 fn mesh_for(
@@ -1197,9 +1926,9 @@ fn raster_material_for(
 
 fn orthographic_projection(settings: &PuzzleBevy2dView) -> OrthographicProjection {
     OrthographicProjection {
-        scaling_mode: ScalingMode::Fixed {
-            width: settings.size.x,
-            height: settings.size.y,
+        scaling_mode: ScalingMode::AutoMin {
+            min_width: settings.size.x,
+            min_height: settings.size.y,
         },
         ..OrthographicProjection::default_2d()
     }
@@ -1239,7 +1968,7 @@ mod tests {
         RuntimeLinearRgba, RuntimeResolvedDecoration, RuntimeResolvedLineLayer2d,
         RuntimeResolvedLineSegment2d, RuntimeResolvedLineStyle, RuntimeResolvedPixel,
         RuntimeResolvedPixelGeometry, RuntimeResolvedRect2d, RuntimeResolvedRenderBatch,
-        RuntimeResolvedSampling, RuntimeResolvedStrokeWidth,
+        RuntimeResolvedRenderBatchIdentity, RuntimeResolvedSampling, RuntimeResolvedStrokeWidth,
     };
 
     use super::*;
@@ -1272,12 +2001,24 @@ mod tests {
         ]
     }
 
+    fn batch_identity(
+        render_order: u64,
+        object_ids: Vec<u16>,
+        cell: [i32; 3],
+    ) -> RuntimeResolvedRenderBatchIdentity {
+        RuntimeResolvedRenderBatchIdentity {
+            render_order,
+            object_ids,
+            visual_ids: vec!["test".to_string()],
+            instance_ids: vec![render_order + 1],
+            cell,
+        }
+    }
+
     fn pixel_frame() -> RuntimeResolvedRenderFrame {
         RuntimeResolvedRenderFrame {
             batches: vec![RuntimeResolvedRenderBatch {
-                render_order: 9,
-                object_ids: vec![3],
-                cell: [2, 4, 0],
+                identity: batch_identity(9, vec![3], [2, 4, 0]),
                 transform: identity(),
                 opacity: 0.5,
                 pixel_geometry: Some(RuntimeResolvedPixelGeometry {
@@ -1307,7 +2048,7 @@ mod tests {
                 },
             }],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         }
     }
 
@@ -1323,6 +2064,17 @@ mod tests {
             origin: Vec2::ZERO,
             size: Vec2::new(10.0, 8.0),
         }
+    }
+
+    #[test]
+    fn pixelate_shader_is_valid_wgsl() {
+        let shader = include_str!("pixelate.wgsl").replacen(
+            "#import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput",
+            "struct FullscreenVertexOutput {\n    @builtin(position) position: vec4<f32>,\n    @location(0) uv: vec2<f32>,\n};",
+            1,
+        );
+        naga::front::wgsl::parse_str(&shader)
+            .expect("the renderer-owned pixelation shader must compile as WGSL");
     }
 
     fn empty_catalog() -> DecodedVisualImageCatalog {
@@ -1358,9 +2110,7 @@ mod tests {
         let asset = catalog.get(&asset_id).unwrap();
         RuntimeResolvedRenderFrame {
             batches: vec![RuntimeResolvedRenderBatch {
-                render_order: 9,
-                object_ids: vec![3],
-                cell: [2, 4, 0],
+                identity: batch_identity(9, vec![3], [2, 4, 0]),
                 transform: identity(),
                 opacity: 0.5,
                 pixel_geometry: None,
@@ -1384,7 +2134,7 @@ mod tests {
                 },
             }],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         }
     }
 
@@ -1646,7 +2396,7 @@ mod tests {
         let mesh = &prepared.line_meshes[0].mesh;
         let vertical_world_width = mesh.positions[1][0] - mesh.positions[0][0];
         let horizontal_world_width = mesh.positions[4][1] - mesh.positions[7][1];
-        assert!((vertical_world_width.abs() * 32.0 - 3.0).abs() < 0.000_1);
+        assert!((vertical_world_width.abs() * 30.0 - 3.0).abs() < 0.000_1);
         assert!((horizontal_world_width.abs() * 30.0 - 3.0).abs() < 0.000_1);
         assert_eq!(mesh.colors[0], [0.25, 0.5, 0.75, 0.5]);
         assert!(
@@ -1719,7 +2469,7 @@ mod tests {
                 assert!(overlap.x == 0.0 || overlap.y == 0.0);
             }
         }
-        let scale = Vec2::new(32.0, 30.0);
+        let scale = Vec2::splat(30.0);
         let covered_physical_area = rectangles
             .iter()
             .map(|rectangle| {
@@ -1727,7 +2477,24 @@ mod tests {
                 size.x * size.y
             })
             .sum::<f32>();
-        assert!((covered_physical_area - (600.0 + 896.0 - 16.0)).abs() < 0.01);
+        assert!((covered_physical_area - (600.0 + 840.0 - 16.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn fitted_content_rect_preserves_square_world_units_on_both_surplus_axes() {
+        let landscape =
+            fitted_2d_content_rect(Vec2::new(320.0, 240.0), Vec2::new(6.0, 3.0)).unwrap();
+        assert_eq!(landscape.min, Vec2::new(0.0, 40.0));
+        assert_eq!(landscape.size(), Vec2::new(320.0, 160.0));
+
+        let portrait =
+            fitted_2d_content_rect(Vec2::new(240.0, 320.0), Vec2::new(6.0, 3.0)).unwrap();
+        assert_eq!(portrait.min, Vec2::new(0.0, 100.0));
+        assert_eq!(portrait.size(), Vec2::new(240.0, 120.0));
+
+        let equal = fitted_2d_content_rect(Vec2::new(300.0, 150.0), Vec2::new(6.0, 3.0)).unwrap();
+        assert_eq!(equal.min, Vec2::ZERO);
+        assert_eq!(equal.size(), Vec2::new(300.0, 150.0));
     }
 
     #[test]
@@ -1739,7 +2506,10 @@ mod tests {
         };
         assert!(matches!(
             orthographic_projection(&view).scaling_mode,
-            ScalingMode::Fixed { width, height } if width == 6.0 && height == 3.0
+            ScalingMode::AutoMin {
+                min_width,
+                min_height
+            } if min_width == 6.0 && min_height == 3.0
         ));
         assert_eq!(
             camera_transform(&view).translation,
@@ -1813,11 +2583,44 @@ mod tests {
     }
 
     #[test]
+    fn publication_ack_identifies_the_materialized_view_generation() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<ColorMaterial>>()
+            .add_plugins(PuzzleBevy2dPlugin);
+        let view_id = PuzzleBevyViewId::two_d("board", "main");
+        let generation = submit_image_free_resolved_frame_2d(
+            app.world_mut(),
+            view_id.clone(),
+            view_2d(UVec2::ZERO),
+            &pixel_frame(),
+        )
+        .unwrap();
+
+        app.update();
+
+        let published = app
+            .world_mut()
+            .resource_mut::<BevyPublishedViewFrames2d>()
+            .drain()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            published,
+            vec![BevyPublishedViewFrame2d {
+                view_id,
+                generation,
+            }]
+        );
+    }
+
+    #[test]
     fn ecs_sync_reuses_mesh_entities_and_assets() {
         let mut app = App::new();
         app.init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<Image>>()
             .init_resource::<Assets<ColorMaterial>>()
+            .add_plugins(TransformPlugin)
             .add_plugins(PuzzleBevy2dPlugin::default());
         let frame = pixel_frame();
         let view_id = PuzzleBevyViewId::two_d("board", "main");
@@ -1930,17 +2733,20 @@ mod tests {
         )
         .unwrap();
         app.update();
-        let images = app.world().resource::<Assets<Image>>();
-        assert_eq!(images.len(), 1);
+        let render_assets = app.world().resource::<RenderAssets2d>();
         assert_eq!(
-            images.iter().next().unwrap().1.data.as_deref(),
-            Some(
-                second_rgba
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .as_slice()
-            )
+            render_assets.raster_textures.len(),
+            2,
+            "app-lifetime cache must keep the prior extracted texture alive"
+        );
+        let images = app.world().resource::<Assets<Image>>();
+        let expected = second_rgba.into_iter().flatten().collect::<Vec<_>>();
+        assert!(
+            render_assets.raster_textures.values().any(|handle| {
+                images.get(handle).and_then(|image| image.data.as_deref())
+                    == Some(expected.as_slice())
+            }),
+            "the revised texture must be available without invalidating the prior revision"
         );
     }
 
@@ -1986,13 +2792,15 @@ mod tests {
                 With<PuzzleRendererCamera2d>,
             >()
             .iter(app.world())
-            .map(|(camera, view, layers)| {
-                (
-                    view.id.clone(),
-                    camera.viewport.as_ref().unwrap().physical_position,
-                    camera.order,
-                    layers.iter().collect::<Vec<_>>(),
-                )
+            .filter_map(|(camera, view, layers)| {
+                camera.viewport.as_ref().map(|viewport| {
+                    (
+                        view.id.clone(),
+                        viewport.physical_position,
+                        camera.order,
+                        layers.iter().collect::<Vec<_>>(),
+                    )
+                })
             })
             .collect::<Vec<_>>();
         assert_eq!(cameras.len(), 2);
@@ -2043,11 +2851,408 @@ mod tests {
             .iter(app.world())
             .map(|view| view.id.clone())
             .collect::<Vec<_>>();
-        assert_eq!(remaining_cameras, vec![right]);
+        assert_eq!(remaining_cameras, vec![right.clone(), right]);
         assert_eq!(app.world().resource::<Assets<Mesh>>().len(), 1);
         assert_eq!(
             remove_render_view_2d(app.world_mut(), &left),
             Err(BevyRenderError::UnknownView { view_id: left })
+        );
+    }
+
+    #[test]
+    fn moving_batch_keeps_its_instance_entity() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<ColorMaterial>>()
+            .add_plugins(PuzzleBevy2dPlugin::default());
+        let view_id = PuzzleBevyViewId::two_d("board", "main");
+        let first = pixel_frame();
+        submit_image_free_resolved_frame_2d(
+            app.world_mut(),
+            view_id.clone(),
+            view_2d(UVec2::ZERO),
+            &first,
+        )
+        .unwrap();
+        app.update();
+        let first_entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<PuzzlePixelMesh>>()
+            .single(app.world())
+            .unwrap();
+
+        let mut moved = first;
+        moved.batches[0].identity.cell = [3, 4, 0];
+        submit_image_free_resolved_frame_2d(app.world_mut(), view_id, view_2d(UVec2::ZERO), &moved)
+            .unwrap();
+        app.update();
+        let moved_entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<PuzzlePixelMesh>>()
+            .single(app.world())
+            .unwrap();
+
+        assert_eq!(
+            moved_entity, first_entity,
+            "cell placement changes must update the stable instance entity"
+        );
+        assert!(app.world().get_entity(first_entity).is_ok());
+    }
+
+    #[test]
+    fn draw_slot_replaces_all_metadata_when_a_different_instance_occupies_it() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<ColorMaterial>>()
+            .add_plugins(PuzzleBevy2dPlugin::default());
+        let view_id = PuzzleBevyViewId::two_d("board", "main");
+        let first = pixel_frame();
+        submit_image_free_resolved_frame_2d(
+            app.world_mut(),
+            view_id.clone(),
+            view_2d(UVec2::ZERO),
+            &first,
+        )
+        .unwrap();
+        app.update();
+        let first_entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<PuzzlePixelMesh>>()
+            .single(app.world())
+            .unwrap();
+
+        let mut replacement = first;
+        replacement.batches[0].identity.instance_ids = vec![999];
+        replacement.batches[0].identity.object_ids = vec![55];
+        replacement.batches[0].identity.render_order = 12;
+        submit_image_free_resolved_frame_2d(
+            app.world_mut(),
+            view_id,
+            view_2d(UVec2::ZERO),
+            &replacement,
+        )
+        .unwrap();
+        app.update();
+        let replacement_entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<PuzzlePixelMesh>>()
+            .single(app.world())
+            .unwrap();
+
+        assert_eq!(replacement_entity, first_entity);
+        let component = app
+            .world()
+            .get::<PuzzlePixelMesh>(replacement_entity)
+            .unwrap();
+        assert_eq!(component.object_ids, vec![55]);
+        assert_eq!(component.render_order, 12);
+    }
+
+    #[test]
+    fn gpu_backed_staging_keeps_the_complete_visible_frame_until_ready() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<ColorMaterial>>()
+            .add_plugins(PuzzleBevy2dPlugin::default());
+        let readiness = RenderReadinessBridge2d::new(true);
+        app.insert_resource(readiness.clone());
+        let view_id = PuzzleBevyViewId::two_d("board", "main");
+        let first = pixel_frame();
+        let first_generation = submit_image_free_resolved_frame_2d(
+            app.world_mut(),
+            view_id.clone(),
+            view_2d(UVec2::ZERO),
+            &first,
+        )
+        .unwrap();
+        app.update();
+        let (old_camera, candidate_camera, first_entity, first_layer) = {
+            let state = app.world().resource::<RenderedFrameState2d>();
+            let view = state.views.get(&view_id).unwrap();
+            assert_eq!(view.active_bank, 0);
+            assert!(view.banks[0].entities.is_empty());
+            assert_eq!(view.banks[1].entities.len(), 1);
+            assert!(matches!(
+                view.phase,
+                PublicationPhase2d::Building {
+                    bank: 1,
+                    generation,
+                    ..
+                } if generation == first_generation
+            ));
+            (
+                view.cameras[0],
+                view.cameras[1],
+                *view.banks[1].entities.values().next().unwrap(),
+                view.banks[1].render_layer,
+            )
+        };
+        assert!(!app.world().get::<Camera>(old_camera).unwrap().is_active);
+        assert!(
+            app.world()
+                .get::<Camera>(candidate_camera)
+                .unwrap()
+                .is_active
+        );
+        assert!(matches!(
+            app.world().get::<RenderTarget>(candidate_camera),
+            Some(RenderTarget::Window(WindowRef::Primary))
+        ));
+
+        readiness.mark_ready(first_generation);
+        app.update();
+        {
+            let state = app.world().resource::<RenderedFrameState2d>();
+            let view = state.views.get(&view_id).unwrap();
+            assert_eq!(view.active_bank, 0);
+            assert!(matches!(
+                view.phase,
+                PublicationPhase2d::Switching {
+                    bank: 1,
+                    generation,
+                    ..
+                } if generation == first_generation
+            ));
+        }
+        assert!(!app.world().get::<Camera>(old_camera).unwrap().is_active);
+        assert!(
+            app.world()
+                .get::<Camera>(candidate_camera)
+                .unwrap()
+                .is_active
+        );
+        assert!(matches!(
+            app.world().get::<RenderTarget>(candidate_camera),
+            Some(RenderTarget::Window(WindowRef::Primary))
+        ));
+        assert_eq!(
+            app.world().get::<RenderLayers>(candidate_camera).unwrap(),
+            &RenderLayers::none().with(first_layer)
+        );
+        readiness.mark_ready(first_generation);
+        app.update();
+        {
+            let state = app.world().resource::<RenderedFrameState2d>();
+            let view = state.views.get(&view_id).unwrap();
+            assert_eq!(view.active_bank, 1);
+            assert!(matches!(view.phase, PublicationPhase2d::Idle));
+        }
+        let first_mesh = app.world().get::<Mesh2d>(first_entity).unwrap().0.clone();
+        let first_object_ids = app
+            .world()
+            .get::<PuzzlePixelMesh>(first_entity)
+            .unwrap()
+            .object_ids
+            .clone();
+
+        let mut replacement = first;
+        replacement.batches[0].identity.object_ids = vec![55];
+        replacement.batches[0].transform[0][3] = 2.0;
+        replacement.batches[0].content = RuntimeResolvedRenderBatchContent::Pixels {
+            width: 1,
+            height: 1,
+            pixels: vec![RuntimeResolvedPixel {
+                position: [0, 0],
+                color: resolve_palette_color("#00ff00ff").unwrap(),
+            }],
+        };
+        let replacement_generation = submit_image_free_resolved_frame_2d(
+            app.world_mut(),
+            view_id.clone(),
+            view_2d(UVec2::ZERO),
+            &replacement,
+        )
+        .unwrap();
+        app.update();
+        let (replacement_entity, replacement_layer) = {
+            let state = app.world().resource::<RenderedFrameState2d>();
+            let view = state.views.get(&view_id).unwrap();
+            assert_eq!(view.active_bank, 1);
+            assert!(matches!(
+                view.phase,
+                PublicationPhase2d::Building {
+                    bank: 0,
+                    generation,
+                    ..
+                } if generation == replacement_generation
+            ));
+            (
+                *view.banks[0].entities.values().next().unwrap(),
+                view.banks[0].render_layer,
+            )
+        };
+        assert_ne!(replacement_entity, first_entity);
+        assert_eq!(
+            app.world().get::<Mesh2d>(first_entity).unwrap().0,
+            first_mesh
+        );
+        assert_eq!(
+            app.world()
+                .get::<PuzzlePixelMesh>(first_entity)
+                .unwrap()
+                .object_ids,
+            first_object_ids
+        );
+        assert_eq!(
+            app.world().get::<RenderLayers>(candidate_camera).unwrap(),
+            &RenderLayers::none().with(first_layer),
+            "building the inactive bank must not change the published bank camera"
+        );
+        assert!(matches!(
+            app.world().get::<RenderTarget>(old_camera),
+            Some(RenderTarget::Window(WindowRef::Primary))
+        ));
+
+        readiness.mark_ready(replacement_generation);
+        app.update();
+        {
+            let state = app.world().resource::<RenderedFrameState2d>();
+            let view = state.views.get(&view_id).unwrap();
+            assert_eq!(view.active_bank, 1);
+            assert!(matches!(
+                view.phase,
+                PublicationPhase2d::Switching {
+                    bank: 0,
+                    generation,
+                    ..
+                } if generation == replacement_generation
+            ));
+        }
+        assert_eq!(
+            app.world().get::<RenderLayers>(old_camera).unwrap(),
+            &RenderLayers::none().with(replacement_layer)
+        );
+        assert!(matches!(
+            app.world().get::<RenderTarget>(old_camera),
+            Some(RenderTarget::Window(WindowRef::Primary))
+        ));
+        assert!(
+            !app.world()
+                .get::<Camera>(candidate_camera)
+                .unwrap()
+                .is_active
+        );
+        assert!(app.world().get_entity(first_entity).is_ok());
+
+        readiness.mark_ready(replacement_generation);
+        app.update();
+        {
+            let state = app.world().resource::<RenderedFrameState2d>();
+            let view = state.views.get(&view_id).unwrap();
+            assert_eq!(view.active_bank, 0);
+            assert!(matches!(view.phase, PublicationPhase2d::Idle));
+        }
+        let committed_mesh = app.world().get::<Mesh2d>(replacement_entity).unwrap();
+        let committed_component = app
+            .world()
+            .get::<PuzzlePixelMesh>(replacement_entity)
+            .unwrap();
+        assert_ne!(committed_mesh.0, first_mesh);
+        assert_eq!(committed_component.object_ids, vec![55]);
+        assert_eq!(
+            app.world()
+                .get::<GlobalTransform>(replacement_entity)
+                .unwrap()
+                .translation(),
+            app.world()
+                .get::<Transform>(replacement_entity)
+                .unwrap()
+                .translation,
+            "a published generation must reach render extraction with its matching global transform"
+        );
+    }
+
+    #[test]
+    fn gpu_acknowledgement_advances_before_a_newer_submission_is_coalesced() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<ColorMaterial>>()
+            .add_plugins(PuzzleBevy2dPlugin::default());
+        let readiness = RenderReadinessBridge2d::new(true);
+        app.insert_resource(readiness.clone());
+        let view_id = PuzzleBevyViewId::two_d("board", "main");
+        let first = pixel_frame();
+        let first_generation = submit_image_free_resolved_frame_2d(
+            app.world_mut(),
+            view_id.clone(),
+            view_2d(UVec2::ZERO),
+            &first,
+        )
+        .unwrap();
+        app.update();
+        let first_entity = {
+            let state = app.world().resource::<RenderedFrameState2d>();
+            *state.views[&view_id].banks[1]
+                .entities
+                .values()
+                .next()
+                .unwrap()
+        };
+
+        let mut newer = first;
+        newer.batches[0].identity.object_ids = vec![77];
+        readiness.mark_ready(first_generation);
+        let newer_generation = submit_image_free_resolved_frame_2d(
+            app.world_mut(),
+            view_id.clone(),
+            view_2d(UVec2::ZERO),
+            &newer,
+        )
+        .unwrap();
+        app.update();
+        {
+            let state = app.world().resource::<RenderedFrameState2d>();
+            let view = &state.views[&view_id];
+            assert!(matches!(
+                view.phase,
+                PublicationPhase2d::Switching {
+                    generation,
+                    ..
+                } if generation == first_generation
+            ));
+        }
+        assert_eq!(
+            app.world().resource::<StagedFrameState2d>().views[&view_id].generation,
+            newer_generation,
+            "the newest desired frame must wait without cancelling an acknowledged publication"
+        );
+
+        readiness.mark_ready(first_generation);
+        app.update();
+        {
+            let state = app.world().resource::<RenderedFrameState2d>();
+            let view = &state.views[&view_id];
+            assert_eq!(view.active_bank, 1);
+            assert!(matches!(
+                view.phase,
+                PublicationPhase2d::Building {
+                    bank: 0,
+                    generation,
+                    ..
+                } if generation == newer_generation
+            ));
+        }
+        assert!(app.world().get_entity(first_entity).is_ok());
+
+        readiness.mark_ready(newer_generation);
+        app.update();
+        readiness.mark_ready(newer_generation);
+        app.update();
+        let state = app.world().resource::<RenderedFrameState2d>();
+        let view = &state.views[&view_id];
+        assert_eq!(view.active_bank, 0);
+        assert!(matches!(view.phase, PublicationPhase2d::Idle));
+        let newer_entity = *view.banks[0].entities.values().next().unwrap();
+        assert_eq!(
+            app.world()
+                .get::<PuzzlePixelMesh>(newer_entity)
+                .unwrap()
+                .object_ids,
+            vec![77]
         );
     }
 
@@ -2201,9 +3406,7 @@ mod tests {
             .id;
         let asset = catalog.get(&asset_id).unwrap();
         let common_batch = RuntimeResolvedRenderBatch {
-            render_order: 0,
-            object_ids: vec![1],
-            cell: [0, 0, 0],
+            identity: batch_identity(0, vec![1], [0, 0, 0]),
             transform: identity(),
             opacity: 1.0,
             pixel_geometry: None,
@@ -2242,7 +3445,7 @@ mod tests {
                 ..common_batch.clone()
             }],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
         let raster_frame = RuntimeResolvedRenderFrame {
             batches: vec![RuntimeResolvedRenderBatch {
@@ -2267,7 +3470,7 @@ mod tests {
                 ..common_batch
             }],
             decorations: Vec::new(),
-            continue_animation: false,
+            next_sample: None,
         };
 
         let mut app = App::new();
@@ -2339,14 +3542,26 @@ mod tests {
         )
         .unwrap();
 
-        // The first update materializes the backend-owned cameras. Both cameras
-        // then render to the same texture through disjoint physical viewports.
-        app.update();
-        let cameras = app
-            .world_mut()
-            .query_filtered::<Entity, With<PuzzleRendererCamera2d>>()
-            .iter(app.world())
-            .collect::<Vec<_>>();
+        // GPU-backed views become public only after their behind-the-current-frame
+        // window render is complete. Wait for that owned commit before redirecting
+        // the two published cameras to the shared test target.
+        let mut cameras = Vec::new();
+        for _ in 0..120 {
+            app.update();
+            cameras = app
+                .world_mut()
+                .query_filtered::<(Entity, &Camera, &RenderTarget), With<PuzzleRendererCamera2d>>()
+                .iter(app.world())
+                .filter_map(|(entity, camera, target)| {
+                    (camera.is_active && matches!(target, RenderTarget::Window(_)))
+                        .then_some(entity)
+                })
+                .collect::<Vec<_>>();
+            if cameras.len() == 2 {
+                break;
+            }
+        }
+        assert_eq!(cameras.len(), 2, "both staged views must become GPU-ready");
         for camera in cameras {
             app.world_mut()
                 .entity_mut(camera)

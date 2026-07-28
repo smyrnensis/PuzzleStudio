@@ -27,9 +27,13 @@ fn main() {
 fn submit_example_frame(world: &mut World) {
     let frame = RuntimeResolvedRenderFrame {
         batches: vec![RuntimeResolvedRenderBatch {
-            render_order: 0,
-            object_ids: vec![1],
-            cell: [0, 0, 0],
+            identity: puzzle_runtime_contract::RuntimeResolvedRenderBatchIdentity {
+                render_order: 0,
+                object_ids: vec![1],
+                visual_ids: vec!["example".to_string()],
+                instance_ids: vec![1],
+                cell: [0, 0, 0],
+            },
             transform: [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
@@ -64,7 +68,7 @@ fn submit_example_frame(world: &mut World) {
             },
         }],
         decorations: Vec::new(),
-        continue_animation: false,
+        next_sample: None,
     };
     submit_resolved_frame(
         world,

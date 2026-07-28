@@ -814,13 +814,13 @@ fn apply_puzzle_render_grid_node(
                 if definition.op != Some(authoring_grammar::AuthoringDefinitionOp::Equals) {
                     return Err(parse_error(
                         &definition.source_line,
-                        "grid type directive must be: type = \"occupied_cells\" or type = \"all_cells\"",
+                        "grid type directive must be: type = occupied_cells or type = all_cells",
                     ));
                 }
                 let Some(value) = definition.single_value() else {
                     return Err(parse_error(
                         &definition.source_line,
-                        "grid type directive must be: type = \"occupied_cells\" or type = \"all_cells\"",
+                        "grid type directive must be: type = occupied_cells or type = all_cells",
                     ));
                 };
                 apply_puzzle_render_grid_type(value, &definition.source_line, grid)?;

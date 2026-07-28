@@ -61,12 +61,7 @@ fn push_editor_preview_data(out: &mut String, state: &EditorPreviewState) {
     out.push(',');
     push_json_number(out, "defaultWaitMs", document.default_wait_ms);
     out.push(',');
-    push_export_input_buffer_values(
-        out,
-        document.input_buffer.queue_during_wait,
-        document.input_buffer.fast_forward_wait,
-        document.input_buffer.min_wait_ms,
-    );
+    push_export_input_buffer(out, &document.input_buffer);
     out.push(',');
     push_export_animation_values(
         out,
@@ -97,24 +92,20 @@ fn editor_preview_build_json(html: &str, state: &EditorPreviewState) -> String {
 }
 
 fn push_runtime_inputs(out: &mut String, state: &EditorPreviewState) {
-    push_runtime_snapshot_field(out, state, "inputs");
+    let inputs = state.runtime.editor_input_bindings();
+    out.push_str("\"inputs\":");
+    out.push_str(
+        &serde_json::to_string(&puzzle_presentation_json::input_bindings_value(&inputs))
+            .expect("typed runtime input bindings must serialize for editor metadata"),
+    );
 }
 
 fn push_runtime_theme(out: &mut String, state: &EditorPreviewState) {
-    push_runtime_snapshot_field(out, state, "theme");
-}
-
-fn push_runtime_snapshot_field(out: &mut String, state: &EditorPreviewState, field: &str) {
-    let snapshot: serde_json::Value = serde_json::from_str(&state.runtime.snapshot_json())
-        .expect("runtime snapshot JSON should parse");
-    let value = snapshot
-        .get(field)
-        .unwrap_or_else(|| panic!("runtime snapshot should contain {field}"));
-    push_json_string(out, field);
-    out.push(':');
+    let theme = state.runtime.snapshot().theme;
+    out.push_str("\"theme\":");
     out.push_str(
-        &serde_json::to_string(value)
-            .unwrap_or_else(|_| panic!("runtime {field} should serialize")),
+        &serde_json::to_string(&theme)
+            .expect("typed runtime theme must serialize for editor metadata"),
     );
 }
 
@@ -144,7 +135,7 @@ fn push_editor_preview_models(out: &mut String, document: &puzzle_lang::LoadedDo
                 out.push(',');
                 push_json_number(out, "defaultWaitMs", game.default_wait_ms);
                 out.push(',');
-                push_export_input_buffer(out, game);
+                push_export_game_input_buffer(out, game);
                 out.push(',');
                 push_export_animation(out, game);
                 out.push(',');
@@ -241,27 +232,24 @@ fn push_export_animation_values(out: &mut String, enabled: bool, interval_ms: u6
     out.push('}');
 }
 
-fn push_export_input_buffer(out: &mut String, loaded: &LoadedGame) {
-    push_export_input_buffer_values(
-        out,
-        loaded.input_buffer.queue_during_wait,
-        loaded.input_buffer.fast_forward_wait,
-        loaded.input_buffer.min_wait_ms,
-    );
+fn push_export_game_input_buffer(out: &mut String, loaded: &LoadedGame) {
+    push_export_input_buffer(out, &loaded.input_buffer);
 }
 
-fn push_export_input_buffer_values(
-    out: &mut String,
-    queue_during_wait: bool,
-    fast_forward_wait: bool,
-    min_wait_ms: u64,
-) {
+fn push_export_input_buffer(out: &mut String, input_buffer: &puzzle_lang::InputBufferDef) {
     out.push_str("\"inputBuffer\":{");
-    push_json_bool(out, "queueDuringWait", queue_during_wait);
-    out.push(',');
-    push_json_bool(out, "fastForwardWait", fast_forward_wait);
-    out.push(',');
-    push_json_number(out, "minWaitMs", min_wait_ms);
+    out.push_str("\"busyInput\":{");
+    match &input_buffer.busy_input {
+        puzzle_lang::BusyInputPolicy::Reject => push_json_pair(out, "kind", "reject"),
+        puzzle_lang::BusyInputPolicy::Queue => push_json_pair(out, "kind", "queue"),
+        puzzle_lang::BusyInputPolicy::Skip => push_json_pair(out, "kind", "skip"),
+        puzzle_lang::BusyInputPolicy::Accelerate { min_wait_ms } => {
+            push_json_pair(out, "kind", "accelerate");
+            out.push(',');
+            push_json_number(out, "minWaitMs", *min_wait_ms);
+        }
+    }
+    out.push('}');
     out.push('}');
 }
 

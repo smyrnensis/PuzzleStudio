@@ -452,27 +452,7 @@ fn embedded_player_wasm_script() -> String {
 }
 
 fn editor_preview_runtime_wasm_script() -> String {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        embedded_game_wasm_script()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        editor_preview_parent_wasm_loader_script()
-    }
-}
-
-fn embedded_game_wasm_script() -> String {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        embedded_wasm_loader_script(PUZZLE_GAME_WASM_JS, PUZZLE_GAME_WASM_BG)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        missing_embedded_wasm_loader_script(
-            "Editor preview requires puzzle_wasm_game assets from its editor host.",
-        )
-    }
+    editor_preview_parent_wasm_loader_script()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -527,7 +507,6 @@ fn missing_embedded_wasm_loader_script(message: &str) -> String {
     )
 }
 
-#[cfg(target_arch = "wasm32")]
 fn editor_preview_parent_wasm_loader_script() -> String {
     r#"window.PuzzleRuntimeWasmLoader = window.PuzzleRuntimeWasmLoader || (() => {
   let modulePromise = null;

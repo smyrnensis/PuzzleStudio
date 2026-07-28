@@ -222,10 +222,29 @@ pub enum SessionAction {
     },
 }
 
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct RuntimeSessionRevision(pub u64);
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct RuntimeStateCommitId(pub u64);
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct RuntimePresentationTransitionId(pub u64);
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimePresentationContinuationToken {
-    pub revision: u64,
+    pub session_revision: RuntimeSessionRevision,
+    pub transition: RuntimePresentationTransitionId,
     pub waits: Vec<RuntimeModelPresentationContinuationToken>,
 }
 
@@ -559,6 +578,18 @@ pub struct RuntimeUiControlStyle {
     pub corner_radius_px: f32,
 }
 
+/// Logical surface used by fixed-size scene UI values.
+///
+/// Player hosts fit this surface into their current window with one uniform
+/// scale. This keeps typography, spacing, controls, and renderer viewports on
+/// the same resize transform instead of treating theme pixels as host pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeUiReferenceSize {
+    pub width_px: f32,
+    pub height_px: f32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeTheme {
@@ -571,6 +602,7 @@ pub struct RuntimeTheme {
     pub control_focused: RuntimeLinearRgba,
     pub control_selected: RuntimeLinearRgba,
     pub control_selected_border: RuntimeLinearRgba,
+    pub ui_reference_size: RuntimeUiReferenceSize,
     pub typography: RuntimeUiTypography,
     pub control_layout: RuntimeUiControlStyle,
 }
@@ -609,6 +641,20 @@ impl RuntimeTheme {
                 || !style.line_height.is_finite()
                 || style.line_height <= 0.0
             {
+                return Err(label);
+            }
+        }
+        for (label, value) in [
+            (
+                "theme.ui_reference_size.width_px",
+                self.ui_reference_size.width_px,
+            ),
+            (
+                "theme.ui_reference_size.height_px",
+                self.ui_reference_size.height_px,
+            ),
+        ] {
+            if !value.is_finite() || value <= 0.0 {
                 return Err(label);
             }
         }
@@ -837,7 +883,58 @@ pub enum RuntimeResolvedDecoration {
 pub struct RuntimeResolvedRenderMoment {
     pub clip_elapsed_ms: u64,
     pub animation_elapsed_ms: u64,
-    pub animations: Vec<RuntimeAnimationEvent>,
+    pub animation: Option<RuntimePreparedAnimationSet>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePreparedAnimationEndpoint {
+    pub instance: RuntimeResolvedRenderInstance,
+    pub composition: RuntimeVisualComposition,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePreparedAnimationSet {
+    pub clips: Vec<RuntimeResolvedVisualClip>,
+    pub channels: Vec<RuntimePreparedAnimationChannel>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RuntimePreparedInstanceAnimation {
+    Move {
+        name: String,
+        visual_tween: Option<RuntimeVisualTween>,
+    },
+    CantMove {
+        name: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RuntimePreparedAnimationChannel {
+    Instance {
+        occurrence_id: u64,
+        animation: RuntimePreparedInstanceAnimation,
+        from: Option<RuntimePreparedAnimationEndpoint>,
+        to: Option<RuntimePreparedAnimationEndpoint>,
+    },
+    Transient {
+        endpoint: RuntimePreparedAnimationEndpoint,
+        duration_milliseconds: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -884,16 +981,42 @@ pub enum RuntimeResolvedRenderBatchContent {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeResolvedRenderBatchIdentity {
+    pub render_order: u64,
+    pub object_ids: Vec<u16>,
+    pub visual_ids: Vec<String>,
+    pub instance_ids: Vec<u64>,
+    pub cell: [i32; 3],
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeResolvedRenderBatch {
-    pub render_order: u64,
-    pub object_ids: Vec<u16>,
-    pub cell: [i32; 3],
+    pub identity: RuntimeResolvedRenderBatchIdentity,
     pub transform: [[f64; 4]; 4],
     pub opacity: f64,
     pub pixel_geometry: Option<RuntimeResolvedPixelGeometry>,
     pub content: RuntimeResolvedRenderBatchContent,
+}
+
+/// The next presentation sample required after the resolved moment.
+///
+/// Discrete clips report only their nearest individual frame boundary.
+/// Continuous channels are sampled by the host display clock until their
+/// finite completion boundary. Neither form defines or requires a shared
+/// animation tick grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RuntimeResolvedNextSample {
+    Deadline { after_milliseconds: u64 },
+    DisplayRefresh { completion_after_milliseconds: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -901,7 +1024,7 @@ pub struct RuntimeResolvedRenderBatch {
 pub struct RuntimeResolvedRenderFrame {
     pub batches: Vec<RuntimeResolvedRenderBatch>,
     pub decorations: Vec<RuntimeResolvedDecoration>,
-    pub continue_animation: bool,
+    pub next_sample: Option<RuntimeResolvedNextSample>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1555,6 +1678,8 @@ pub enum RuntimeAnimationEvent {
     },
     CantMove {
         name: String,
+        #[serde(rename = "occurrenceId")]
+        occurrence_id: u64,
         #[serde(rename = "objectId")]
         object_id: u16,
         position: RuntimeCoord,
@@ -1573,13 +1698,25 @@ pub enum RuntimePresentationEvent {
         command: AudioCommand,
     },
     Wait {
-        milliseconds: u64,
+        completion: RuntimePresentationWait,
     },
     AnimationBatch {
         source: RuntimeViewportSourceId,
         level_index: Option<usize>,
         animations: Vec<RuntimeAnimationEvent>,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RuntimePresentationWait {
+    Duration { milliseconds: u64 },
+    AnimationPublication,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1904,6 +2041,30 @@ mod tests {
     }
 
     #[test]
+    fn next_sample_contract_distinguishes_deadlines_from_display_refresh() {
+        assert_eq!(
+            serde_json::to_value(RuntimeResolvedNextSample::Deadline {
+                after_milliseconds: 11,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "kind": "deadline",
+                "afterMilliseconds": 11,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(RuntimeResolvedNextSample::DisplayRefresh {
+                completion_after_milliseconds: 37,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "kind": "display_refresh",
+                "completionAfterMilliseconds": 37,
+            })
+        );
+    }
+
+    #[test]
     fn explicit_visual_animation_uses_the_renderer_animation_contract() {
         let value = serde_json::to_value(RuntimeAnimationEvent::Animation {
             name: "flash".to_string(),
@@ -1936,7 +2097,8 @@ mod tests {
         );
         let completion = SessionAction::PresentationComplete {
             token: RuntimePresentationContinuationToken {
-                revision: 7,
+                session_revision: RuntimeSessionRevision(7),
+                transition: RuntimePresentationTransitionId(9),
                 waits: vec![RuntimeModelPresentationContinuationToken {
                     model: "board".to_string(),
                     sequence: 3,
@@ -1949,7 +2111,8 @@ mod tests {
             json!({
                 "kind": "presentation_complete",
                 "token": {
-                    "revision": 7,
+                    "sessionRevision": 7,
+                    "transition": 9,
                     "waits": [{"model": "board", "sequence": 3}]
                 }
             })
@@ -2255,9 +2418,13 @@ mod tests {
 }
 #[test]
 fn wait_presentation_event_has_no_viewport_identity() {
-    let event = RuntimePresentationEvent::Wait { milliseconds: 80 };
+    let event = RuntimePresentationEvent::Wait {
+        completion: RuntimePresentationWait::Duration { milliseconds: 80 },
+    };
     let value = serde_json::to_value(&event).unwrap();
     assert_eq!(value["kind"], "wait");
+    assert_eq!(value["completion"]["kind"], "duration");
+    assert_eq!(value["completion"]["milliseconds"], 80);
     assert!(value.get("levelIndex").is_none());
     assert!(value.get("source").is_none());
     assert!(value.get("scene").is_none());

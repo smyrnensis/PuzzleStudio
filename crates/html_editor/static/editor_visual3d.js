@@ -3713,9 +3713,10 @@ function loadVisual3dSourceTarget(target, options = {}) {
     if (target?.sourceVisual?.dimension === "3d") {
       applyIncompleteVisual3dSourceTarget(target.name || "", target);
       if (!options.silent) {
-        const message = target.sourceVisual.status === "invalid"
-          ? `Cannot edit invalid 3D visual ${visual3dNameInput.value || ""}`.trim()
-          : `Loaded unfinished 3D visual ${visual3dNameInput.value || ""}`.trim();
+        const message = visualSourceContractError(target.sourceVisual)
+          || (target.sourceVisual.status === "invalid"
+            ? `Cannot edit invalid 3D visual ${visual3dNameInput.value || ""}`.trim()
+            : `Loaded unfinished 3D visual ${visual3dNameInput.value || ""}`.trim());
         const status = target.sourceVisual.status === "invalid" ? "is-error" : "is-ok";
         setVisual3dActionStatus(message, status);
         setStatus(message, status);

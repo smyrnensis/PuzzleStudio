@@ -1,10 +1,7 @@
 #[cfg(target_arch = "wasm32")]
 use bevy::{
-    app::{App, PostUpdate, Update},
-    prelude::{
-        DefaultPlugins, IntoScheduleConfigs, Local, NonSend, NonSendMut, PluginGroup, Res, Time,
-    },
-    window::{Window, WindowPlugin},
+    app::{PostUpdate, Update},
+    prelude::{IntoScheduleConfigs, Local, NonSend, NonSendMut, Res, Time},
 };
 #[cfg(target_arch = "wasm32")]
 use puzzle_runtime_contract::RuntimeProgressPersistenceOperation;
@@ -90,8 +87,6 @@ impl BrowserProgressStorage {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(js_name = startStandalonePlayer)]
 pub fn start_standalone_player(export_json: &str, canvas_selector: &str) -> Result<(), JsValue> {
-    validate_canvas_selector(canvas_selector).map_err(js_diagnostic)?;
-
     let decoded = puzzle_player_bootstrap::decode_standalone_player_export(export_json)
         .map_err(|error| js_diagnostic(format!("standalone player export is invalid: {error}")))?;
     let (mut runtime, visual_images, progress_identity) = decoded.into_parts();
@@ -112,17 +107,9 @@ pub fn start_standalone_player(export_json: &str, canvas_selector: &str) -> Resu
     )
     .map_err(|error| js_diagnostic(format!("Bevy player initialization failed: {error}")))?;
 
-    let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "PuzzleStudio".to_string(),
-            canvas: Some(canvas_selector.to_string()),
-            fit_canvas_to_parent: true,
-            ..Default::default()
-        }),
-        ..Default::default()
-    }));
-    puzzle_bevy_player::install_puzzle_bevy_player(&mut app, host);
+    let mut app =
+        puzzle_bevy_player::build_browser_player_app(host, canvas_selector, "PuzzleStudio")
+            .map_err(js_diagnostic)?;
     app.insert_non_send(progress_storage).add_systems(
         Update,
         (persist_pending_progress, surface_player_fatal_diagnostic),
@@ -133,35 +120,6 @@ pub fn start_standalone_player(export_json: &str, canvas_selector: &str) -> Resu
             .in_set(puzzle_bevy_player::PuzzleBevyPlayerSystems::ObservationReady),
     );
     app.run();
-    Ok(())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn validate_canvas_selector(canvas_selector: &str) -> Result<(), String> {
-    if canvas_selector.trim().is_empty() {
-        return Err("Bevy player canvas selector must not be empty".to_string());
-    }
-    let window = web_sys::window()
-        .ok_or_else(|| "Bevy player canvas validation requires a browser window".to_string())?;
-    let document = window
-        .document()
-        .ok_or_else(|| "Bevy player canvas validation requires a browser document".to_string())?;
-    let element = document
-        .query_selector(canvas_selector)
-        .map_err(|error| {
-            format!(
-                "Bevy player canvas selector `{canvas_selector}` is invalid: {}",
-                js_error(&error)
-            )
-        })?
-        .ok_or_else(|| {
-            format!("Bevy player canvas selector `{canvas_selector}` matched no element")
-        })?;
-    if !element.is_instance_of::<web_sys::HtmlCanvasElement>() {
-        return Err(format!(
-            "Bevy player canvas selector `{canvas_selector}` must match a canvas element"
-        ));
-    }
     Ok(())
 }
 

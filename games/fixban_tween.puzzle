@@ -2,8 +2,8 @@ const title = "Fixban Tween"
 const subtitle = "Canonical Fixban with movement tween"
 const author = "PuzzleStudio"
 
+theme = puzzlescript
 theme {
-preset = "puzzlescript"
 background_color = #444
 }
 
