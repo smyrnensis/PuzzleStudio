@@ -1,0 +1,273 @@
+function visualPaletteEntryBindInfo(entry) {
+  const bind = entry?.bind ?? entry?.bound ?? entry?.sourceRef ?? null;
+  if (!bind) return { available: true, linked: false, name: "", label: "Unlinked color" };
+  if (typeof bind === "string") {
+    return { available: true, linked: true, name: bind, label: `Bound to ${bind}` };
+  }
+  if (typeof bind === "object") {
+    const name = bind.name || bind.ref || bind.source || bind.color || "";
+    const linked = !(bind.linked === false || bind.unlinked === true || bind.detached === true);
+    return { available: true, linked, name, label: name ? `Bound to ${name}` : "Bound color" };
+  }
+  return { available: true, linked: true, name: "", label: "Bound color" };
+}
+
+function visualAssetBindInfo(bind, label) {
+  if (!bind) return { linked: false, name: "", label: `Unlinked ${label}` };
+  if (typeof bind === "string") return { linked: true, name: bind, label: `Bound to ${bind}` };
+  const name = bind.name || bind.ref || bind.source || "";
+  const linked = !(bind.linked === false || bind.unlinked === true || bind.detached === true);
+  return { linked, name, label: name ? `Bound to ${name}` : `Bound ${label}` };
+}
+
+function visualEditorOwnedDocument(state, { allowActive = false } = {}) {
+  const owned = state?.editDocumentId
+    ? documents.find((candidate) => candidate.id === state.editDocumentId)
+    : null;
+  if (owned && isTextDocument(owned) && isPuzzleDocument(owned)) return owned;
+  if (!allowActive) return null;
+  const active = activeDocument();
+  return active && isTextDocument(active) && isPuzzleDocument(active) ? active : null;
+}
+
+function visualEditorSourceSnapshot(state, options = {}) {
+  const document = visualEditorOwnedDocument(state, options);
+  if (!document) return { document: null, source: "" };
+  return {
+    document,
+    source: document.id === activeDocument()?.id ? sourceEditorDocumentValue() : document.source || "",
+  };
+}
+
+function setVisualEditorSourceTarget(state, target, document = activeDocument()) {
+  state.editDocumentId = document && isTextDocument(document) && isPuzzleDocument(document)
+    ? document.id
+    : null;
+  state.editSourceStart = Number.isInteger(target?.start) ? target.start : null;
+  state.editSourceEnd = Number.isInteger(target?.end) ? target.end : null;
+  state.editSourceBodyStart = Number.isInteger(target?.bodyStart) ? target.bodyStart : null;
+  state.editSourceBodyEnd = Number.isInteger(target?.bodyEnd) ? target.bodyEnd : null;
+  state.editSourceName = target?.name || "";
+  state.sourceVisualContract = target?.sourceVisual && typeof target.sourceVisual === "object"
+    ? cloneVisualEditValue(target.sourceVisual)
+    : null;
+}
+
+function clearVisualEditorSourceTarget(state) {
+  setVisualEditorSourceTarget(state, null, null);
+}
+
+function invalidateVisualEditorSourceTarget(state, document = activeDocument()) {
+  if (!document || !state?.editDocumentId || document.id !== state.editDocumentId) return false;
+  clearVisualEditorSourceTarget(state);
+  return true;
+}
+
+function visualEditorSourceRange(state, source, indentForSource) {
+  const start = state?.editSourceStart;
+  const end = state?.editSourceEnd;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start
+    || end > String(source || "").length) return null;
+  return {
+    start,
+    end,
+    indent: indentForSource(source.slice(source.lastIndexOf("\n", start - 1) + 1, start)),
+  };
+}
+
+function visualEditorDimensionSource(dimension) {
+  const is3d = dimension === "visual3d" || dimension === "3d";
+  return {
+    state: is3d ? visual3d : visual,
+    updateButton: is3d ? visual3dUpdateButton : visualUpdateButton,
+    insertButton: is3d ? visual3dInsertButton : visualInsertButton,
+  };
+}
+
+function activeVisualEditorDocument(dimension, options = {}) {
+  return visualEditorOwnedDocument(visualEditorDimensionSource(dimension).state, options);
+}
+
+function activeVisualEditorSource(dimension, options = {}) {
+  return visualEditorSourceSnapshot(visualEditorDimensionSource(dimension).state, options).source;
+}
+
+function setVisualEditorDimensionSourceTarget(dimension, target, document = activeDocument()) {
+  setVisualEditorSourceTarget(visualEditorDimensionSource(dimension).state, target, document);
+}
+
+function clearVisualEditorDimensionSourceTarget(dimension) {
+  clearVisualEditorSourceTarget(visualEditorDimensionSource(dimension).state);
+}
+
+function invalidateVisualEditorDimensionSourceTarget(dimension, document = activeDocument()) {
+  return invalidateVisualEditorSourceTarget(visualEditorDimensionSource(dimension).state, document);
+}
+
+function currentVisualEditorSourceRange(dimension, source, indentForSource = () => "") {
+  return visualEditorSourceRange(visualEditorDimensionSource(dimension).state, source, indentForSource);
+}
+
+function canReplaceVisualEditorDefinition(dimension, source, indentForSource) {
+  return Boolean(currentVisualEditorSourceRange(dimension, source, indentForSource));
+}
+
+function syncVisualEditorSourceActionButtons(dimension, options = {}) {
+  const binding = visualEditorDimensionSource(dimension);
+  const source = visualEditorSourceSnapshot(binding.state, options).source;
+  const hasEditableSource = canReplaceVisualEditorDefinition(dimension, source, options.indentForSource);
+  if (binding.updateButton) binding.updateButton.disabled = !hasEditableSource;
+  if (binding.insertButton) binding.insertButton.disabled = false;
+}
+
+function visualEditorMutationRequest({
+  operation,
+  dimension,
+  state,
+  name,
+  originalName,
+  cursor,
+  palette,
+  frames,
+  durationMs,
+  frameDurationMs = null,
+  includeFrameDurationMs = false,
+}) {
+  const shape = visualAssetBindInfo(state.shapeBind, "shape");
+  const colorBindings = state.palette
+    .map((entry) => ({ entry, bind: visualPaletteEntryBindInfo(entry) }))
+    .filter(({ bind }) => bind.linked && bind.name)
+    .map(({ entry, bind }) => ({ name: bind.name, color: normalizeVisualColor(entry.color) }));
+  return {
+    operation,
+    dimension,
+    name,
+    originalName,
+    cursor,
+    palette,
+    frames,
+    durationMs,
+    ...(includeFrameDurationMs ? { frameDurationMs } : {}),
+    shapeRef: shape.linked ? shape.name : null,
+    preludeRows: state.sourcePreludeRows || [],
+    spatialOps: state.sourceSpatialOps || [],
+    colorBindings,
+  };
+}
+
+const visualEditorMutationQueues = new WeakMap();
+
+function commitVisualEditorMutation(options) {
+  const { state } = options;
+  const previous = visualEditorMutationQueues.get(state) || Promise.resolve();
+  const pending = previous
+    .catch(() => {})
+    .then(() => commitVisualEditorMutationNow(options));
+  visualEditorMutationQueues.set(state, pending);
+  void pending.finally(() => {
+    if (visualEditorMutationQueues.get(state) === pending) {
+      visualEditorMutationQueues.delete(state);
+    }
+  }).catch(() => {});
+  return pending;
+}
+
+async function commitVisualEditorMutationNow({ state, request, allowActiveDocument = false }) {
+  const { document, source } = visualEditorSourceSnapshot(state, { allowActive: allowActiveDocument });
+  if (!document) throw new Error("No puzzle source document is owned by this visual editor.");
+  const result = await mutateVisualSourceFromRust(source, request(source, document));
+  document.source = result.source;
+  if (document.id === activeDocument()?.id) {
+    setSourceEditorValue(result.source, { resetUndo: false });
+    revealVisualSourceResult(document, result);
+  }
+  scheduleLocalSave();
+  schedulePreview();
+  setVisualEditorSourceTarget(state, { start: result.start, end: result.end, name: result.name }, document);
+  sourceEditor.focus({ preventScroll: true });
+  return { document, result };
+}
+
+async function updateVisualEditorSourceDefinition({ dimension, state, request, label }) {
+  try {
+    await commitVisualEditorMutation({ state, request });
+  } catch (error) {
+    const message = userFacingRuntimeError(error);
+    setVisualDimensionActionStatus(dimension, message, "is-error");
+    setStatus(message, "is-error");
+    return false;
+  }
+  const message = `Updated ${label}`;
+  setVisualDimensionActionStatus(dimension, message, "is-ok");
+  setStatus(message, "is-ok");
+  syncVisualEditorSourceActionButtons(dimension, dimension === "visual" ? { allowActive: true } : {});
+  return true;
+}
+
+async function addVisualEditorSourceDefinition({
+  dimension,
+  state,
+  request,
+  nameInput,
+  label,
+}) {
+  let result;
+  try {
+    ({ result } = await commitVisualEditorMutation({
+      state,
+      allowActiveDocument: true,
+      request,
+    }));
+  } catch (error) {
+    setVisualDimensionActionStatus(dimension, userFacingRuntimeError(error), "is-error");
+    return false;
+  }
+  nameInput.value = result.name;
+  const message = `Added ${label}`;
+  setVisualDimensionActionStatus(dimension, message, "is-ok");
+  setStatus(message, "is-ok");
+  syncVisualEditorSourceActionButtons(dimension, dimension === "visual" ? { allowActive: true } : {});
+  return true;
+}
+
+function projectVisualDocumentContract(contract) {
+  if (!contract || typeof contract !== "object") return null;
+  const dimension = contract.dimension === "2d" || contract.dimension === "3d"
+    ? contract.dimension
+    : null;
+  const width = Number(contract?.extent?.width);
+  const height = Number(contract?.extent?.height);
+  const depth = Number(contract?.extent?.depth);
+  const resolvedPalette = Array.isArray(contract.resolvedPalette) ? contract.resolvedPalette : [];
+  const frames = Array.isArray(contract.frames) ? contract.frames : [];
+  if (!dimension || contract.status !== "complete" || !Number.isInteger(width) || !Number.isInteger(height)
+    || !Number.isInteger(depth) || width < 1 || height < 1 || depth < 1 || !resolvedPalette.length || !frames.length) {
+    return null;
+  }
+  const layerCellCount = width * height;
+  const cellsByFrame = frames.map((frame) => {
+    if (!Array.isArray(frame?.layers) || frame.layers.length !== depth) return null;
+    const layers = frame.layers.map((layer) => {
+      if (!Array.isArray(layer?.cells) || layer.cells.length !== layerCellCount) return null;
+      return layer.cells.map((cell) => cell === null
+        || (Number.isInteger(cell) && cell >= 0 && cell < resolvedPalette.length)
+        ? cell
+        : NaN);
+    });
+    if (layers.some((layer) => !layer || layer.some(Number.isNaN))) return null;
+    return layers;
+  });
+  if (cellsByFrame.some((frame) => !frame)) return null;
+  return {
+    dimension,
+    extent: { width, height, depth },
+    preludeRows: Array.isArray(contract.preludeRows) ? contract.preludeRows : [],
+    paletteTokens: Array.isArray(contract.paletteTokens) ? contract.paletteTokens : [],
+    resolvedPalette,
+    shapeRef: typeof contract.shapeRef === "string" ? contract.shapeRef : null,
+    durationMs: Number.isFinite(contract.durationMs) ? contract.durationMs : null,
+    frameDurationMs: Number.isFinite(contract.frameDurationMs) ? contract.frameDurationMs : null,
+    spatialOps: Array.isArray(contract.spatialOps) ? contract.spatialOps : [],
+    cellsByFrame,
+  };
+}

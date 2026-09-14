@@ -6,7 +6,7 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
-async function downloadHtml() {
+async function downloadWebBundle() {
   persistCurrentDocument();
   const document = activePreviewDocument();
   if (!isPuzzleDocument(document)) {
@@ -14,35 +14,41 @@ async function downloadHtml() {
     return;
   }
   const source = currentSourceForDocument(document);
-  const requestSource = previewRequestSourceForDocument(document, source);
-  const filename = htmlDownloadFileName();
+  const bundleName = webBundleBaseName();
+  const filename = `${bundleName}.zip`;
   setEditorStatus(`Exporting ${filename}`, "");
-  let html = "";
+  let bundle;
   try {
-    html = await window.PuzzleStudioHost.exportStandaloneHtml({
-      source: requestSource,
+    const presentationManifest = await ensurePreviewDocumentsLoaded(document);
+    bundle = await window.PuzzleStudioHost.exportStandaloneWebBundle({
+      source,
+      workspaceDocuments: workspaceCompilerDocuments(document),
       puzzlePath: document.puzzlePath,
       workspaceRoot: document.workspaceRoot || "",
-      gameCss: effectiveGameCss(document),
-      gameVisualsJs: effectiveGameVisualsJs(document),
+      audioFileDocuments: workspaceAudioFileDocuments(document, presentationManifest),
     });
   } catch (error) {
-    appendCompileDiagnostics(error, { source: "compiler", document, sourceText: requestSource });
-    setEditorStatus("Export failed", "is-error");
+    const reported = appendCompileDiagnostics(error, {
+      source: "compiler",
+      document,
+      sourceText: source,
+    });
+    setEditorStatus(reported ? "Export failed" : userFacingRuntimeError(error), "is-error");
     return;
   }
-  if (window.PuzzleStudioHost?.mode?.() === "tauri" && window.PuzzleStudioHost?.exportHtml) {
+  const entries = standaloneWebBundleZipEntries(bundle, bundleName);
+  if (window.PuzzleStudioHost?.mode?.() === "tauri" && window.PuzzleStudioHost?.exportWebBundle) {
     try {
-      const result = await window.PuzzleStudioHost.exportHtml({
-        html,
-        filename,
+      const result = await window.PuzzleStudioHost.exportWebBundle({
+        outputDirectoryName: bundleName,
+        files: bundle.files,
       });
       if (result?.canceled) {
         setEditorStatus("Export canceled");
         return;
       }
       if (result?.ok) {
-        setExportedFileStatus(result.path, filename);
+        setExportedBundleStatus(result.path, bundleName);
         return;
       }
     } catch (error) {
@@ -51,14 +57,55 @@ async function downloadHtml() {
       return;
     }
   }
-  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-  downloadBlob(blob, filename);
+  downloadBlob(zipBlob(entries), filename);
   setEditorStatus(`Exported ${filename}`, "is-ok");
 }
 
-function setExportedFileStatus(path, fallbackName) {
-  const label = fileName(path) || fallbackName || "exported file";
-  const options = exportedFileStatusLinkOptions(path, label);
+function standaloneWebBundleZipEntries(bundle, rootName) {
+  if (!bundle || !Array.isArray(bundle.files) || bundle.files.length === 0) {
+    throw new Error("Standalone web export returned an invalid bundle.");
+  }
+  const entries = [];
+  const paths = new Set();
+  for (const file of bundle.files) {
+    const path = String(file?.path || "");
+    const segments = path.split("/");
+    const invalidPath = !path
+      || path.startsWith("/")
+      || path.includes("\\")
+      || segments.some((segment) => !segment || segment === "." || segment === "..");
+    if (invalidPath || paths.has(path)) {
+      throw new Error(`Standalone web export returned an invalid file path: ${path || "(empty)"}`);
+    }
+    let bytes;
+    if (file.encoding === "utf8") {
+      bytes = new TextEncoder().encode(String(file.content || ""));
+    } else if (file.encoding === "base64") {
+      bytes = base64Bytes(String(file.content || ""));
+    } else {
+      throw new Error(`Standalone web export returned an invalid encoding for ${path}.`);
+    }
+    if (!bytes.length) {
+      throw new Error(`Standalone web export returned an empty file: ${path}`);
+    }
+    paths.add(path);
+    entries.push({ path: `${rootName}/${path}`, bytes });
+  }
+  return entries;
+}
+
+function base64Bytes(value) {
+  const raw = atob(value);
+  const bytes = new Uint8Array(raw.length);
+  for (let index = 0; index < raw.length; index += 1) {
+    bytes[index] = raw.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function setExportedBundleStatus(path, fallbackName) {
+  const label = fileName(path) || fallbackName || "exported web bundle";
+  const options = exportedBundleStatusLinkOptions(path);
   setEditorStatusLink("Exported ", label, options);
   const activePaneElement = setPaneStatusLink(activeStatusPaneId(), "Exported ", label, options);
   if (!activePaneElement) {
@@ -66,12 +113,11 @@ function setExportedFileStatus(path, fallbackName) {
   }
 }
 
-function exportedFileStatusLinkOptions(path, label) {
+function exportedBundleStatusLinkOptions(path) {
   return {
     className: "is-ok",
     href: fileUrlForPath(path),
     title: path,
-    download: label,
     onClick: async (event) => {
       event.preventDefault();
       try {
@@ -100,14 +146,14 @@ function fileUrlForPath(path) {
   return `file:///${encodedPath}`;
 }
 
-function htmlDownloadFileName() {
+function webBundleBaseName() {
   const previewDocument = activePreviewDocument();
   const path = previewDocument?.puzzlePath || previewDocument?.name || "";
   const sourceName = path ? fileName(path) : "";
   const baseName = sourceName
     .replace(/\.puzzle$/i, "")
     .replace(/\.html?$/i, "") || "game";
-  return `${sanitizeFileName(baseName) || "game"}.html`;
+  return `${sanitizeFileName(baseName) || "game"}-web`;
 }
 
 function downloadPuzzle() {
@@ -322,7 +368,7 @@ async function importFilesIntoFolder(fileList, targetFolder) {
     }
   }
   if (!importedCount) {
-    setEditorStatus("No importable files", "is-error");
+    setEditorStatus("No supported files found", "is-error");
     return;
   }
   if (firstImportedPuzzleId) {
@@ -334,7 +380,7 @@ async function importFilesIntoFolder(fileList, targetFolder) {
   loadEmbeddedDocument(currentDocumentIndex);
   saveDocumentStore(false);
   const folderName = targetFolder && targetFolder !== fileTree ? folderPath(targetFolder) || targetFolder.name : "Files";
-  setEditorStatus(`Imported to ${folderName}`, "is-ok");
+  setEditorStatus(`Opened in ${folderName}`, "is-ok");
 }
 
 function importErrorMessage(error) {
@@ -493,7 +539,6 @@ function readFileAsDataUrl(file) {
 }
 
 function importWorkspaceFile(fileNameValue, fileData, targetFolder = activeFolder()) {
-  const current = documents[currentDocumentIndex] || {};
   const parts = String(fileNameValue || "imported.file").split(/[\\/]/).filter(Boolean);
   const name = sanitizeFileName(parts.pop() || "imported.file");
   let folder = targetFolder || fileTree;
@@ -503,7 +548,6 @@ function importWorkspaceFile(fileNameValue, fileData, targetFolder = activeFolde
   const file = makeFile(uniqueChildName(folder, name), fileData.source || "", {
     parentPath: folderPath(folder),
     workspaceRoot: workspaceRootForFolder(folder),
-    gameCss: current.gameCss || editorSeed?.gameCss || "",
   });
   file.encoding = fileData.encoding || "text";
   file.mimeType = fileData.mimeType || mimeTypeForPath(name);
@@ -511,7 +555,6 @@ function importWorkspaceFile(fileNameValue, fileData, targetFolder = activeFolde
   file.dataUrl = fileData.dataUrl || "";
   if (!isPuzzleDocument(file)) {
     file.previewHtml = "";
-    file.gameCss = "";
   }
   folder.children.push(file);
   selectedFolderId = folder.id;
@@ -610,14 +653,10 @@ async function convertPuzzleScriptImport(generation = ++puzzleScriptImportConver
   return canonical;
 }
 
-function puzzleScriptImportTitle(source, canonical) {
+function puzzleScriptImportTitle(source) {
   const explicitTitle = puzzleScriptSourceTitle(source);
   if (explicitTitle) {
     return explicitTitle;
-  }
-  const canonicalTitle = puzzleStudioMetadataTitle(canonical);
-  if (canonicalTitle) {
-    return canonicalTitle;
   }
   return "PuzzleScript import";
 }
@@ -631,21 +670,6 @@ function puzzleScriptSourceTitle(source) {
     .trim()
     .replace(/^"|"$/g, "") || "";
   return title.startsWith("=") ? "" : title;
-}
-
-function puzzleStudioMetadataTitle(canonical) {
-  const value = String(canonical || "")
-    .split("\n")
-    .map((line) => line.trim().match(/^title\s*=\s*(.+)$/)?.[1]?.trim())
-    .find((value) => value);
-  if (value) {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return value.replace(/^"|"$/g, "");
-    }
-  }
-  return "";
 }
 
 async function copyPuzzleScriptImportOutput() {
@@ -674,8 +698,9 @@ async function addPuzzleScriptImportFile() {
   persistCurrentDocument();
   const targetFolder = activeFolder();
   targetFolder.expanded = true;
-  const title = puzzleScriptImportTitle(psImportSourceInput?.value || "", output);
-  const fileNameValue = uniqueChildName(targetFolder, ensurePuzzleExtension(title || "PuzzleScript import"));
+  const title = puzzleScriptImportTitle(psImportSourceInput?.value || "");
+  const baseName = sanitizeFileName(title || "PuzzleScript import").replace(/\.puzzle$/i, "");
+  const fileNameValue = uniqueChildName(targetFolder, `${baseName}.puzzle`);
   const parentPath = folderPath(targetFolder);
   const editorPath = joinPath(parentPath, fileNameValue);
 
@@ -687,11 +712,9 @@ async function addPuzzleScriptImportFile() {
     });
   }
 
-  const current = documents[currentDocumentIndex] || {};
   const file = makeFile(fileNameValue, output, {
     parentPath,
     workspaceRoot: workspaceRootForFolder(targetFolder),
-    gameCss: current.gameCss || editorSeed?.gameCss || "",
   });
   targetFolder.children.push(file);
   activeFileId = file.id;
@@ -704,7 +727,6 @@ async function addPuzzleScriptImportFile() {
 }
 
 window.PuzzleStudioImportExport = {
-  ...(window.PuzzleStudioImportExport || {}),
   addPuzzleScriptImportFile,
   copyPuzzleScriptImportOutput,
   resetPuzzleScriptImportConversion,

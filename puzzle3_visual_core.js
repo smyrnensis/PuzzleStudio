@@ -1,19 +1,58 @@
 (function attachPuzzle3VisualCore(root) {
+  const MIN_ZOOM = 0.1;
+
+  function normalizeZoom(value) {
+    return Math.max(MIN_ZOOM, Number(value ?? 1));
+  }
+
+  function cameraModelFrame(camera = {}) {
+    const yaw = degreesToRadians(camera.yawDegrees ?? 0);
+    const pitch = degreesToRadians(camera.pitchDegrees ?? 35);
+    const roll = degreesToRadians(camera.rollDegrees ?? 0);
+    const baseRight = {
+      x: Math.cos(yaw),
+      y: -Math.sin(yaw),
+      z: 0,
+    };
+    const baseUp = {
+      x: -Math.sin(yaw) * Math.sin(pitch),
+      y: -Math.cos(yaw) * Math.sin(pitch),
+      z: -Math.cos(pitch),
+    };
+    const depth = {
+      x: -Math.sin(yaw) * Math.cos(pitch),
+      y: -Math.cos(yaw) * Math.cos(pitch),
+      z: Math.sin(pitch),
+    };
+    const cosRoll = Math.cos(roll);
+    const sinRoll = Math.sin(roll);
+    return {
+      right: {
+        x: baseRight.x * cosRoll - baseUp.x * sinRoll,
+        y: baseRight.y * cosRoll - baseUp.y * sinRoll,
+        z: baseRight.z * cosRoll - baseUp.z * sinRoll,
+      },
+      up: {
+        x: baseRight.x * sinRoll + baseUp.x * cosRoll,
+        y: baseRight.y * sinRoll + baseUp.y * cosRoll,
+        z: baseRight.z * sinRoll + baseUp.z * cosRoll,
+      },
+      depth,
+    };
+  }
+
   function projectOrthographic(position, view) {
-    const yaw = degreesToRadians(view.camera?.yawDegrees ?? 0);
-    const pitch = degreesToRadians(view.camera?.pitchDegrees ?? 35);
-    const zoom = view.camera?.zoom ?? 1;
+    const frame = cameraModelFrame(view.camera);
+    const zoom = normalizeZoom(view.camera?.zoom);
     const center = view.center || { x: 0, y: 0, z: 0 };
     const x = position.x - center.x;
     const y = position.y - center.y;
     const z = position.z - center.z;
-    const yawX = x * Math.cos(yaw) - y * Math.sin(yaw);
-    const yawY = x * Math.sin(yaw) + y * Math.cos(yaw);
     const scale = view.scale * zoom;
     return {
-      x: view.origin.x + yawX * scale,
-      y: view.origin.y + (-yawY * Math.sin(pitch) - z * Math.cos(pitch)) * scale,
-      depth: -yawY * Math.cos(pitch) + z * Math.sin(pitch),
+      x: view.origin.x + (x * frame.right.x + y * frame.right.y + z * frame.right.z) * scale,
+      y: view.origin.y + (x * frame.up.x + y * frame.up.y + z * frame.up.z) * scale,
+      depth: x * frame.depth.x + y * frame.depth.y + z * frame.depth.z,
     };
   }
 
@@ -21,11 +60,163 @@
     return (value * Math.PI) / 180;
   }
 
+  function evaluateSpatialVisualAffine(operations) {
+    if (!Array.isArray(operations)) {
+      throw new Error("Puzzle3 visual spatialOps are missing or invalid.");
+    }
+    let result = identityAffine3();
+    for (const operation of operations) {
+      if (!operation || typeof operation !== "object" || Array.isArray(operation)) {
+        throw new Error("Puzzle3 visual spatial operation is invalid.");
+      }
+      let space = operation.space;
+      let matrix;
+      if (operation.kind === "translate3") {
+        matrix = translationAffine3(requireFiniteVector3(operation.value, "translate3 value"));
+      } else if (operation.kind === "rotate3") {
+        const axis = normalizeVector3(requireFiniteVector3(operation.axis, "rotate3 axis"));
+        const degrees = requireFiniteNumber(operation.degrees, "rotate3 degrees");
+        matrix = rotationAffine3(axis, degrees);
+      } else if (operation.kind === "scale3") {
+        matrix = scaleAffine3(requireFiniteVector3(operation.value, "scale3 value"));
+      } else if (operation.kind === "flip3") {
+        if (typeof operation.enabled !== "boolean") {
+          throw new Error("Puzzle3 visual flip3 enabled must be boolean.");
+        }
+        if (!operation.enabled) {
+          continue;
+        }
+        space = "local";
+        matrix = reflectionXAffine3();
+      } else {
+        throw new Error(`Unknown Puzzle3 visual spatial operation: ${String(operation.kind)}`);
+      }
+      if (space !== "world" && space !== "local") {
+        throw new Error(`Invalid Puzzle3 visual spatial operation space: ${String(space)}`);
+      }
+      result = space === "world"
+        ? multiplyAffine3(matrix, result)
+        : multiplyAffine3(result, matrix);
+    }
+    return result;
+  }
+
+  function transformSpatialPoint(point, affine) {
+    const value = requireFinitePoint3(point, "visual point");
+    if (!Array.isArray(affine) || affine.length !== 4 || affine.some((row) => !Array.isArray(row) || row.length !== 4)) {
+      throw new Error("Puzzle3 visual spatial affine is invalid.");
+    }
+    return {
+      x: affine[0][0] * value.x + affine[0][1] * value.y + affine[0][2] * value.z + affine[0][3],
+      y: affine[1][0] * value.x + affine[1][1] * value.y + affine[1][2] * value.z + affine[1][3],
+      z: affine[2][0] * value.x + affine[2][1] * value.y + affine[2][2] * value.z + affine[2][3],
+    };
+  }
+
+  function spatialGridPoint(point, scale) {
+    const value = requireFinitePoint3(point, "visual point");
+    const unit = requireFiniteNumber(scale, "voxel scale");
+    if (unit <= 0) {
+      throw new Error("Puzzle3 visual voxel scale must be positive.");
+    }
+    return {
+      x: quantizeSpatialNumber(value.x / unit),
+      y: quantizeSpatialNumber(value.y / unit),
+      z: quantizeSpatialNumber(value.z / unit),
+    };
+  }
+
+  function quantizeSpatialNumber(value) {
+    const quantized = Math.round(value * 1000000000) / 1000000000;
+    return Object.is(quantized, -0) ? 0 : quantized;
+  }
+
+  function identityAffine3() {
+    return [
+      [1, 0, 0, 0],
+      [0, 1, 0, 0],
+      [0, 0, 1, 0],
+      [0, 0, 0, 1],
+    ];
+  }
+
+  function translationAffine3([x, y, z]) {
+    const matrix = identityAffine3();
+    matrix[0][3] = x;
+    matrix[1][3] = y;
+    matrix[2][3] = z;
+    return matrix;
+  }
+
+  function scaleAffine3([x, y, z]) {
+    const matrix = identityAffine3();
+    matrix[0][0] = x;
+    matrix[1][1] = y;
+    matrix[2][2] = z;
+    return matrix;
+  }
+
+  function rotationAffine3([x, y, z], degrees) {
+    const radians = degreesToRadians(degrees);
+    const cosine = Math.cos(radians);
+    const sine = Math.sin(radians);
+    const complement = 1 - cosine;
+    return [
+      [complement * x * x + cosine, complement * x * y - sine * z, complement * x * z + sine * y, 0],
+      [complement * x * y + sine * z, complement * y * y + cosine, complement * y * z - sine * x, 0],
+      [complement * x * z - sine * y, complement * y * z + sine * x, complement * z * z + cosine, 0],
+      [0, 0, 0, 1],
+    ];
+  }
+
+  function reflectionXAffine3() {
+    const matrix = identityAffine3();
+    matrix[0][0] = -1;
+    return matrix;
+  }
+
+  function multiplyAffine3(left, right) {
+    return left.map((_, row) => right[0].map((__, column) => (
+      left[row].reduce((sum, value, index) => sum + value * right[index][column], 0)
+    )));
+  }
+
+  function requireFiniteVector3(value, label) {
+    if (!Array.isArray(value) || value.length !== 3) {
+      throw new Error(`Puzzle3 visual ${label} must be a three-component vector.`);
+    }
+    return value.map((component) => requireFiniteNumber(component, label));
+  }
+
+  function requireFinitePoint3(value, label) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`Puzzle3 ${label} is invalid.`);
+    }
+    return {
+      x: requireFiniteNumber(value.x, `${label}.x`),
+      y: requireFiniteNumber(value.y, `${label}.y`),
+      z: requireFiniteNumber(value.z, `${label}.z`),
+    };
+  }
+
+  function requireFiniteNumber(value, label) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`Puzzle3 visual ${label} must be finite.`);
+    }
+    return value;
+  }
+
+  function normalizeVector3(value) {
+    const length = Math.hypot(...value);
+    if (length === 0) {
+      throw new Error("Puzzle3 visual rotate3 axis cannot be zero.");
+    }
+    return value.map((component) => component / length);
+  }
+
   function directionDepth(vector, view) {
-    const yaw = degreesToRadians(view.camera?.yawDegrees ?? 0);
-    const pitch = degreesToRadians(view.camera?.pitchDegrees ?? 35);
-    const yawY = vector.x * Math.sin(yaw) + vector.y * Math.cos(yaw);
-    return -yawY * Math.cos(pitch) + vector.z * Math.sin(pitch);
+    const { depth } = cameraModelFrame(view.camera);
+    return vector.x * depth.x + vector.y * depth.y + vector.z * depth.z;
   }
 
   function faceGridOrder(corners, view) {
@@ -69,13 +260,7 @@
   }
 
   function cameraOrderBasis(view) {
-    const yaw = degreesToRadians(view.camera?.yawDegrees ?? 0);
-    const pitch = degreesToRadians(view.camera?.pitchDegrees ?? 35);
-    const coefficients = {
-      x: -Math.sin(yaw) * Math.cos(pitch),
-      y: -Math.cos(yaw) * Math.cos(pitch),
-      z: Math.sin(pitch),
-    };
+    const coefficients = cameraModelFrame(view.camera).depth;
     const axes = ["x", "y", "z"].sort((left, right) => {
       const magnitudeComparison = Math.abs(coefficients[right]) - Math.abs(coefficients[left]);
       if (Math.abs(magnitudeComparison) > 0.000001) {
@@ -128,6 +313,13 @@
     if (!a.ownerCell || !b.ownerCell || a.ownerCell.key === b.ownerCell.key) {
       return 0;
     }
+    const directionComparison = compareNumberArrays(
+      a.ownerCell.directionPriority,
+      b.ownerCell.directionPriority,
+    );
+    if (directionComparison !== 0) {
+      return directionComparison;
+    }
     const gridDominanceComparison = compareGridDominance(a.ownerCell.order, b.ownerCell.order);
     if (gridDominanceComparison !== 0) {
       return gridDominanceComparison;
@@ -141,6 +333,19 @@
       return priorityComparison;
     }
     return compareStableKey(a.ownerCell.key, b.ownerCell.key);
+  }
+
+  function compareNumberArrays(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return 0;
+    }
+    for (let index = 0; index < a.length; index += 1) {
+      const comparison = compareNumber(a[index], b[index]);
+      if (comparison !== 0) {
+        return comparison;
+      }
+    }
+    return 0;
   }
 
   function compareGridOrder(a, b) {
@@ -268,6 +473,53 @@
     return faces;
   }
 
+  function averageMergedVoxels(voxels, parseColor, formatColor) {
+    const colors = voxels
+      .map((voxel) => voxel.color || parseColor(voxel.fill))
+      .filter((color) => color && color.a > 0);
+    if (!colors.length) {
+      return voxels[0];
+    }
+    const divisor = colors.length;
+    const color = colors.reduce((sum, candidate) => ({
+      r: sum.r + candidate.r,
+      g: sum.g + candidate.g,
+      b: sum.b + candidate.b,
+      a: sum.a + candidate.a,
+    }), { r: 0, g: 0, b: 0, a: 0 });
+    color.r /= divisor;
+    color.g /= divisor;
+    color.b /= divisor;
+    color.a /= divisor;
+    return {
+      ...voxels[0],
+      color,
+      fill: formatColor(color),
+      sourceKeys: voxels.flatMap((voxel) =>
+        voxel.sourceKey ? [voxel.sourceKey] : (voxel.sourceKeys || [])
+      ),
+    };
+  }
+
+  function objectPriority(order, object, fallbackIndex = 0) {
+    const name = String(object?.name || "");
+    const priority = order?.priorities?.findIndex((entry) =>
+      Array.isArray(entry.objects) && entry.objects.includes(name)
+    );
+    if (priority >= 0) {
+      return priority;
+    }
+    throw new Error(`compiled visual order does not cover object: ${name || fallbackIndex}`);
+  }
+
+  function priorityDefinition(order, encodedPriority) {
+    const priorities = order?.priorities;
+    if (!Array.isArray(priorities) || priorities.length === 0) {
+      throw new Error("compiled visual order contract is missing");
+    }
+    return priorities[encodedPriority % priorities.length];
+  }
+
   function rectsFromCells(cells) {
     const remaining = new Set(cells);
     const rects = [];
@@ -304,15 +556,23 @@
   }
 
   root.Puzzle3VisualCore = {
+    averageMergedVoxels,
+    cameraModelFrame,
     cameraOrderKey,
     compareGridOrder,
     comparePrimitiveOrder,
     directionDepth,
+    evaluateSpatialVisualAffine,
     faceGridOrder,
     gridOrder,
     mergeVoxelFaces,
+    normalizeZoom,
+    objectPriority,
+    priorityDefinition,
     projectOrthographic,
     rectsFromCells,
     stageFrameEdges,
+    spatialGridPoint,
+    transformSpatialPoint,
   };
 })(window);

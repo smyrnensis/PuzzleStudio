@@ -1,0 +1,989 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PuzzleStudio Editor Preview</title>
+    <style>
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: transparent;
+        color-scheme: light dark;
+      }
+      body { outline: none; }
+    </style>
+  </head>
+  <body>
+    <script type="module">
+const createPuzzleAudioHost = (send) => {
+  const U64 = /^(?:[1-9][0-9]{0,19})$/;
+  const U64_MAX = 18446744073709551615n;
+  const voices = new Map();
+  let context = null;
+  let workletSource = null;
+  let workletLoader = null;
+  let workletReady = null;
+  let sequence = 0n;
+  let terminal = false;
+  let unlocked = false;
+  let commandQueue = Promise.resolve();
+  let authorityGenerationId = null;
+  let authorityEpoch = 0;
+
+  const canonicalVoice = (value) => (
+    typeof value === "string" && U64.test(value) && BigInt(value) <= U64_MAX
+  );
+  const canonicalFrame = (value) => (
+    typeof value === "string"
+    && /^(?:0|[1-9][0-9]{0,19})$/.test(value)
+    && BigInt(value) <= U64_MAX
+  );
+  const finiteGain = (value) => Number.isFinite(value) && value >= 0;
+  const exactKeys = (value, keys) => (
+    value
+    && Object.getPrototypeOf(value) === Object.prototype
+    && Object.keys(value).length === keys.length
+    && keys.every((key) => Object.hasOwn(value, key))
+  );
+  const emit = (event, generationId = authorityGenerationId) => {
+    if (terminal || generationId === null) {
+      return false;
+    }
+    if (sequence + 1n === U64_MAX) {
+      terminal = true;
+      unlocked = false;
+      for (const voice of [...voices.keys()]) {
+        discardVoice(voice);
+      }
+      try { void context?.close(); } catch (_error) {}
+      sequence = U64_MAX;
+      send({
+        kind: "audio-event",
+        sequence: sequence.toString(),
+        event: {
+          kind: "device-failure",
+          error: "browser audio event sequence exhausted",
+        },
+      }, generationId);
+      return false;
+    }
+    sequence += 1n;
+    send({ kind: "audio-event", sequence: sequence.toString(), event }, generationId);
+    return true;
+  };
+  const capability = (state, generationId = authorityGenerationId) => (
+    emit({ kind: "capability", state }, generationId)
+  );
+  const result = (requestId, ok, error, generationId) => send({
+    kind: "audio-result",
+    requestId,
+    ok,
+    ...(error ? { error: String(error) } : {}),
+  }, generationId);
+  const discardVoice = (voice) => {
+    const active = voices.get(voice);
+    if (active) {
+      active.explicitStop = true;
+      try {
+        if (active.kind === "sfx") active.node.stop();
+        else active.node.port.postMessage({ version: 1, kind: "stop" });
+      } catch (_error) {}
+      try { active.node.disconnect(); } catch (_error) {}
+      try { active.gain.disconnect(); } catch (_error) {}
+      voices.delete(voice);
+    }
+  };
+  const failVoice = (voice, expected, error) => {
+    if (voices.get(voice) !== expected) return;
+    discardVoice(voice);
+    emit({ kind: "voice-failure", voice, error: String(error) }, expected.generationId);
+  };
+  const requireContext = () => {
+    if (!context || !unlocked || context.state !== "running") {
+      throw new Error("browser audio capability is not ready");
+    }
+    return context;
+  };
+  const loadWorklet = async (generationId, epoch) => {
+    if (workletReady) return workletReady;
+    let source = workletSource;
+    const loader = workletLoader;
+    if (typeof source !== "string" && typeof loader === "function") {
+      source = await loader();
+    }
+    if (generationId !== authorityGenerationId || epoch !== authorityEpoch) {
+      throw new Error("audio generation retired before worklet preparation completed");
+    }
+    if (typeof source !== "string" || source.length === 0) {
+      throw new Error("music AudioWorklet source is unavailable");
+    }
+    const blobUrl = URL.createObjectURL(new Blob([source], {
+      type: "text/javascript",
+    }));
+    workletReady = context.audioWorklet.addModule(blobUrl).finally(() => {
+      URL.revokeObjectURL(blobUrl);
+    });
+    return workletReady;
+  };
+  const unlock = async (generationId) => {
+    if (generationId !== authorityGenerationId) return;
+    const epoch = authorityEpoch;
+    try {
+      if (!context) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (typeof AudioContext !== "function") {
+          capability("unavailable", generationId);
+          return;
+        }
+        context = new AudioContext();
+        context.addEventListener("statechange", () => {
+          if (context.state === "closed") capability("unavailable");
+          else if (context.state === "running") capability("ready");
+          else capability("suspended");
+        });
+      }
+      await Promise.all([context.resume(), loadWorklet(generationId, epoch)]);
+      if (generationId !== authorityGenerationId || epoch !== authorityEpoch) return;
+      unlocked = context.state === "running";
+      capability(unlocked ? "ready" : "locked", generationId);
+    } catch (error) {
+      if (generationId !== authorityGenerationId || epoch !== authorityEpoch) return;
+      unlocked = false;
+      capability(context?.state === "closed" ? "unavailable" : "locked", generationId);
+      emit(
+        { kind: "device-failure", error: error?.message || String(error) },
+        generationId,
+      );
+    }
+  };
+  const startSfx = (command, generationId) => {
+    const audio = requireContext();
+    if (!(command.samples instanceof Float32Array)
+      || command.samples.length === 0
+      || !Number.isInteger(command.sampleRate)
+      || command.sampleRate <= 0
+      || command.sampleRate > 0xffffffff) {
+      throw new Error("start-sfx requires typed mono samples and sampleRate");
+    }
+    const buffer = audio.createBuffer(1, command.samples.length, command.sampleRate);
+    buffer.copyToChannel(command.samples, 0);
+    const node = audio.createBufferSource();
+    const gain = audio.createGain();
+    gain.gain.value = command.gain;
+    node.buffer = buffer;
+    node.connect(gain).connect(audio.destination);
+    const active = { kind: "sfx", node, gain, explicitStop: false, generationId };
+    voices.set(command.voice, active);
+    node.addEventListener("ended", () => {
+      if (voices.get(command.voice) !== active) return;
+      voices.delete(command.voice);
+      try { gain.disconnect(); } catch (_error) {}
+      if (!active.explicitStop) {
+        emit({ kind: "voice-ended", voice: command.voice }, generationId);
+      }
+    }, { once: true });
+    node.start();
+  };
+  const startMusic = async (command, generationId, epoch) => {
+    const audio = requireContext();
+    if (!(command.assetBytes instanceof Uint8Array) || command.assetBytes.length === 0) {
+      throw new Error("start-music requires encoded worklet assetBytes");
+    }
+    await loadWorklet(generationId, epoch);
+    if (generationId !== authorityGenerationId || epoch !== authorityEpoch) {
+      throw new Error("audio generation retired before music preparation completed");
+    }
+    const gain = audio.createGain();
+    gain.gain.value = command.gain;
+    const node = new AudioWorkletNode(audio, "puzzle-music-processor-v1", {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      processorOptions: {
+        version: 1,
+        asset: command.assetBytes,
+        startFrame: command.startFrame,
+      },
+    });
+    const active = { kind: "music", node, gain, explicitStop: false, generationId };
+    voices.set(command.voice, active);
+    node.connect(gain).connect(audio.destination);
+    await new Promise((resolve, reject) => {
+      const timeout = window.setTimeout(() => reject(new Error("music worklet ready timeout")), 2000);
+      node.port.onmessage = (event) => {
+        const feedback = event.data || {};
+        if (feedback.version !== 1) return;
+        if (feedback.kind === "ready") {
+          window.clearTimeout(timeout);
+          resolve();
+        } else if (feedback.kind === "error") {
+          window.clearTimeout(timeout);
+          reject(new Error(`${feedback.operation || "worklet"}: ${feedback.error || "failed"}`));
+        }
+      };
+      node.onprocessorerror = () => {
+        window.clearTimeout(timeout);
+        reject(new Error("music AudioWorklet processor error"));
+      };
+    });
+    node.port.onmessage = (event) => {
+      const feedback = event.data || {};
+      if (feedback.version === 1 && feedback.kind === "error") {
+        failVoice(
+          command.voice,
+          active,
+          `${feedback.operation || "worklet"}: ${feedback.error || "failed"}`,
+        );
+      }
+    };
+    node.onprocessorerror = () => failVoice(
+      command.voice,
+      active,
+      "music AudioWorklet processor error",
+    );
+  };
+  const applyCommand = async (message, generationId, epoch) => {
+    const requestId = message.requestId;
+    const command = message.command;
+    try {
+      if (generationId !== authorityGenerationId || epoch !== authorityEpoch) {
+        throw new Error("audio command generation is no longer authoritative");
+      }
+      if (!canonicalVoice(requestId) || !command || typeof command !== "object"
+        || !canonicalVoice(command.voice)) {
+        throw new Error("audio command identity is invalid");
+      }
+      const voice = command.voice;
+      const commandKeys = {
+        "start-sfx": ["kind", "voice", "asset", "gain", "sampleRate", "samples"],
+        "start-music": ["kind", "voice", "asset", "startFrame", "gain", "assetBytes"],
+        "pause-voice": ["kind", "voice", "atFrame"],
+        "resume-voice": ["kind", "voice", "atFrame"],
+        "set-voice-gain": ["kind", "voice", "gain"],
+        "stop-voice": ["kind", "voice"],
+      }[command.kind];
+      if (!commandKeys || !exactKeys(command, commandKeys)) {
+        throw new Error("audio command is not a closed schema variant");
+      }
+      if (!Number.isInteger(command.asset) || command.asset < 0 || command.asset > 0xffff) {
+        if (command.kind === "start-sfx" || command.kind === "start-music") {
+          throw new Error("audio asset identity is invalid");
+        }
+      }
+      if (command.kind === "start-sfx" || command.kind === "start-music") {
+        if (voices.has(voice) || !finiteGain(command.gain)) {
+          throw new Error("audio start command has duplicate voice or invalid gain");
+        }
+        if (command.kind === "start-sfx") startSfx(command, generationId);
+        else {
+          if (!canonicalFrame(command.startFrame)) throw new Error("music startFrame is invalid");
+          await startMusic(command, generationId, epoch);
+        }
+      } else {
+        const active = voices.get(voice);
+        if (active && active.generationId !== generationId) {
+          throw new Error("audio voice belongs to another runtime generation");
+        }
+        if (!active && command.kind === "stop-voice") {
+          result(requestId, true, null, generationId);
+          return;
+        }
+        if (!active) throw new Error("audio command references an inactive voice");
+        if (command.kind === "set-voice-gain") {
+          if (!finiteGain(command.gain)) throw new Error("voice gain is invalid");
+          active.gain.gain.value = command.gain;
+        } else if (command.kind === "pause-voice" || command.kind === "resume-voice") {
+          if (active.kind !== "music" || !canonicalFrame(command.atFrame)) {
+            throw new Error("pause/resume requires a music voice and exact frame");
+          }
+          active.node.port.postMessage({
+            version: 1,
+            kind: command.kind === "pause-voice" ? "pause" : "resume",
+            atFrame: command.atFrame,
+          });
+        } else if (command.kind === "stop-voice") {
+          active.explicitStop = true;
+          voices.delete(voice);
+          if (active.kind === "music") {
+            active.node.port.postMessage({ version: 1, kind: "stop" });
+          } else {
+            active.node.stop();
+          }
+          active.node.disconnect();
+          active.gain.disconnect();
+        } else {
+          throw new Error("audio command kind is invalid");
+        }
+      }
+      result(requestId, true, null, generationId);
+    } catch (error) {
+      if (canonicalVoice(command?.voice)
+        && voices.get(command.voice)?.generationId === generationId
+        && (command?.kind === "start-sfx" || command?.kind === "start-music")) {
+        discardVoice(command.voice);
+      }
+      if (canonicalVoice(requestId)) {
+        result(requestId, false, error?.message || String(error), generationId);
+      } else {
+        emit(
+          { kind: "device-failure", error: error?.message || String(error) },
+          generationId,
+        );
+      }
+    }
+  };
+  const enqueueCommand = (message, generationId) => {
+    if (generationId !== authorityGenerationId) return false;
+    const epoch = authorityEpoch;
+    commandQueue = commandQueue.then(() => applyCommand(message, generationId, epoch)).catch((error) => {
+      const requestId = message?.requestId;
+      if (canonicalVoice(requestId)) {
+        result(requestId, false, error?.message || String(error), generationId);
+      } else {
+        emit(
+          { kind: "device-failure", error: error?.message || String(error) },
+          generationId,
+        );
+      }
+    });
+    return true;
+  };
+
+  return Object.freeze({
+    activateGeneration(generationId, source) {
+      authorityEpoch += 1;
+      for (const voice of [...voices.keys()]) {
+        discardVoice(voice);
+      }
+      commandQueue = Promise.resolve();
+      authorityGenerationId = generationId;
+      workletSource = typeof source === "string" ? source : null;
+      workletLoader = typeof source === "function" ? source : null;
+    },
+    announceCapability(generationId) {
+      if (generationId !== authorityGenerationId) return;
+      capability(
+        (typeof workletSource === "string" && workletSource.length > 0)
+          || typeof workletLoader === "function"
+          ? "locked"
+          : "unavailable",
+        generationId,
+      );
+    },
+    retireGeneration(generationId) {
+      if (generationId !== authorityGenerationId) return false;
+      authorityEpoch += 1;
+      for (const voice of [...voices.keys()]) {
+        discardVoice(voice);
+      }
+      commandQueue = Promise.resolve();
+      authorityGenerationId = null;
+      return true;
+    },
+    unlock,
+    enqueueCommand,
+    async setVisible(visible, generationId) {
+      if (generationId !== authorityGenerationId) return;
+      if (!context || context.state === "closed") return;
+      try {
+        if (!visible) await context.suspend();
+        else if (unlocked) await context.resume();
+      } catch (error) {
+        emit(
+          { kind: "device-failure", error: error?.message || String(error) },
+          generationId,
+        );
+      }
+    },
+  });
+};
+
+const launchPuzzleRuntimeGeneration = ({
+  broker,
+  runtimeGenerationId,
+  runtimeModuleSource,
+  rendererModuleSource,
+  wasmBytes,
+  runtimeDescriptor,
+  launchProfile,
+  workerArguments,
+  progressIdentityKey,
+  audioWorkletLoader,
+}) => {
+  if (
+    !broker
+    || typeof runtimeGenerationId !== "string"
+    || !/^[1-9][0-9]*$/.test(runtimeGenerationId)
+    || typeof runtimeModuleSource !== "string"
+    || !runtimeModuleSource
+    || !(wasmBytes instanceof ArrayBuffer)
+    || !runtimeDescriptor
+    || typeof runtimeDescriptor.startExport !== "string"
+    || !runtimeDescriptor.startExport
+    || typeof runtimeDescriptor.requiresRendererModule !== "boolean"
+    || !Array.isArray(runtimeDescriptor.workerArgumentNames)
+    || !workerArguments
+    || Object.getPrototypeOf(workerArguments) !== Object.prototype
+  ) {
+    throw new Error("Runtime generation composition is invalid.");
+  }
+  if (
+    (runtimeDescriptor.requiresRendererModule && (
+      typeof rendererModuleSource !== "string" || !rendererModuleSource
+    ))
+    || (!runtimeDescriptor.requiresRendererModule && rendererModuleSource !== null)
+  ) {
+    throw new Error("Runtime generation renderer capability is invalid.");
+  }
+  const argumentNames = runtimeDescriptor.workerArgumentNames;
+  if (
+    new Set(argumentNames).size !== argumentNames.length
+    || argumentNames.some((name) => typeof name !== "string" || !name)
+    || argumentNames.some((name) => !Object.hasOwn(workerArguments, name))
+  ) {
+    throw new Error("Runtime generation Worker arguments do not match its manifest.");
+  }
+  broker.loadRuntimeGeneration({
+    runtimeGenerationId,
+    runtimeModuleSource,
+    rendererModuleSource,
+    wasmBytes,
+    startExport: runtimeDescriptor.startExport,
+    startArguments: argumentNames.map((name) => workerArguments[name]),
+    launchProfile,
+    progressIdentityKey,
+    audioWorkletLoader,
+  });
+};
+
+const createPuzzleFrameBroker = async ({
+  accessibleLabel,
+  onMessage,
+}) => {
+  const nonce = crypto.randomUUID();
+  const iframe = document.createElement("iframe");
+  iframe.sandbox.add("allow-scripts", "allow-same-origin");
+  iframe.name = nonce;
+  iframe.title = accessibleLabel;
+  iframe.allow = "autoplay; fullscreen";
+  iframe.style.cssText = [
+    "display:block",
+    "width:100%",
+    "height:100%",
+    "border:0",
+    "background:transparent",
+  ].join(";");
+  iframe.srcdoc = "\u003c!doctype html\u003e\n\u003chtml\u003e\n  \u003chead\u003e\n    \u003cmeta charset=\"utf-8\"\u003e\n    \u003cmeta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval' blob:; worker-src blob:; child-src blob:; connect-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'\"\u003e\n    \u003cmeta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\u003e\n    \u003cstyle\u003ehtml,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent;color-scheme:light dark}body{outline:none}\u003c/style\u003e\n  \u003c/head\u003e\n  \u003cbody tabindex=\"0\"\u003e\n    \u003cscript\u003e(() =\u003e {\n  \"use strict\";\n\n  const bootstrapNonce = window.name;\n  window.name = \"\";\n  const trustedRoot = document.body.attachShadow({ mode: \"closed\" });\n  const retainedCanvases = [0, 1].map(() =\u003e {\n    const canvas = document.createElement(\"canvas\");\n    canvas.setAttribute(\"role\", \"img\");\n    canvas.setAttribute(\"aria-label\", \"Puzzle game\");\n    canvas.tabIndex = -1;\n    canvas.style.cssText = \"display:block;width:100%;height:100%;touch-action:none\";\n    return canvas;\n  });\n  const fatalSurface = document.createElement(\"pre\");\n  fatalSurface.setAttribute(\"role\", \"alert\");\n  fatalSurface.style.cssText = [\n    \"box-sizing:border-box\",\n    \"width:100%\",\n    \"height:100%\",\n    \"margin:0\",\n    \"padding:2rem\",\n    \"overflow:auto\",\n    \"white-space:pre-wrap\",\n    \"color:#fff\",\n    \"background:#280b0b\",\n    \"font:16px/1.5 system-ui,sans-serif\",\n  ].join(\";\");\n\n  let hostPort = null;\n  let worker = null;\n  let publicCanvas = null;\n  let publicPresentation = null;\n  let runtimeModuleUrl = null;\n  let rendererModuleUrl = null;\n  let workerUrl = null;\n  let runtimeGenerationId = \"\";\n  let bootstrapped = false;\n  let launchProfile = null;\n  const memoryProgressStorage = new Map();\n  let pendingPresentation = null;\n  let viewportGeneration = 0n;\n  let currentViewportMetrics = null;\n  let viewportMonitorActive = false;\n  let pendingRuntimeStart = null;\n\n  const U64_MAX = 18446744073709551615n;\n  const canonicalU64 = (value, positive) =\u003e {\n    if (\n      typeof value !== \"string\"\n      || value.length === 0\n      || value.length \u003e 20\n      || !(positive ? /^[1-9][0-9]*$/.test(value) : /^(0|[1-9][0-9]*)$/.test(value))\n    ) {\n      return false;\n    }\n    return BigInt(value) \u003c= U64_MAX;\n  };\n  const validExtent = (width, height) =\u003e (\n    Number.isSafeInteger(width)\n    \u0026\u0026 Number.isSafeInteger(height)\n    \u0026\u0026 width \u003e 0\n    \u0026\u0026 height \u003e 0\n  );\n  const validPresentationMetadata = (value) =\u003e (\n    value\n    \u0026\u0026 typeof value === \"object\"\n    \u0026\u0026 canonicalU64(value.request, true)\n    \u0026\u0026 canonicalU64(value.revision, false)\n    \u0026\u0026 canonicalU64(value.sample, true)\n    \u0026\u0026 canonicalU64(value.metricsGeneration, true)\n    \u0026\u0026 validExtent(value.width, value.height)\n  );\n  const validPresentation = (value) =\u003e (\n    validPresentationMetadata(value)\n    \u0026\u0026 currentViewportMetrics\n    \u0026\u0026 value.metricsGeneration === currentViewportMetrics.generation\n    \u0026\u0026 value.width === currentViewportMetrics.width\n    \u0026\u0026 value.height === currentViewportMetrics.height\n  );\n  const editorObservationCapabilities = new Map([\n    [\"PuzzleStudioPreviewRuntimeReady\", \"state\"],\n    [\"PuzzleStudioPreviewState\", \"state\"],\n    [\"PuzzleStudioPreviewCommit\", \"commit\"],\n    [\"PuzzleStudioPreviewDebugTrace\", \"trace\"],\n    [\"PuzzleStudioEditorAuthoringFrame\", \"authoring\"],\n    [\"PuzzleStudioEditorAuthoringAccepted\", \"authoring\"],\n    [\"PuzzleStudioEditorAuthoringSubmitted\", \"authoring\"],\n    [\"PuzzleStudioEditorAuthoringRendered\", \"authoring\"],\n    [\"PuzzleStudioEditorAuthoringApplied\", \"authoring\"],\n    [\"PuzzleStudioEditorAuthoringHit\", \"authoring\"],\n    [\"PuzzleStudioPreviewRuntimeError\", \"state\"],\n    [\"PuzzleStudioPreviewRuntimeDiagnostic\", \"state\"],\n  ]);\n  const validEditorObservation = (value) =\u003e (\n    value\n    \u0026\u0026 typeof value === \"object\"\n    \u0026\u0026 Object.getPrototypeOf(value) === Object.prototype\n    \u0026\u0026 launchProfile?.observations.includes(editorObservationCapabilities.get(value.type))\n  );\n  const validLaunchProfile = (value) =\u003e {\n    if (!value || typeof value !== \"object\" || Object.getPrototypeOf(value) !== Object.prototype) {\n      return false;\n    }\n    const keys = Object.keys(value).sort();\n    if (keys.join(\",\") !== \"audio,input,interventions,observations,progress,runtime\") {\n      return false;\n    }\n    return typeof value.runtime === \"string\"\n      \u0026\u0026 value.runtime.length \u003e 0\n      \u0026\u0026 (value.input === \"runtime\" || value.input === \"editor\")\n      \u0026\u0026 (value.progress === \"none\" || value.progress === \"memory\" || value.progress === \"persistent\")\n      \u0026\u0026 (value.audio === \"none\" || value.audio === \"onDemand\")\n      \u0026\u0026 Array.isArray(value.observations)\n      \u0026\u0026 value.observations.every((entry) =\u003e typeof entry === \"string\" \u0026\u0026 entry.length \u003e 0)\n      \u0026\u0026 new Set(value.observations).size === value.observations.length\n      \u0026\u0026 Array.isArray(value.interventions)\n      \u0026\u0026 value.interventions.every((entry) =\u003e typeof entry === \"string\" \u0026\u0026 entry.length \u003e 0)\n      \u0026\u0026 new Set(value.interventions).size === value.interventions.length;\n  };\n  const postHost = (message) =\u003e {\n    try {\n      hostPort?.postMessage(message);\n    } catch (_error) {\n      // Host observation is telemetry after the broker owns its surface.\n    }\n  };\n  const postRuntimeHost = (message, generationId = runtimeGenerationId) =\u003e {\n    postHost({ ...message, runtimeGenerationId: generationId });\n  };\n  const showFatalBeforeFirstPublication = (message, generationId = runtimeGenerationId) =\u003e {\n    postRuntimeHost(\n      { kind: \"runtime-fatal\", message: String(message || \"Runtime failed\") },\n      generationId,\n    );\n    if (publicCanvas) {\n      return false;\n    }\n    fatalSurface.textContent = String(message || \"Runtime failed\");\n    trustedRoot.replaceChildren(fatalSurface);\n    return true;\n  };\n  const viewportMetrics = () =\u003e {\n    const cssWidth = Math.max(1, document.documentElement.clientWidth || 1);\n    const cssHeight = Math.max(1, document.documentElement.clientHeight || 1);\n    const scaleFactor = Number.isFinite(devicePixelRatio) \u0026\u0026 devicePixelRatio \u003e 0\n      ? devicePixelRatio\n      : 1;\n    return {\n      cssWidth,\n      cssHeight,\n      scaleFactor,\n      width: Math.max(1, Math.round(cssWidth * scaleFactor)),\n      height: Math.max(1, Math.round(cssHeight * scaleFactor)),\n    };\n  };\n  const postWorker = (message, transfer = []) =\u003e {\n    if (!worker) {\n      return false;\n    }\n    try {\n      worker.postMessage(message, transfer);\n      return true;\n    } catch (_error) {\n      return false;\n    }\n  };\n  const handleProgressStorageRequest = (message, storage) =\u003e {\n    const requestId = message.requestId;\n    try {\n      if (!Number.isInteger(requestId) || requestId \u003c= 0) {\n        throw new Error(\"progress storage request identity is invalid\");\n      }\n      if (typeof message.key !== \"string\" || !message.key) {\n        throw new Error(\"progress storage key is invalid\");\n      }\n      if (!storage || message.key !== storage.key) {\n        throw new Error(\"renderer requested an unavailable progress storage capability\");\n      }\n      const persistent = storage.mode === \"persistent\";\n      let value = null;\n      if (message.operation === \"read\") {\n        value = persistent\n          ? localStorage.getItem(message.key)\n          : memoryProgressStorage.get(message.key) ?? null;\n      } else if (message.operation === \"write\" \u0026\u0026 typeof message.value === \"string\") {\n        if (persistent) localStorage.setItem(message.key, message.value);\n        else memoryProgressStorage.set(message.key, message.value);\n      } else if (message.operation === \"delete\") {\n        if (persistent) localStorage.removeItem(message.key);\n        else memoryProgressStorage.delete(message.key);\n      } else {\n        throw new Error(\"progress storage operation is invalid\");\n      }\n      postWorker({ kind: \"storage-result\", requestId, ok: true, value });\n    } catch (error) {\n      postWorker({\n        kind: \"storage-result\",\n        requestId,\n        ok: false,\n        error: error?.message || String(error),\n      });\n    }\n  };\n  const emitResize = () =\u003e {\n    const observedMetrics = viewportMetrics();\n    if (\n      currentViewportMetrics\n      \u0026\u0026 observedMetrics.cssWidth === currentViewportMetrics.cssWidth\n      \u0026\u0026 observedMetrics.cssHeight === currentViewportMetrics.cssHeight\n      \u0026\u0026 observedMetrics.scaleFactor === currentViewportMetrics.scaleFactor\n      \u0026\u0026 observedMetrics.width === currentViewportMetrics.width\n      \u0026\u0026 observedMetrics.height === currentViewportMetrics.height\n    ) {\n      return false;\n    }\n    retirePendingPresentation(\n      \"viewport-metrics-changed-before-bitmap-submit\",\n      \"superseded\",\n    );\n    if (viewportGeneration \u003e= U64_MAX) {\n      failRendererWorker(\n        \"viewport-generation-exhausted\",\n        \"Browser viewport generation exhausted; renderer authority was revoked\",\n      );\n      return false;\n    }\n    viewportGeneration += 1n;\n    currentViewportMetrics = Object.freeze({\n      ...observedMetrics,\n      generation: viewportGeneration.toString(),\n    });\n    postWorker({ kind: \"host-resize\", metrics: currentViewportMetrics });\n    return true;\n  };\n  const retireCandidate = (candidatePort, request, reason, disposition = \"rejected\") =\u003e {\n    try {\n      candidatePort.postMessage({\n        kind: \"presentation-rejected\",\n        request,\n        disposition,\n        reason,\n      });\n    } catch (_error) {\n      // A closed peer already observes rejection by losing the one-shot port.\n    }\n    candidatePort.close();\n    if (\n      pendingPresentation?.request === request\n      \u0026\u0026 pendingPresentation?.port === candidatePort\n    ) {\n      pendingPresentation = null;\n    }\n  };\n  const retirePendingPresentation = (reason, disposition = \"rejected\") =\u003e {\n    const pending = pendingPresentation;\n    if (pending) {\n      retireCandidate(pending.port, pending.request, reason, disposition);\n    }\n  };\n  const failRendererWorker = (reason, message, generationId = runtimeGenerationId) =\u003e {\n    if (generationId !== runtimeGenerationId) {\n      return;\n    }\n    retirePendingPresentation(reason);\n    try {\n      worker?.terminate();\n    } catch (_error) {\n      // Termination is best effort after authority has already been revoked.\n    }\n    viewportMonitorActive = false;\n    if (rendererModuleUrl) { URL.revokeObjectURL(rendererModuleUrl); rendererModuleUrl = null; }\n    if (runtimeModuleUrl) {\n      URL.revokeObjectURL(runtimeModuleUrl);\n      runtimeModuleUrl = null;\n    }\n    if (workerUrl) {\n      URL.revokeObjectURL(workerUrl);\n      workerUrl = null;\n    }\n    showFatalBeforeFirstPublication(message, generationId);\n  };\n  const reservePresentation = (presentation) =\u003e {\n    if (\n      !validPresentationMetadata(presentation)\n      || pendingPresentation\n      || (\n        publicPresentation\n        \u0026\u0026 BigInt(presentation.request) \u003c= BigInt(publicPresentation.request)\n      )\n    ) {\n      postWorker({\n        kind: \"presentation-reservation-rejected\",\n        request: presentation?.request ?? \"\",\n        reason: \"invalid-or-duplicate-request\",\n        disposition: \"rejected\",\n      });\n      return;\n    }\n    if (!validPresentation(presentation)) {\n      const superseded = currentViewportMetrics\n        \u0026\u0026 BigInt(presentation.metricsGeneration) \u003c BigInt(currentViewportMetrics.generation);\n      postWorker({\n        kind: \"presentation-reservation-rejected\",\n        request: presentation.request,\n        disposition: superseded ? \"superseded\" : \"rejected\",\n        reason: superseded ? \"viewport-metrics-changed-before-reservation\" : \"presentation-extent-does-not-match-viewport\",\n      });\n      return;\n    }\n    const channel = new MessageChannel();\n    const candidatePort = channel.port1;\n    pendingPresentation = { request: presentation.request, port: candidatePort };\n    let consumed = false;\n    candidatePort.onmessage = (event) =\u003e {\n      if (consumed) {\n        event.data?.bitmap?.close?.();\n        return;\n      }\n      const data = event.data || {};\n      if (\n        data.kind === \"cancel-presentation\"\n        \u0026\u0026 data.request === presentation.request\n      ) {\n        consumed = true;\n        retireCandidate(\n          candidatePort,\n          presentation.request,\n          \"renderer-cancelled-before-bitmap-submit\",\n        );\n        return;\n      }\n      consumed = true;\n      if (\n        data.kind !== \"present-image-bitmap\"\n        || !(data.bitmap instanceof ImageBitmap)\n        || data.bitmap.width !== presentation.width\n        || data.bitmap.height !== presentation.height\n      ) {\n        data.bitmap?.close?.();\n        retireCandidate(\n          candidatePort,\n          presentation.request,\n          \"bitmap-does-not-match-bound-extent\",\n        );\n        return;\n      }\n      const replacement = retainedCanvases.find((canvas) =\u003e canvas !== publicCanvas);\n      const nextPresentation = Object.freeze({ ...presentation });\n      try {\n        replacement.width = presentation.width;\n        replacement.height = presentation.height;\n        const context = replacement.getContext(\"2d\", { alpha: true });\n        if (!context) {\n          throw new Error(\"inactive retained canvas has no 2D context\");\n        }\n        context.drawImage(data.bitmap, 0, 0);\n        data.bitmap.close();\n        trustedRoot.replaceChildren(replacement);\n      } catch (error) {\n        data.bitmap.close?.();\n        retireCandidate(\n          candidatePort,\n          presentation.request,\n          error?.message || String(error),\n        );\n        return;\n      }\n      publicCanvas = replacement;\n      publicPresentation = nextPresentation;\n      try {\n        candidatePort.postMessage({\n          kind: \"presentation-exposed\",\n          ...publicPresentation,\n        });\n      } catch (_error) {\n        // The root replacement is irreversible; acknowledgement loss is liveness only.\n      }\n      postRuntimeHost({ kind: \"presentation-exposed\", ...publicPresentation });\n      candidatePort.close();\n      if (\n        pendingPresentation?.request === presentation.request\n        \u0026\u0026 pendingPresentation?.port === candidatePort\n      ) {\n        pendingPresentation = null;\n      }\n    };\n    candidatePort.onmessageerror = () =\u003e {\n      if (!consumed) {\n        consumed = true;\n        retireCandidate(candidatePort, presentation.request, \"bitmap-message-error\");\n      }\n    };\n    candidatePort.start();\n    if (!postWorker(\n      { kind: \"presentation-capability\", presentation, port: channel.port2 },\n      [channel.port2],\n    )) {\n      retireCandidate(\n        candidatePort,\n        presentation.request,\n        \"renderer-worker-channel-unavailable\",\n      );\n    }\n  };\n  const forwardInput = (kind, event, fields = {}) =\u003e {\n    const runtimeOwnsInput = launchProfile?.input === \"runtime\";\n    if (runtimeOwnsInput \u0026\u0026 event?.cancelable) {\n      event.preventDefault();\n    }\n    if (!publicPresentation) {\n      return;\n    }\n    // A reserved replacement revokes the old bitmap's semantic input\n    // capability. Consume the browser event, but never send an action carrying\n    // the old presentation identity or replay it against the replacement.\n    if (runtimeOwnsInput \u0026\u0026 pendingPresentation) {\n      return;\n    }\n    const observedMetrics = viewportMetrics();\n    if (\n      !currentViewportMetrics\n      || observedMetrics.cssWidth !== currentViewportMetrics.cssWidth\n      || observedMetrics.cssHeight !== currentViewportMetrics.cssHeight\n      || observedMetrics.scaleFactor !== currentViewportMetrics.scaleFactor\n      || observedMetrics.width !== currentViewportMetrics.width\n      || observedMetrics.height !== currentViewportMetrics.height\n    ) {\n      emitResize();\n      return;\n    }\n    if (!validPresentation(publicPresentation)) {\n      return;\n    }\n    if (launchProfile.input === \"editor\" \u0026\u0026 kind.startsWith(\"pointer-\")) {\n      postHost({\n        kind: \"editor-pointer\",\n        gesture: kind.slice(\"pointer-\".length),\n        presentation: publicPresentation,\n        metrics: currentViewportMetrics,\n        fields,\n      });\n      if (event?.cancelable) {\n        event.preventDefault();\n      }\n      return;\n    }\n    if (launchProfile.input === \"editor\") {\n      return;\n    }\n    postWorker({\n      kind: \"host-input\",\n      inputKind: kind,\n      presentation: publicPresentation,\n      metrics: currentViewportMetrics,\n      fields,\n    });\n  };\n  const pointerFields = (event) =\u003e {\n    const rect = document.body.getBoundingClientRect();\n    return {\n      pointerId: String(event.pointerId),\n      pointerType: String(event.pointerType || \"mouse\"),\n      isPrimary: Boolean(event.isPrimary),\n      button: Number(event.button),\n      buttons: Number(event.buttons),\n      xCss: Number(event.clientX) - rect.left,\n      yCss: Number(event.clientY) - rect.top,\n      movementX: Number(event.movementX || 0),\n      movementY: Number(event.movementY || 0),\n      pressure: Number(event.pressure || 0),\n      altKey: Boolean(event.altKey),\n      ctrlKey: Boolean(event.ctrlKey),\n      metaKey: Boolean(event.metaKey),\n      shiftKey: Boolean(event.shiftKey),\n    };\n  };\n  for (const [eventName, inputKind] of [\n    [\"pointermove\", \"pointer-move\"],\n    [\"pointerdown\", \"pointer-press\"],\n    [\"pointerup\", \"pointer-release\"],\n    [\"pointercancel\", \"pointer-leave\"],\n    [\"pointerleave\", \"pointer-leave\"],\n  ]) {\n    document.body.addEventListener(eventName, (event) =\u003e {\n      if (eventName === \"pointerdown\") {\n        document.body.focus({ preventScroll: true });\n        postHost({ kind: \"audio-unlock-gesture\" });\n        try {\n          document.body.setPointerCapture(event.pointerId);\n        } catch (_error) {\n          // Capture is unavailable for some synthetic or already-ended pointers.\n        }\n      } else if (eventName === \"pointerup\" || eventName === \"pointercancel\") {\n        try {\n          document.body.releasePointerCapture(event.pointerId);\n        } catch (_error) {\n          // The browser may release capture before delivering the terminal event.\n        }\n      }\n      let forwardedKind = inputKind;\n      if (launchProfile?.input !== \"editor\" \u0026\u0026 event.pointerType === \"touch\") {\n        forwardedKind = ({\n          pointerdown: \"touch-started\",\n          pointermove: \"touch-moved\",\n          pointerup: \"touch-ended\",\n          pointercancel: \"touch-canceled\",\n        })[eventName];\n        if (!forwardedKind) {\n          return;\n        }\n      }\n      forwardInput(forwardedKind, event, pointerFields(event));\n    });\n  }\n  document.body.addEventListener(\"wheel\", (event) =\u003e {\n    const pageWidth = Math.max(1, document.documentElement.clientWidth || 1);\n    const pageHeight = Math.max(1, document.documentElement.clientHeight || 1);\n    const pageUnit = event.deltaMode === WheelEvent.DOM_DELTA_PAGE;\n    forwardInput(\"wheel\", event, {\n      unit: event.deltaMode === WheelEvent.DOM_DELTA_LINE ? \"line\" : \"pixel\",\n      deltaX: Number(event.deltaX) * (pageUnit ? pageWidth : 1),\n      deltaY: Number(event.deltaY) * (pageUnit ? pageHeight : 1),\n      altKey: Boolean(event.altKey),\n      ctrlKey: Boolean(event.ctrlKey),\n      metaKey: Boolean(event.metaKey),\n      shiftKey: Boolean(event.shiftKey),\n    });\n  }, { passive: false });\n  document.body.addEventListener(\"contextmenu\", (event) =\u003e event.preventDefault());\n  for (const eventName of [\"keydown\", \"keyup\"]) {\n    document.addEventListener(eventName, (event) =\u003e {\n      if (eventName === \"keydown\") {\n        postHost({ kind: \"audio-unlock-gesture\" });\n      }\n      const key = event.key?.length === 1 ? event.key.toLowerCase() : event.key;\n      const saveModifier = (event.metaKey \u0026\u0026 !event.ctrlKey)\n        || (event.ctrlKey \u0026\u0026 !event.metaKey);\n      if (eventName === \"keydown\" \u0026\u0026 !event.altKey \u0026\u0026 saveModifier \u0026\u0026 key === \"s\") {\n        postHost({ kind: \"editor-save-shortcut\" });\n        event.preventDefault();\n        event.stopImmediatePropagation();\n        return;\n      }\n      forwardInput(eventName, event, {\n        key: String(event.key || \"\"),\n        code: String(event.code || \"\"),\n        repeat: Boolean(event.repeat),\n        altKey: Boolean(event.altKey),\n        ctrlKey: Boolean(event.ctrlKey),\n        metaKey: Boolean(event.metaKey),\n        shiftKey: Boolean(event.shiftKey),\n      });\n    }, true);\n  }\n  document.addEventListener(\"visibilitychange\", () =\u003e {\n    postWorker({ kind: \"host-visibility\", state: document.visibilityState });\n    postHost({ kind: \"audio-visibility\", state: document.visibilityState });\n  });\n  window.addEventListener(\"focus\", () =\u003e {\n    postWorker({ kind: \"host-focus\", focused: true });\n  });\n  window.addEventListener(\"blur\", () =\u003e {\n    postWorker({ kind: \"host-focus\", focused: false });\n  });\n  window.addEventListener(\"resize\", emitResize);\n\n  const workerBootstrap = `\n    self.onmessage = async (event) =\u003e {\n      const data = event.data || {};\n      if (data.kind !== \"start-runtime-worker\") return;\n      self.onmessage = null;\n      let canvas = data.canvas;\n      try {\n        if (typeof document !== \"undefined\" || typeof window !== \"undefined\") {\n          throw new Error(\"renderer worker unexpectedly has DOM authority\");\n        }\n        const runtime = await import(data.runtimeModuleUrl);\n        await runtime.default({ module_or_path: data.wasmBytes });\n        const start = runtime[data.startExport];\n        if (typeof start !== \"function\") {\n          throw new Error(\\`runtime WASM is missing \\${data.startExport}\\`);\n        }\n        const renderer = await import(data.rendererModuleUrl);\n        await start(canvas, data.bootstrap, ...(data.startArguments || []), renderer);\n        canvas = null;\n      } catch (error) {\n        self.postMessage({\n          kind: \"runtime-fatal\",\n          message: error?.stack || error?.message || String(error),\n        });\n      }\n    };\n  `;\n\n  const launchRuntime = (data) =\u003e {\n    if (\n      worker\n      || typeof data.rendererModuleSource !== \"string\"\n      || !data.rendererModuleSource\n      || typeof data.runtimeModuleSource !== \"string\"\n      || !(data.wasmBytes instanceof ArrayBuffer)\n      || typeof data.startExport !== \"string\"\n      || !Array.isArray(data.startArguments)\n    ) {\n      showFatalBeforeFirstPublication(\"Invalid or duplicate renderer worker bootstrap\");\n      return;\n    }\n    if (!validLaunchProfile(data.launchProfile)) {\n      showFatalBeforeFirstPublication(\"Invalid runtime launch profile\");\n      return;\n    }\n    launchProfile = Object.freeze({\n      ...data.launchProfile,\n      observations: Object.freeze([...data.launchProfile.observations]),\n      interventions: Object.freeze([...data.launchProfile.interventions]),\n    });\n    const progressStorage = launchProfile.progress === \"none\"\n      ? null\n      : { mode: launchProfile.progress, key: data.progressIdentityKey };\n    if (progressStorage !== null \u0026\u0026 (\n      typeof progressStorage.key !== \"string\" || !progressStorage.key\n    )) {\n      showFatalBeforeFirstPublication(\"Runtime launch profile requires a progress storage key\");\n      return;\n    }\n    let savedProgress = null;\n    try {\n      if (progressStorage) {\n        savedProgress = progressStorage.mode === \"persistent\"\n          ? localStorage.getItem(progressStorage.key)\n          : memoryProgressStorage.get(progressStorage.key) ?? null;\n      }\n    } catch (error) {\n      showFatalBeforeFirstPublication(\n        `Progress storage bootstrap failed: ${error?.message || String(error)}`,\n      );\n      return;\n    }\n    emitResize();\n    const metrics = currentViewportMetrics;\n    const canvas = new OffscreenCanvas(metrics.width, metrics.height);\n    runtimeModuleUrl = URL.createObjectURL(new Blob(\n      [data.runtimeModuleSource],\n      { type: \"text/javascript\" },\n    ));\n    rendererModuleUrl = URL.createObjectURL(new Blob([data.rendererModuleSource], { type: \"text/javascript\" }));\n    workerUrl = URL.createObjectURL(new Blob([workerBootstrap], { type: \"text/javascript\" }));\n    const generationId = data.runtimeGenerationId;\n    const generationWorker = new Worker(workerUrl, { type: \"module\" });\n    worker = generationWorker;\n    generationWorker.onmessage = (event) =\u003e {\n      if (worker !== generationWorker || runtimeGenerationId !== generationId) {\n        event.data?.bitmap?.close?.();\n        return;\n      }\n      const message = event.data || {};\n      if (message.kind === \"storage-request\") {\n        handleProgressStorageRequest(message, progressStorage);\n      } else if (message.kind === \"reserve-presentation\") {\n        reservePresentation(message.presentation);\n      } else if (message.kind === \"runtime-fatal\") {\n        failRendererWorker(\n          \"renderer-worker-reported-fatal\",\n          message.message || \"Renderer worker reported a fatal error\",\n          generationId,\n        );\n      } else if (message.kind === \"runtime-diagnostic\") {\n        postRuntimeHost(\n          { kind: \"runtime-diagnostic\", message: String(message.message || \"\") },\n          generationId,\n        );\n      } else if (message.kind === \"runtime-ready\") {\n        if (rendererModuleUrl) { URL.revokeObjectURL(rendererModuleUrl); rendererModuleUrl = null; }\n        URL.revokeObjectURL(runtimeModuleUrl);\n        runtimeModuleUrl = null;\n        if (workerUrl) {\n          URL.revokeObjectURL(workerUrl);\n          workerUrl = null;\n        }\n        if (!viewportMonitorActive) {\n          viewportMonitorActive = true;\n          // The iframe viewport can change without dispatching a resize event\n          // inside the child. Sample it at the same display-frame boundary as\n          // publication and emit only metric changes.\n          const monitorViewport = () =\u003e {\n            if (!viewportMonitorActive) return;\n            emitResize();\n            requestAnimationFrame(monitorViewport);\n          };\n          requestAnimationFrame(monitorViewport);\n        }\n        postRuntimeHost({ kind: \"runtime-ready\" }, generationId);\n      } else if (message.kind === \"runtime-observation\" \u0026\u0026 message.observation) {\n        if (validEditorObservation(message.observation)) {\n          postRuntimeHost(message, generationId);\n        } else {\n          postRuntimeHost({\n            kind: \"runtime-diagnostic\",\n            message: \"renderer worker attempted a forbidden editor control observation\",\n          }, generationId);\n        }\n      } else if (\n        message.kind === \"runtime-observation\"\n        || message.kind === \"runtime-progress\"\n        || message.kind === \"storage-request\"\n        || message.kind === \"audio-command\"\n      ) {\n        postRuntimeHost(message, generationId);\n      }\n    };\n    generationWorker.onmessageerror = () =\u003e {\n      failRendererWorker(\n        \"renderer-worker-message-error\",\n        \"Renderer worker sent an invalid host message\",\n        generationId,\n      );\n    };\n    generationWorker.onerror = (event) =\u003e {\n      failRendererWorker(\n        \"renderer-worker-crashed\",\n        event.error?.stack\n          || event.message\n          || `Renderer worker failed (${event.filename || \"unknown source\"}:${event.lineno || 0}:${event.colno || 0})`,\n        generationId,\n      );\n      event.preventDefault();\n    };\n    generationWorker.postMessage({\n      kind: \"start-runtime-worker\",\n      runtimeModuleUrl,\n      rendererModuleUrl,\n      wasmBytes: data.wasmBytes,\n      startExport: data.startExport,\n      startArguments: data.startArguments,\n      bootstrap: {\n        metrics: currentViewportMetrics,\n        savedProgress,\n        launchProfile,\n      },\n      canvas,\n    }, [data.wasmBytes, canvas]);\n  };\n\n  const stopRuntimeGeneration = (generationId) =\u003e {\n    if (generationId \u0026\u0026 generationId !== runtimeGenerationId) {\n      return false;\n    }\n    retirePendingPresentation(\"runtime-generation-retired\", \"superseded\");\n    try {\n      worker?.terminate();\n    } catch (_error) {\n      // The generation is already revoked.\n    }\n    worker = null;\n    publicPresentation = null;\n    viewportMonitorActive = false;\n    pendingRuntimeStart = null;\n    if (rendererModuleUrl) { URL.revokeObjectURL(rendererModuleUrl); rendererModuleUrl = null; }\n    if (runtimeModuleUrl) {\n      URL.revokeObjectURL(runtimeModuleUrl);\n      runtimeModuleUrl = null;\n    }\n    if (workerUrl) {\n      URL.revokeObjectURL(workerUrl);\n      workerUrl = null;\n    }\n    return true;\n  };\n\n  const loadRuntimeGeneration = (data) =\u003e {\n    if (!canonicalU64(data.runtimeGenerationId, true)) {\n      showFatalBeforeFirstPublication(\n        \"Invalid renderer runtime generation identity\",\n        String(data.runtimeGenerationId || \"\"),\n      );\n      return;\n    }\n    stopRuntimeGeneration(\"\");\n    runtimeGenerationId = data.runtimeGenerationId;\n    const runtimeStart = Object.freeze({ generationId: data.runtimeGenerationId });\n    pendingRuntimeStart = runtimeStart;\n    const waitForSizedViewport = () =\u003e {\n      if (pendingRuntimeStart !== runtimeStart || runtimeGenerationId !== runtimeStart.generationId) {\n        return;\n      }\n      const metrics = viewportMetrics();\n      if (metrics.width \u003e 1 \u0026\u0026 metrics.height \u003e 1) {\n        pendingRuntimeStart = null;\n        launchRuntime(data);\n        return;\n      }\n      requestAnimationFrame(waitForSizedViewport);\n    };\n    requestAnimationFrame(waitForSizedViewport);\n  };\n\n  const handleHostMessage = (event) =\u003e {\n    const data = event.data || {};\n    if (data.kind === \"load-runtime-generation\") {\n      loadRuntimeGeneration(data);\n    } else if (data.kind === \"stop-runtime-generation\") {\n      stopRuntimeGeneration(String(data.runtimeGenerationId || \"\"));\n    } else if (data.kind === \"host-command\" \u0026\u0026 data.command) {\n      postWorker(data.command);\n    } else if (data.kind === \"audio-result\" || data.kind === \"audio-event\") {\n      postWorker(data);\n    } else if (data.kind === \"host-fatal\") {\n      showFatalBeforeFirstPublication(data.message, String(data.runtimeGenerationId || \"\"));\n    }\n  };\n\n  const acceptBootstrap = (event) =\u003e {\n    if (\n      bootstrapped\n      || event.source !== window.parent\n      || event.data?.kind !== \"PuzzleFrameBrokerBootstrap\"\n      || event.data?.nonce !== bootstrapNonce\n      || event.ports.length !== 1\n    ) {\n      return;\n    }\n    bootstrapped = true;\n    window.removeEventListener(\"message\", acceptBootstrap);\n    hostPort = event.ports[0];\n    hostPort.onmessage = handleHostMessage;\n    hostPort.start();\n    postHost({ kind: \"broker-ready\", metrics: viewportMetrics() });\n  };\n  window.addEventListener(\"message\", acceptBootstrap);\n})();\n\n\u003c/script\u003e\n  \u003c/body\u003e\n\u003c/html\u003e";
+  const channel = new MessageChannel();
+  const port = channel.port1;
+  const pendingAudioAuthorities = [];
+  let activeAudioGenerationId = null;
+  let audioAuthorityInitialized = false;
+  const audio = createPuzzleAudioHost((message, generationId) => port.postMessage({
+    ...message,
+    runtimeGenerationId: generationId,
+  }));
+  const discardPendingAudioAuthority = (generationId) => {
+    const index = pendingAudioAuthorities.findIndex(
+      (authority) => authority.runtimeGenerationId === generationId,
+    );
+    if (index >= 0) pendingAudioAuthorities.splice(index, 1);
+  };
+  let readyResolve;
+  let readyReject;
+  const ready = new Promise((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  const timeout = window.setTimeout(() => {
+    readyReject(new Error("PuzzleStudio frame broker did not authenticate"));
+  }, 15000);
+  port.onmessage = (event) => {
+    const message = event.data || {};
+    if (message.kind === "broker-ready") {
+      window.clearTimeout(timeout);
+      readyResolve(message);
+      return;
+    }
+    if (message.kind === "runtime-generation-boundary") {
+      const authority = pendingAudioAuthorities[0];
+      if (authority?.runtimeGenerationId === message.runtimeGenerationId) {
+        pendingAudioAuthorities.shift();
+        audio.activateGeneration(authority.runtimeGenerationId, authority.workletSource);
+        activeAudioGenerationId = authority.runtimeGenerationId;
+      }
+      return;
+    }
+    if (message.kind === "runtime-fatal") {
+      discardPendingAudioAuthority(message.runtimeGenerationId);
+      if (message.runtimeGenerationId === activeAudioGenerationId) {
+        audio.retireGeneration(activeAudioGenerationId);
+        activeAudioGenerationId = null;
+      }
+    }
+    if (message.kind === "audio-command") {
+      if (message.runtimeGenerationId === activeAudioGenerationId) {
+        audio.enqueueCommand(message, activeAudioGenerationId);
+      }
+      return;
+    }
+    if (message.kind === "audio-unlock-gesture") {
+      if (message.runtimeGenerationId === activeAudioGenerationId) {
+        void audio.unlock(activeAudioGenerationId);
+      }
+      return;
+    }
+    if (message.kind === "audio-visibility") {
+      if (message.runtimeGenerationId === activeAudioGenerationId) {
+        void audio.setVisible(message.state === "visible", activeAudioGenerationId);
+      }
+      return;
+    }
+    if (message.kind === "runtime-ready") {
+      audio.announceCapability(message.runtimeGenerationId);
+    }
+    onMessage?.(message);
+  };
+  port.onmessageerror = () => {
+    readyReject(new Error("PuzzleStudio frame broker returned an invalid message"));
+  };
+  port.start();
+  const loaded = new Promise((resolve, reject) => {
+    iframe.addEventListener("load", resolve, { once: true });
+    iframe.addEventListener("error", () => reject(new Error("Frame broker iframe failed")), {
+      once: true,
+    });
+  });
+  document.body.replaceChildren(iframe);
+  await loaded;
+  iframe.contentWindow.postMessage({
+    kind: "PuzzleFrameBrokerBootstrap",
+    nonce,
+  }, "*", [channel.port2]);
+  await ready;
+  return Object.freeze({
+    iframe,
+    loadRuntimeGeneration({
+      runtimeGenerationId,
+      runtimeModuleSource,
+      rendererModuleSource,
+      wasmBytes,
+      startExport,
+      startArguments,
+      launchProfile,
+      progressIdentityKey,
+      audioWorkletSource,
+      audioWorkletLoader,
+    }) {
+      const audioAuthority = Object.freeze({
+        runtimeGenerationId,
+        workletSource: audioWorkletLoader || audioWorkletSource,
+      });
+      if (!audioAuthorityInitialized) {
+        audioAuthorityInitialized = true;
+        activeAudioGenerationId = runtimeGenerationId;
+        audio.activateGeneration(runtimeGenerationId, audioAuthority.workletSource);
+      } else {
+        pendingAudioAuthorities.push(audioAuthority);
+      }
+      port.postMessage({
+        kind: "load-runtime-generation",
+        runtimeGenerationId,
+        runtimeModuleSource,
+        rendererModuleSource,
+        wasmBytes,
+        startExport,
+        startArguments,
+        launchProfile,
+        progressIdentityKey,
+      }, [wasmBytes]);
+    },
+    stopRuntimeGeneration(runtimeGenerationId) {
+      discardPendingAudioAuthority(runtimeGenerationId);
+      if (runtimeGenerationId === activeAudioGenerationId) {
+        audio.retireGeneration(runtimeGenerationId);
+        activeAudioGenerationId = null;
+      }
+      port.postMessage({ kind: "stop-runtime-generation", runtimeGenerationId });
+    },
+    sendCommand(command) {
+      port.postMessage({ kind: "host-command", command });
+    },
+    sendAudioResult(result) {
+      port.postMessage({
+        kind: "audio-result",
+        runtimeGenerationId: activeAudioGenerationId,
+        ...result,
+      });
+    },
+    sendAudioEvent(event) {
+      port.postMessage({
+        kind: "audio-event",
+        runtimeGenerationId: activeAudioGenerationId,
+        ...event,
+      });
+    },
+    reportFatal(message, runtimeGenerationId = "") {
+      port.postMessage({
+        kind: "host-fatal",
+        message: String(message),
+        runtimeGenerationId: String(runtimeGenerationId),
+      });
+    },
+  });
+};
+
+      (async () => {
+        const launchProfiles = Object.freeze({"editorAuthoring":{"audio":"none","input":"editor","interventions":["modelState","pointer"],"observations":["presentation","authoring"],"progress":"none","runtime":"visualAuthoring"},"visualAuthoring":{"audio":"none","input":"editor","interventions":["modelState","pointer"],"observations":["presentation","authoring"],"progress":"none","runtime":"visualAuthoring"}});
+        const frameBootstrap = (() => {
+          try {
+            const value = JSON.parse(window.name);
+            if (
+              !value
+              || typeof value !== "object"
+              || Array.isArray(value)
+              || Object.keys(value).sort().join(",") !== "launchProfile,surfaceId"
+              || typeof value.surfaceId !== "string"
+              || !value.surfaceId
+              || typeof value.launchProfile !== "string"
+              || !Object.hasOwn(launchProfiles, value.launchProfile)
+            ) {
+              return null;
+            }
+            return Object.freeze({
+              surfaceId: value.surfaceId,
+              launchProfile: value.launchProfile,
+            });
+          } catch (_error) {
+            return null;
+          }
+        })();
+        window.name = "";
+        const surfaceId = frameBootstrap?.surfaceId || "";
+        const launchProfile = frameBootstrap
+          ? launchProfiles[frameBootstrap.launchProfile]
+          : null;
+        const parentChannel = (() => {
+          if (window.parent === window) {
+            return null;
+          }
+          if (!document.referrer) {
+            return { origin: null, targetOrigin: "*" };
+          }
+          try {
+            const origin = new URL(document.referrer).origin;
+            return {
+              origin: origin === "null" ? null : origin,
+              targetOrigin: origin === "null" ? "*" : origin,
+            };
+          } catch (_error) {
+            return null;
+          }
+        })();
+        if (!parentChannel) {
+          throw new Error("Editor preview requires an authenticated parent.");
+        }
+        const acceptsParentMessage = (event) => (
+          event.source === window.parent
+          && (parentChannel.origin === null || event.origin === parentChannel.origin)
+        );
+        const postParent = (message) => {
+          window.parent.postMessage(message, parentChannel.targetOrigin);
+        };
+        if (!surfaceId || !launchProfile) {
+          const message = "Editor preview requires an explicit surface identity and launch profile.";
+          postParent({
+            type: "PuzzleStudioPreviewRuntimeError",
+            label: "runtime initialization failed",
+            message,
+          });
+          throw new Error(message);
+        }
+        const U64_MAX_IDENTITY = 18446744073709551615n;
+        let nextAssetRequest = 0n;
+        const allocateAssetRequest = () => {
+          if (nextAssetRequest >= U64_MAX_IDENTITY) {
+            throw new Error("Editor runtime asset request identity is exhausted.");
+          }
+          nextAssetRequest += 1n;
+          return nextAssetRequest.toString();
+        };
+        const requestAsset = (kind, playerArtifact) => new Promise((resolve, reject) => {
+          const requestId = allocateAssetRequest();
+          const timeout = window.setTimeout(() => {
+            window.removeEventListener("message", onResponse);
+            reject(new Error(`Timed out waiting for editor runtime asset: ${kind}`));
+          }, 15000);
+          const onResponse = (event) => {
+            if (!acceptsParentMessage(event)) {
+              return;
+            }
+            const data = event.data || {};
+            if (data.type !== "PuzzleStudioRuntimeAssetResponse" || data.requestId !== requestId) {
+              return;
+            }
+            window.clearTimeout(timeout);
+            window.removeEventListener("message", onResponse);
+            if (!data.ok) {
+              reject(new Error(data.error || `Runtime asset is unavailable: ${kind}`));
+              return;
+            }
+            resolve(data.value);
+          };
+          window.addEventListener("message", onResponse);
+          postParent({
+            type: "PuzzleStudioRuntimeAssetRequest",
+            requestId,
+            kind,
+            playerArtifact,
+          });
+        });
+        const fetchRuntimeAssets = async (playerArtifact) => {
+          const runtime = await requestAsset("puzzle_wasm_visual_authoring.runtime-urls", playerArtifact);
+          if (
+            !runtime
+            || typeof runtime.moduleUrl !== "string"
+            || !runtime.moduleUrl
+            || typeof runtime.wasmUrl !== "string"
+            || !runtime.wasmUrl
+            || (true && (
+              typeof runtime.rendererModuleUrl !== "string"
+              || !runtime.rendererModuleUrl
+            ))
+            || (launchProfile.audio === "onDemand" && (
+              typeof runtime.audioWorkletUrl !== "string"
+              || !runtime.audioWorkletUrl
+            ))
+          ) {
+            throw new Error("Editor preview runtime asset URLs are invalid.");
+          }
+          const [moduleResponse, rendererResponse, wasmResponse] = await Promise.all([
+            fetch(runtime.moduleUrl),
+            true
+              ? fetch(runtime.rendererModuleUrl)
+              : Promise.resolve(null),
+            fetch(runtime.wasmUrl),
+          ]);
+          const failedAssets = [
+            ["runtime module", runtime.moduleUrl, moduleResponse],
+            ...(rendererResponse
+              ? [["browser renderer module", runtime.rendererModuleUrl, rendererResponse]]
+              : []),
+            ["runtime WASM", runtime.wasmUrl, wasmResponse],
+          ].filter(([_label, _url, response]) => !response.ok);
+          if (failedAssets.length > 0) {
+            const failures = failedAssets.map(([label, url, response]) => (
+              `${label} ${JSON.stringify(url)} returned HTTP ${response.status}${
+                response.statusText ? ` ${response.statusText}` : ""
+              }`
+            ));
+            throw new Error(`Editor preview runtime assets could not be fetched: ${failures.join("; ")}`);
+          }
+          return {
+            runtimeModuleSource: await moduleResponse.text(),
+            rendererModuleSource: rendererResponse ? await rendererResponse.text() : null,
+            wasmBytes: await wasmResponse.arrayBuffer(),
+            audioWorkletLoader: launchProfile.audio === "onDemand"
+              ? async () => {
+                  const response = await fetch(runtime.audioWorkletUrl);
+                  if (!response.ok) {
+                    throw new Error(`AudioWorklet fetch failed (${response.status})`);
+                  }
+                  return response.text();
+                }
+              : null,
+          };
+        };
+        let broker = null;
+        const semanticObservationTypes = new Set([
+          "PuzzleStudioPreviewRuntimeReady",
+          "PuzzleStudioPreviewState",
+          "PuzzleStudioPreviewCommit",
+          "PuzzleStudioPreviewDebugTrace",
+          "PuzzleStudioEditorAuthoringFrame",
+          "PuzzleStudioEditorAuthoringAccepted",
+          "PuzzleStudioEditorAuthoringSubmitted",
+          "PuzzleStudioEditorAuthoringRendered",
+          "PuzzleStudioEditorAuthoringApplied",
+          "PuzzleStudioEditorAuthoringHit",
+          "PuzzleStudioPreviewRuntimeError",
+        ]);
+        const handleBrokerMessage = (message) => {
+          if (
+            message.kind === "runtime-observation"
+            && message.observation
+            && typeof message.observation === "object"
+            && semanticObservationTypes.has(message.observation.type)
+          ) {
+            postParent({
+              ...message.observation,
+              runtimeGenerationId: message.runtimeGenerationId,
+            });
+          } else if (message.kind === "runtime-ready") {
+            postParent({
+              type: "PuzzleStudioPreviewRuntimeReady",
+              surfaceId,
+              runtimeGenerationId: message.runtimeGenerationId,
+            });
+          } else if (message.kind === "runtime-progress") {
+            postParent({
+              type: "PuzzleStudioPreviewRuntimeProgress",
+              stage: message.stage,
+              runtimeGenerationId: message.runtimeGenerationId,
+            });
+          } else if (message.kind === "runtime-fatal") {
+            postParent({
+              type: "PuzzleStudioPreviewRuntimeError",
+              label: "runtime failed",
+              message: String(message.message || "unknown error"),
+              runtimeGenerationId: message.runtimeGenerationId,
+            });
+          } else if (message.kind === "runtime-diagnostic") {
+            postParent({
+              type: "PuzzleStudioPreviewRuntimeDiagnostic",
+              message: String(message.message || ""),
+              runtimeGenerationId: message.runtimeGenerationId,
+            });
+          } else if (message.kind === "editor-save-shortcut") {
+            postParent({ type: "PuzzleStudioEditorSaveShortcut" });
+          } else if (message.kind === "editor-pointer") {
+            postParent({
+              type: "PuzzleStudioEditorPointer",
+              gesture: message.gesture,
+              button: Number(message.fields?.button),
+              xCss: Number(message.fields?.xCss),
+              yCss: Number(message.fields?.yCss),
+              committedFrameRevision: message.presentation?.revision,
+            });
+          }
+        };
+        const canonicalGenerationId = (value) => (
+          typeof value === "string"
+          && /^[1-9][0-9]*$/.test(value)
+          && BigInt(value) <= U64_MAX_IDENTITY
+        );
+        const runtimeAssets = new Map();
+        const loadRuntimeGeneration = async (envelope) => {
+          const runtimeGenerationId = String(envelope.runtimeGenerationId || "");
+          const runtimeExportJson = envelope.runtimeExportJson;
+          const progressIdentityKey = envelope.progressIdentityKey;
+          const playerArtifact = envelope.playerArtifact;
+          const traceProvenance = envelope.traceProvenance ?? null;
+          if (
+            !canonicalGenerationId(runtimeGenerationId)
+            || (launchProfile.runtime === "player" && (
+              typeof runtimeExportJson !== "string"
+              || !runtimeExportJson
+              || typeof progressIdentityKey !== "string"
+              || !progressIdentityKey
+              || typeof playerArtifact !== "string"
+              || !playerArtifact
+            ))
+            || (launchProfile.runtime !== "player" && (
+              runtimeExportJson !== null
+              || progressIdentityKey !== null
+              || playerArtifact !== null
+            ))
+          ) {
+            throw new Error("Editor runtime generation payload is invalid.");
+          }
+          postParent({
+            type: "PuzzleStudioPreviewRuntimeProgress",
+            stage: "acquiring-runtime-assets",
+            runtimeGenerationId,
+          });
+          if (!runtimeAssets.has(playerArtifact)) {
+            runtimeAssets.set(playerArtifact, fetchRuntimeAssets(playerArtifact));
+          }
+          const assets = await runtimeAssets.get(playerArtifact);
+          postParent({
+            type: "PuzzleStudioPreviewRuntimeProgress",
+            stage: "runtime-assets-ready",
+            runtimeGenerationId,
+          });
+          launchPuzzleRuntimeGeneration({
+            broker,
+            runtimeGenerationId,
+            runtimeModuleSource: assets.runtimeModuleSource,
+            rendererModuleSource: assets.rendererModuleSource,
+            wasmBytes: assets.wasmBytes.slice(0),
+            runtimeDescriptor: {
+              startExport: "startAuthoringProjectionWorker",
+              requiresRendererModule: true,
+              workerArgumentNames: ["surfaceId"],
+            },
+            launchProfile,
+            workerArguments: { runtimeExportJson, surfaceId, traceProvenance },
+            progressIdentityKey,
+            audioWorkletLoader: assets.audioWorkletLoader,
+          });
+        };
+        const runtimeInitializationErrorMessage = (error) => {
+          const summary = error?.message || String(error);
+          const stack = typeof error?.stack === "string" ? error.stack.trim() : "";
+          if (!stack) return summary;
+          return stack.includes(summary) ? stack : `${summary}\n${stack}`;
+        };
+        const announceLoaded = () => postParent({
+          type: "PuzzleStudioPreviewLoaded",
+          surfaceId,
+          title: document.title || "",
+          href: location.href || "",
+        });
+        try {
+          broker = await createPuzzleFrameBroker({
+            accessibleLabel: "Puzzle game editor preview",
+            onMessage: handleBrokerMessage,
+          });
+          window.addEventListener("message", (event) => {
+            if (!acceptsParentMessage(event)) {
+              return;
+            }
+            const envelope = event.data || {};
+            if (envelope.type === "PuzzleStudioRuntimeHostProbe") {
+              announceLoaded();
+              return;
+            }
+            if (envelope.type === "PuzzleStudioLoadRuntimeGeneration") {
+              void loadRuntimeGeneration(envelope).catch((error) => {
+                const message = runtimeInitializationErrorMessage(error);
+                broker.reportFatal(message, String(envelope.runtimeGenerationId || ""));
+                postParent({
+                  type: "PuzzleStudioPreviewRuntimeError",
+                  label: "runtime initialization failed",
+                  message,
+                  runtimeGenerationId: String(envelope.runtimeGenerationId || ""),
+                });
+              });
+              return;
+            }
+            if (envelope.type === "PuzzleStudioStopRuntimeGeneration") {
+              broker.stopRuntimeGeneration(String(envelope.runtimeGenerationId || ""));
+              return;
+            }
+            if (
+              typeof envelope.type === "string"
+              && envelope.type.startsWith("PuzzleStudio")
+              && envelope.type !== "PuzzleStudioRuntimeAssetResponse"
+            ) {
+              broker.sendCommand(envelope);
+            }
+          });
+          announceLoaded();
+        } catch (error) {
+          const message = runtimeInitializationErrorMessage(error);
+          broker?.reportFatal(message, "");
+          postParent({
+            type: "PuzzleStudioPreviewRuntimeError",
+            label: "runtime initialization failed",
+            message,
+          });
+          console.error(message);
+        }
+      })();
+    </script>
+  </body>
+</html>
