@@ -8080,7 +8080,7 @@ function setSolverPaneMode(mode) {
 }
 
 async function pollAgentObservations() {
-  if (agentObservationPolling) {
+  if (window.PuzzleStudioHost.mode() !== "server" || agentObservationPolling) {
     return;
   }
   agentObservationPolling = true;
@@ -8096,8 +8096,8 @@ async function pollAgentObservations() {
       applyAgentObservationEvent(event);
     }
     agentObservationCursor = Math.max(agentObservationCursor, Number(payload.cursor) || 0);
-  } catch (_error) {
-    // Exported editor bundles have no observation server; the panel remains absent.
+  } catch (error) {
+    console.error("Agent observation polling failed", error);
   } finally {
     agentObservationPolling = false;
     window.setTimeout(pollAgentObservations, 500);

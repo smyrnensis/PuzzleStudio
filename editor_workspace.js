@@ -1272,7 +1272,7 @@ function loadDocumentStore() {
   if (
     !parsed
     || typeof parsed !== "object"
-    || parsed.version !== documentStoreVersion
+    || (parsed.version !== documentStoreVersion && parsed.version !== 1)
     || typeof parsed.activeFileId !== "string"
     || !Array.isArray(parsed.openTabIds)
     || parsed.openTabIds.some((id) => typeof id !== "string")
@@ -1281,11 +1281,50 @@ function loadDocumentStore() {
   ) {
     throw new Error(`Saved workspace data must use ${documentStoreKey} version ${documentStoreVersion}.`);
   }
-  return {
+  if (parsed.version === 1) {
+    validateMigratingWorkspaceTree(parsed.tree);
+  }
+  const loaded = {
     activeFileId: parsed.activeFileId,
     openTabIds: parsed.openTabIds,
     tree: normalizeTree(parsed.tree),
   };
+  if (parsed.version === 1) {
+    // The former Pages writer used version 1 under this same storage key.
+    // Only the envelope changes; file content is opaque, including old syntax.
+    const backupKey = `${documentStoreKey}:backup:v1`;
+    const backup = window.localStorage.getItem(backupKey);
+    if (backup !== null && backup !== raw) {
+      throw new Error("Workspace migration backup already contains different data. Export that backup before retrying.");
+    }
+    if (backup === null) {
+      window.localStorage.setItem(backupKey, raw);
+    }
+    window.localStorage.setItem(documentStoreKey, JSON.stringify({ ...parsed, version: documentStoreVersion }));
+  }
+  return loaded;
+}
+
+function validateMigratingWorkspaceTree(root) {
+  const ids = new Set();
+  function visit(node) {
+    if (!node || typeof node !== "object" || Array.isArray(node)
+      || typeof node.id !== "string" || !node.id || ids.has(node.id)
+      || typeof node.name !== "string" || !node.name) {
+      throw new Error("Saved workspace has an invalid file or folder identity; original data was retained.");
+    }
+    ids.add(node.id);
+    if (node.kind === "folder" && Array.isArray(node.children)) {
+      node.children.forEach(visit);
+      return;
+    }
+    if (node.kind !== "file" || typeof node.puzzlePath !== "string"
+      || !["text", "data_url"].includes(node.encoding)
+      || typeof node.source !== "string" || typeof node.dataUrl !== "string") {
+      throw new Error("Saved workspace has an invalid file tree or content payload; original data was retained.");
+    }
+  }
+  visit(root);
 }
 
 function storeDocument(document) {
