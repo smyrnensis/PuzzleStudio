@@ -1,0 +1,136 @@
+{
+  "schema": 4,
+  "runtimes": {
+    "editor": {
+      "buildTarget": "editor",
+      "assetOwner": "wasm",
+      "entrypoint": "puzzle_wasm.js",
+      "files": [
+        { "name": "module", "path": "wasm/puzzle_wasm.js", "loadPhase": "startup" },
+        { "name": "wasm", "path": "wasm/puzzle_wasm_bg.wasm", "loadPhase": "startup" }
+      ]
+    },
+    "player": {
+      "buildTarget": "player",
+      "assetOwner": "wasm_player",
+      "entrypoint": "startPuzzlePlayerWorker",
+      "workerLaunch": {
+        "editorAssetRequestKind": "puzzle_wasm_player.runtime-urls",
+        "arguments": ["runtimeExportJson", "surfaceId", "traceProvenance"]
+      },
+      "sharedFiles": [
+        { "name": "rendererModule", "path": "wasm_player/puzzle_three_renderer.js", "loadPhase": "firstPresentation" },
+        { "name": "audioWorklet", "path": "wasm_player/puzzle_audio_worklet.js", "loadPhase": "onDemand" }
+      ],
+      "artifacts": {
+        "twoD": {
+          "id": "2d",
+          "cargoFeatures": ["browser-runtime"],
+          "rendererCapabilities": ["2d"],
+          "files": [
+            { "name": "module", "path": "wasm_player/puzzle_wasm_player_2d.js", "loadPhase": "firstPresentation" },
+            { "name": "wasm", "path": "wasm_player/puzzle_wasm_player_2d_bg.wasm", "loadPhase": "firstPresentation" }
+          ]
+        },
+        "threeD": {
+          "id": "3d",
+          "cargoFeatures": ["browser-runtime"],
+          "rendererCapabilities": ["3d"],
+          "files": [
+            { "name": "module", "path": "wasm_player/puzzle_wasm_player_3d.js", "loadPhase": "firstPresentation" },
+            { "name": "wasm", "path": "wasm_player/puzzle_wasm_player_3d_bg.wasm", "loadPhase": "firstPresentation" }
+          ]
+        },
+        "universal": {
+          "id": "universal",
+          "cargoFeatures": ["browser-runtime"],
+          "rendererCapabilities": ["2d", "3d"],
+          "files": [
+            { "name": "module", "path": "wasm_player/puzzle_wasm_player_universal.js", "loadPhase": "firstPresentation" },
+            { "name": "wasm", "path": "wasm_player/puzzle_wasm_player_universal_bg.wasm", "loadPhase": "firstPresentation" }
+          ]
+        },
+        "editor": {
+          "id": "editor",
+          "cargoFeatures": ["browser-runtime", "editor-capability"],
+          "rendererCapabilities": ["2d", "3d"],
+          "editorCapability": true,
+          "files": [
+            { "name": "module", "path": "wasm_player/puzzle_wasm_player.js", "loadPhase": "firstPresentation" },
+            { "name": "wasm", "path": "wasm_player/puzzle_wasm_player_bg.wasm", "loadPhase": "firstPresentation" }
+          ]
+        }
+      }
+    },
+    "visualAuthoring": {
+      "buildTarget": "visual-authoring",
+      "assetOwner": "wasm_visual_authoring",
+      "sharedFiles": [
+        { "name": "rendererModule", "ownerRuntime": "player", "path": "wasm_player/puzzle_three_renderer.js", "loadPhase": "firstPresentation" }
+      ],
+      "entrypoint": "startAuthoringProjectionWorker",
+      "workerLaunch": {
+        "editorAssetRequestKind": "puzzle_wasm_visual_authoring.runtime-urls",
+        "arguments": ["surfaceId"]
+      },
+      "files": [
+        { "name": "module", "path": "wasm_visual_authoring/puzzle_wasm_visual_authoring.js", "loadPhase": "firstPresentation" },
+        { "name": "wasm", "path": "wasm_visual_authoring/puzzle_wasm_visual_authoring_bg.wasm", "loadPhase": "firstPresentation" }
+      ]
+    }
+  },
+  "launchProfiles": {
+    "standalonePlayer": {
+      "runtime": "player",
+      "artifactSelection": "documentViewportCapabilities",
+      "input": "runtime",
+      "progress": "persistent",
+      "audio": "onDemand",
+      "observations": ["presentation"],
+      "interventions": []
+    },
+    "editorPlayer": {
+      "runtime": "player",
+      "artifact": "editor",
+      "input": "runtime",
+      "progress": "memory",
+      "audio": "onDemand",
+      "observations": ["presentation", "state", "commit", "trace"],
+      "interventions": ["key", "snapshot"]
+    },
+    "editorAuthoring": {
+      "runtime": "visualAuthoring",
+      "input": "editor",
+      "progress": "none",
+      "audio": "none",
+      "observations": ["presentation", "authoring"],
+      "interventions": ["modelState", "pointer"]
+    },
+    "visualAuthoring": {
+      "runtime": "visualAuthoring",
+      "input": "editor",
+      "progress": "none",
+      "audio": "none",
+      "observations": ["presentation", "authoring"],
+      "interventions": ["modelState", "pointer"]
+    }
+  },
+  "distributions": {
+    "editor": {
+      "runtimes": ["editor", "player", "visualAuthoring"],
+      "launchProfiles": ["editorPlayer", "editorAuthoring", "standalonePlayer", "visualAuthoring"]
+    },
+    "standaloneExport": {
+      "runtimes": ["player"],
+      "launchProfiles": ["standalonePlayer"]
+    },
+    "playerPreview": {
+      "runtimes": ["player"],
+      "launchProfiles": ["standalonePlayer"]
+    },
+    "visualAuthoring": {
+      "runtimes": ["visualAuthoring"],
+      "launchProfiles": ["visualAuthoring"]
+    }
+  }
+}

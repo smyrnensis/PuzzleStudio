@@ -12,24 +12,23 @@ const WORK_PANE_IDS = [
   PREVIEW_WORK_PANE_ID,
   "level",
   "solver",
-  "sprite",
+  "visual",
   "sounds",
   "psimport",
   "docs",
 ];
 
 const PANE_ID_ALIASES = {
-  code: SOURCE_WORK_PANE_ID,
   level3d: "level",
-  sprite3d: "sprite",
+  visual3d: "visual",
 };
 const PREVIEW_MODE_TO_WORK_PANE_ID = {
   play: PREVIEW_WORK_PANE_ID,
   edit: "level",
   level3d: "level",
   solver: "solver",
-  sprite: "sprite",
-  sprite3d: "sprite",
+  visual: "visual",
+  visual3d: "visual",
   sounds: "sounds",
   psimport: "psimport",
   docs: "docs",
@@ -42,7 +41,7 @@ const WORK_PANE_DEFAULT_WIDTHS = {
   [PREVIEW_WORK_PANE_ID]: "420px",
   level: "420px",
   solver: "420px",
-  sprite: "520px",
+  visual: "520px",
   sounds: "420px",
   psimport: "520px",
   docs: "480px",
@@ -52,7 +51,7 @@ const WORK_PANE_MIN_WIDTHS = {
   [PREVIEW_WORK_PANE_ID]: 300,
   level: 300,
   solver: 300,
-  sprite: 320,
+  visual: 320,
   sounds: 300,
   psimport: 320,
   docs: 300,
@@ -149,7 +148,7 @@ function toolPaneTitle(paneId) {
     level: "Level",
     level3d: "3D Level",
     solver: "Solve",
-    sprite: "Sprite",
+    visual: "Visual",
     sounds: "Sound",
     psimport: "PuzzleScript import",
     docs: "Documents",
@@ -162,7 +161,7 @@ function toolPanePanelForPaneId(paneId) {
     level: levelBuilder,
     level3d: level3dBuilder,
     solver: solverPanel,
-    sprite: spriteBuilder,
+    visual: visualBuilder,
     sounds: soundsBuilder,
     psimport: psImportPanel,
     docs: docsPanel,
@@ -171,39 +170,17 @@ function toolPanePanelForPaneId(paneId) {
 
 function createPaneCloseButton(paneId) {
   const button = document.createElement("button");
-  button.className = "pane-close-button";
+  button.className = "icon-button pane-close-button";
   button.type = "button";
   button.dataset.paneClose = paneId;
   button.setAttribute("aria-label", `Hide ${toolPaneTitle(paneId)} pane`);
   button.title = `Hide ${toolPaneTitle(paneId)} pane`;
-  button.innerHTML = `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M18 6 6 18"></path>
-      <path d="m6 6 12 12"></path>
-    </svg>
-  `;
+  button.innerHTML = editorIconSvg("x");
   return button;
 }
 
 function paneMaximizeIconSvg(isRestore) {
-  if (isRestore) {
-    return `
-      <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-minimize-icon lucide-minimize">
-        <path d="M8 3v3a2 2 0 0 1-2 2H3"></path>
-        <path d="M21 8h-3a2 2 0 0 1-2-2V3"></path>
-        <path d="M3 16h3a2 2 0 0 1 2 2v3"></path>
-        <path d="M16 21v-3a2 2 0 0 1 2-2h3"></path>
-      </svg>
-    `;
-  }
-  return `
-    <svg viewBox="0 0 24 24" aria-hidden="true" class="lucide lucide-maximize-icon lucide-maximize">
-      <path d="M8 3H5a2 2 0 0 0-2 2v3"></path>
-      <path d="M21 8V5a2 2 0 0 0-2-2h-3"></path>
-      <path d="M3 16v3a2 2 0 0 0 2 2h3"></path>
-      <path d="M16 21h3a2 2 0 0 0 2-2v-3"></path>
-    </svg>
-  `;
+  return editorIconSvg(isRestore ? "minimize" : "maximize");
 }
 
 function setPaneMaximizeButtonIcon(button, isRestore) {
@@ -217,7 +194,7 @@ function setPaneMaximizeButtonIcon(button, isRestore) {
 
 function createPaneMaximizeButton(paneId) {
   const button = document.createElement("button");
-  button.className = "pane-maximize-button";
+  button.className = "icon-button pane-maximize-button";
   button.type = "button";
   button.dataset.paneMaximize = paneId;
   button.setAttribute("aria-label", `Maximize ${toolPaneTitle(paneId)} pane`);
@@ -251,9 +228,9 @@ function toolPaneHeaderActionGroups(paneId) {
       document.querySelector("#level3dPlaytestButton")?.closest(".source-action-group"),
     ].filter(Boolean);
   }
-  if (paneId === "sprite") {
+  if (paneId === "visual") {
     return [
-      document.querySelector("#spritePaneHeaderActions"),
+      document.querySelector("#visualPaneHeaderActions"),
     ].filter(Boolean);
   }
   return [];
@@ -264,9 +241,8 @@ function syncToolPaneHeaderActionGroups() {
     const is3d = group.classList.contains("level3d-source-actions");
     group.hidden = !isPaneVisible("level") || (is3d ? currentLevelPaneMode !== "level3d" : currentLevelPaneMode !== "edit");
   }
-  for (const group of toolPaneHeaderActionGroups("sprite")) {
-    const is3d = Boolean(group.querySelector("#sprite3dExportButton"));
-    group.hidden = !isPaneVisible("sprite") || (is3d ? currentSpritePaneMode !== "sprite3d" : currentSpritePaneMode !== "sprite");
+  for (const group of toolPaneHeaderActionGroups("visual")) {
+    group.hidden = !isPaneVisible("visual");
   }
 }
 
@@ -292,11 +268,17 @@ function createToolPane(paneId, panel) {
   if (paneId === "level" && levelPaneModeSwitch) {
     title.append(levelPaneModeSwitch);
   }
-  if (paneId === "sprite" && spritePaneModeSwitch) {
-    title.append(spritePaneModeSwitch);
+  if (paneId === "solver" && solverPaneModeSwitch) {
+    title.append(solverPaneModeSwitch);
   }
   if (paneId === "sounds" && soundsHeaderTools) {
     title.append(soundsHeaderTools);
+  }
+  if (paneId === "visual") {
+    const visualPaneModeControls = document.querySelector("#visualPaneModeControls");
+    if (visualPaneModeControls) {
+      title.append(visualPaneModeControls);
+    }
   }
   for (const group of toolPaneHeaderActionGroups(paneId)) {
     actions.append(group);
@@ -312,8 +294,8 @@ function createToolPane(paneId, panel) {
   if (paneId === "level" && level3dBuilder) {
     pane.append(level3dBuilder);
   }
-  if (paneId === "sprite" && sprite3dBuilder) {
-    pane.append(sprite3dBuilder);
+  if (paneId === "visual" && visual3dBuilder) {
+    pane.append(visual3dBuilder);
   }
   pane.append(createPaneStatusFooter(paneId));
   return pane;
@@ -336,16 +318,11 @@ function initializePhysicalWorkPanes() {
   }
   const previewClose = previewPane.querySelector("[data-pane-close]");
   if (previewClose) {
-    previewClose.className = "pane-close-button";
+    previewClose.className = "icon-button pane-close-button";
     previewClose.dataset.paneClose = PREVIEW_WORK_PANE_ID;
     previewClose.setAttribute("aria-label", "Hide Preview pane");
     previewClose.title = "Hide Preview pane";
-    previewClose.innerHTML = `
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M18 6 6 18"></path>
-        <path d="m6 6 12 12"></path>
-      </svg>
-    `;
+    previewClose.innerHTML = editorIconSvg("x");
   }
   if (gamePaneTitle) {
     gamePaneTitle.textContent = toolPaneTitle(PREVIEW_WORK_PANE_ID);
@@ -358,9 +335,6 @@ function initializePhysicalWorkPanes() {
   }
   if (levelPaneModeSwitch) {
     levelPaneModeSwitch.hidden = true;
-  }
-  if (spritePaneModeSwitch) {
-    spritePaneModeSwitch.hidden = true;
   }
 
   for (const paneId of PREVIEW_HOST_WORK_PANE_IDS) {
@@ -458,7 +432,7 @@ function ensurePaneSplitterCount(count) {
   const splitters = Array.from(workbench.querySelectorAll(".pane-splitter"));
   while (splitters.length < count) {
     const splitter = document.createElement("div");
-    splitter.className = "pane-splitter";
+    splitter.className = "accent-splitter pane-splitter";
     splitter.setAttribute("role", "separator");
     splitter.setAttribute("aria-label", "Resize panes");
     splitter.setAttribute("aria-orientation", "vertical");
@@ -533,6 +507,34 @@ function focusWorkPane(paneId) {
   return true;
 }
 
+function commandPaneIdForTarget(target) {
+  const element = target instanceof Element ? target : null;
+  if (element?.closest(".explorer-pane")) {
+    return EXPLORER_PANE_ID;
+  }
+  return workPaneIdForElement(element?.closest(".code-pane, .preview-pane[data-work-pane]"));
+}
+
+function commandModeForPaneId(paneId) {
+  const normalized = normalizePaneId(paneId);
+  if (normalized === "level") return currentLevelPaneMode;
+  if (normalized === "visual") return currentVisualPaneMode;
+  return normalized;
+}
+
+function workbenchCommandContext(source = "keyboard", target = null) {
+  const targetPaneId = commandPaneIdForTarget(target);
+  const paneId = source === "button" && targetPaneId
+    ? targetPaneId
+    : targetPaneId === EXPLORER_PANE_ID
+      ? EXPLORER_PANE_ID
+      : focusedWorkPaneId;
+  return Object.freeze({
+    pane: paneId,
+    mode: commandModeForPaneId(paneId),
+  });
+}
+
 function setVisibleWorkPanes(nextPaneIds) {
   const next = normalizeVisibleWorkPaneList(nextPaneIds);
   if (!next.length) {
@@ -568,7 +570,7 @@ function activePreviewWorkPaneId() {
 }
 
 function normalizePaneDragId(paneId) {
-  return paneId === "active-preview" ? activePreviewWorkPaneId() : normalizePaneId(paneId);
+  return normalizePaneId(paneId);
 }
 
 function workPaneElementForDragEvent(event) {
@@ -710,10 +712,13 @@ function selectFallbackPreviewPane(closedPaneId) {
 }
 
 function closeWorkPane(paneId) {
-  const normalized = paneId === "active-preview" ? activePreviewWorkPaneId() : normalizePaneId(paneId);
+  const normalized = normalizePaneId(paneId);
   const next = visibleWorkPanes.filter((candidate) => candidate !== normalized);
   if (!isWorkPaneId(normalized) || !visibleWorkPanes.includes(normalized) || !layoutPaneIdsFor(next, currentPreviewMode, { allowEmpty: true }).length) {
     return false;
+  }
+  if (normalized === PREVIEW_WORK_PANE_ID) {
+    stopPreviewRuntime();
   }
   visibleWorkPanes = next;
   if (maximizedWorkPaneId === normalized) {
@@ -855,13 +860,13 @@ function applyPaneVisibility() {
       }
       continue;
     }
-    if (paneId === "sprite") {
-      const spriteUnbound = currentSpritePaneMode === "none";
-      if (spriteBuilder) {
-        spriteBuilder.hidden = !visible || spriteUnbound || currentSpritePaneMode !== "sprite";
+    if (paneId === "visual") {
+      const visualUnbound = currentVisualPaneMode === "none";
+      if (visualBuilder) {
+        visualBuilder.hidden = !visible || visualUnbound || currentVisualPaneMode !== "visual";
       }
-      if (sprite3dBuilder) {
-        sprite3dBuilder.hidden = !visible || spriteUnbound || currentSpritePaneMode !== "sprite3d";
+      if (visual3dBuilder) {
+        visual3dBuilder.hidden = !visible || visualUnbound || currentVisualPaneMode !== "visual3d";
       }
       continue;
     }
@@ -872,9 +877,6 @@ function applyPaneVisibility() {
   }
   if (levelPaneModeSwitch) {
     levelPaneModeSwitch.hidden = !isPaneVisible("level");
-  }
-  if (spritePaneModeSwitch) {
-    spritePaneModeSwitch.hidden = !isPaneVisible("sprite");
   }
   if (typeof syncPaneBindLabels === "function") {
     syncPaneBindLabels();
@@ -890,18 +892,14 @@ function applyPaneVisibility() {
     button.setAttribute("aria-pressed", active ? "true" : "false");
   });
   document.querySelectorAll("[data-pane-close]").forEach((button) => {
-    const paneId = button.dataset.paneClose === "active-preview"
-      ? activePreviewWorkPaneId()
-      : normalizePaneId(button.dataset.paneClose);
+    const paneId = normalizePaneId(button.dataset.paneClose);
     const next = visibleWorkPanes.filter((candidate) => candidate !== paneId);
     const disabled = !isWorkPaneId(paneId) || !isPaneVisible(paneId) || !layoutPaneIdsFor(next, currentPreviewMode, { allowEmpty: true }).length;
     button.disabled = disabled;
     button.setAttribute("aria-disabled", String(disabled));
   });
   document.querySelectorAll("[data-pane-maximize]").forEach((button) => {
-    const paneId = button.dataset.paneMaximize === "active-preview"
-      ? activePreviewWorkPaneId()
-      : normalizePaneId(button.dataset.paneMaximize);
+    const paneId = normalizePaneId(button.dataset.paneMaximize);
     const active = Boolean(maximizedWorkPaneId) && maximizedWorkPaneId === paneId;
     const title = active ? `Restore ${toolPaneTitle(paneId)} pane` : `Maximize ${toolPaneTitle(paneId)} pane`;
     button.classList.toggle("is-active", active);
@@ -913,11 +911,11 @@ function applyPaneVisibility() {
   });
   syncPreviewModeButtonState();
   scheduleBoardScaleSync();
-  requestAnimationFrame(syncPreviewViewportScale);
+  requestAnimationFrame(syncPreviewViewportGeometry);
 }
 
 function toggleWorkPaneMaximized(paneId) {
-  const normalized = paneId === "active-preview" ? activePreviewWorkPaneId() : normalizePaneId(paneId);
+  const normalized = normalizePaneId(paneId);
   if (!isWorkPaneId(normalized) || !isPaneVisible(normalized)) {
     return false;
   }
@@ -984,16 +982,6 @@ function stopActiveResize(event) {
   stopPreviewLogResize(event);
 }
 
-function handleExplorerToggleShortcut(event) {
-  if (!(event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "b")) {
-    return false;
-  }
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  togglePaneVisibility("explorer");
-  return true;
-}
-
 function startPaneResize(event) {
   const splitter = event.currentTarget;
   const leftPaneId = normalizePaneId(splitter?.dataset.leftPane);
@@ -1047,10 +1035,7 @@ function resizePanes(event) {
   }
   setWorkPaneWidth(resizingPaneEdge.leftPaneId, `${next}px`);
   syncWorkbenchGridLayout();
-  if (typeof scheduleSourceEditorLayoutSync === "function") {
-    scheduleSourceEditorLayoutSync(2);
-  }
-  syncPreviewViewportScale();
+  syncPreviewViewportGeometry();
   workbench.dataset.collapsingPane = pendingPaneCollapse || "";
   workbench.dataset.collapsingPreview = pendingPaneCollapse && isPreviewHostPaneId(pendingPaneCollapse) ? "true" : "false";
 }
@@ -1118,10 +1103,7 @@ function resizeExplorer(event) {
   pendingExplorerCollapse = pointerX <= snapWidth;
   const next = pendingExplorerCollapse ? 0 : Math.max(minWidth, Math.min(maxWidth, pointerX));
   workbench.style.setProperty("--explorer-pane-width", `${next}px`);
-  if (typeof scheduleSourceEditorLayoutSync === "function") {
-    scheduleSourceEditorLayoutSync(2);
-  }
-  syncPreviewViewportScale();
+  syncPreviewViewportGeometry();
   workbench.classList.toggle("is-explorer-collapse-pending", pendingExplorerCollapse);
 }
 
@@ -1169,8 +1151,8 @@ function resizePreviewLog(event) {
   const maxLogHeight = Math.max(minLogHeight, rect.height - splitterHeight - minPreviewHeight);
   const next = Math.max(minLogHeight, Math.min(maxLogHeight, rect.bottom - event.clientY - 12));
   playPreview.style.setProperty("--preview-log-height", `${Math.round(next)}px`);
-  syncPreviewViewportScale();
-  schedulePreviewViewportSync(3);
+  syncPreviewViewportGeometry();
+  schedulePreviewViewportGeometrySync(3);
   event.preventDefault();
 }
 
@@ -1183,28 +1165,25 @@ function stopPreviewLogResize(event) {
   draggingPreviewLogSplitterPointerId = null;
   playPreview?.classList.remove("is-resizing-log");
   releasePointerCaptureIfHeld(previewLogSplitter, pointerId);
-  syncPreviewViewportScale();
-  schedulePreviewViewportSync(3);
+  syncPreviewViewportGeometry();
+  schedulePreviewViewportGeometrySync(3);
 }
-function fitEditorAspectFrame(available, aspect, virtualHeight) {
+function fitEditorAspectFrame(available, aspect) {
   const safeAspect = Number.isFinite(aspect) && aspect > 0
     ? aspect
     : previewDefaultLogicalWidth / previewDefaultLogicalHeight;
-  const safeVirtualHeight = Math.max(1, Number(virtualHeight) || previewMinimumHeight);
-  const virtualWidth = Math.max(1, Math.round(safeVirtualHeight * safeAspect));
-  const scale = Math.max(
-    0.0001,
-    Math.min(
-      Math.max(1, Number(available?.width) || 1) / virtualWidth,
-      Math.max(1, Number(available?.height) || 1) / safeVirtualHeight,
-    ),
-  );
+  const availableWidth = Math.max(1, Math.floor(Number(available?.width) || 1));
+  const availableHeight = Math.max(1, Math.floor(Number(available?.height) || 1));
+  const availableAspect = availableWidth / availableHeight;
+  const width = availableAspect > safeAspect
+    ? Math.max(1, Math.floor(availableHeight * safeAspect))
+    : availableWidth;
+  const height = availableAspect > safeAspect
+    ? availableHeight
+    : Math.max(1, Math.floor(availableWidth / safeAspect));
   return {
-    width: Math.max(1, Math.floor(virtualWidth * scale)),
-    height: Math.max(1, Math.floor(safeVirtualHeight * scale)),
-    virtualWidth,
-    virtualHeight: safeVirtualHeight,
-    scale,
+    width,
+    height,
   };
 }
 function editorFrameAvailableSize(frame, options = {}) {
