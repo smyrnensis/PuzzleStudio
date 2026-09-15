@@ -192,7 +192,7 @@
           <div id="playPreview" class="play-preview is-preview-unloaded">
             <div id="previewFrameWrap" class="preview-frame-wrap">
               <div id="previewViewport" class="preview-viewport">
-                <div id="editorRuntimeSurface" class="editor-runtime-surface" tabindex="-1" aria-label="Bevy runtime preview">
+                <div id="editorRuntimeSurface" class="editor-runtime-surface" tabindex="-1" aria-label="Browser runtime preview">
                   <iframe
                     id="editorRuntimeFrame"
                     class="editor-runtime-frame preview-frame"
@@ -1377,7 +1377,7 @@ background_color = #f7f5ef
 text_color = #1d2522
 font = &quot;fonts/interface.ttf&quot;
 }</code></pre>
-<p><code>font</code> accepts a game-relative <code>.ttf</code> or <code>.otf</code> path. Standalone exports include the referenced font bytes and the Bevy renderer uses that same font asset.</p>
+<p><code>font</code> accepts a game-relative <code>.ttf</code> or <code>.otf</code> path. Standalone exports include the referenced font bytes and the browser renderer uses that same font asset.</p>
 <p>Themes resolve typography, UI surfaces, board framing, interaction cues, render treatment, and motion for exported play surfaces. When <code>font</code> is omitted, the theme's standard font is used; <code>studio</code> includes a sans-serif font.</p>
 <p>Authored colors are kept exactly as specified. Color contrast is not a compiler diagnostic.</p>
 <p>The standard themes are <code>studio</code>, <code>pencil</code>, and the PuzzleScript compatibility profile <code>puzzlescript</code>. <code>pencil</code> keeps the <code>studio</code> presentation and changes only the built-in font to the handwritten family.</p>
@@ -1594,7 +1594,7 @@ color = #ffffff
 </div>
 <p><code>camera</code> defines the initial view. <code>orthographic = true</code> selects orthographic projection; the default is perspective. <code>roll</code> rotates the image plane around the view direction and defaults to <code>0</code>. Camera block settings use normal typed assignments, including <code>interactive_look = true</code> and <code>interactive_zoom = true</code>. The equivalent inline shorthand is <code>camera yaw=34 pitch=38 interactive_look interactive_zoom</code>.</p>
 <p>Pointer look and zoom are component gestures, not semantic puzzle inputs. <code>viewport</code> frames a world-space region around its focus; it does not hide objects outside that region. <code>zoomscreen</code> snaps to the target and <code>smoothscreen</code> follows it gradually.</p>
-<p><code>pixelate</code> lowers the Bevy render resolution and scales it with nearest-neighbor sampling. <code>smoothing</code> controls antialiasing at that reduced resolution. <code>shade</code> selects lit or unlit voxel materials, while <code>shadow</code> enables cast and received shadows. Shadows are disabled by default. A 3D object without a visual is not given an implicit cube.</p>
+<p><code>pixelate</code> lowers the browser surface render resolution and scales it with nearest-neighbor sampling. <code>smoothing</code> controls antialiasing at that reduced resolution. <code>shade</code> selects lit or unlit voxel materials, while <code>shadow</code> enables cast and received shadows. Shadows are disabled by default. A 3D object without a visual is not given an implicit cube.</p>
 <p>Rules update the same typed settings by their full paths, for example <code>render.camera.yaw += 10</code> or <code>render.grid.type = all_cells</code>. Setting changes belong to the play session and participate in undo, redo, checkpoint, and restart. They remain outside puzzle state and solver search; state that changes gameplay must be represented by objects or puzzle variables.</p>
 </section>
 <section class="docs-section">
