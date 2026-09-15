@@ -1222,28 +1222,37 @@ function drawLevel3dTopDownTilePreview(canvas, entry, exportData = currentPrevie
   }
   const tileWidth = Math.max(1, ...projections.map((projection) => projection.width));
   const tileDepth = Math.max(1, ...projections.map((projection) => projection.depth));
-  const cellSize = Math.max(1, Math.floor(Math.min(width / tileWidth, height / tileDepth)));
-  const offsetX = Math.floor((width - tileWidth * cellSize) / 2);
-  const offsetY = Math.floor((height - tileDepth * cellSize) / 2);
   for (const projection of projections) {
-    const projectionOffsetX = offsetX + Math.floor((tileWidth - projection.width) * cellSize / 2);
-    const projectionOffsetY = offsetY + Math.floor((tileDepth - projection.depth) * cellSize / 2);
+    const projectionOffsetX = (tileWidth - projection.width) / 2;
+    const projectionOffsetY = (tileDepth - projection.depth) / 2;
     for (let row = 0; row < projection.depth; row += 1) {
       for (let column = 0; column < projection.width; column += 1) {
         const fill = projection.pixels[row]?.[column];
         if (!fill) {
           continue;
         }
-        ctx.fillStyle = fill;
-        ctx.fillRect(
-          projectionOffsetX + column * cellSize,
-          projectionOffsetY + row * cellSize,
-          cellSize,
-          cellSize,
+        const [left, right] = level3dTilePixelBounds(
+          projectionOffsetX + column,
+          tileWidth,
+          width,
         );
+        const [top, bottom] = level3dTilePixelBounds(
+          projectionOffsetY + row,
+          tileDepth,
+          height,
+        );
+        ctx.fillStyle = fill;
+        ctx.fillRect(left, top, right - left, bottom - top);
       }
     }
   }
+}
+
+function level3dTilePixelBounds(index, count, extent) {
+  return [
+    Math.floor(index * extent / count),
+    Math.floor((index + 1) * extent / count),
+  ];
 }
 
 function level3dTopDownVisualProjection(visual, options = {}) {

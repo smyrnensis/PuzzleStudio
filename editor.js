@@ -3006,7 +3006,7 @@ async function ensureEditorRuntimeController(
   const launch = runtime?.runtime ?? previewBuild?.runtime;
   const buildId = String(runtime?.id ?? previewBuild?.id ?? "");
   if (!host || !launch || !buildId) {
-    throw new Error("Editor Bevy runtime surface requires an explicit runtime build and host.");
+    throw new Error("Editor browser runtime surface requires an explicit runtime build and host.");
   }
   const controller = editorRuntimeController(surfaceId, consumer, launchProfile);
   if (controller.surface.parentElement !== host) {
@@ -3020,7 +3020,7 @@ async function ensureEditorRuntimeController(
   if (controller.buildId !== buildId || !controller.ready) {
     const ready = await controller.readyPromise;
     if (!ready) {
-      throw new Error(`Editor Bevy runtime ${surfaceId} did not become ready.`);
+      throw new Error(`Editor browser runtime ${surfaceId} did not become ready.`);
     }
   }
   return controller;
@@ -3110,7 +3110,7 @@ function queueEditorRuntimeDisplay({
         return;
       }
       if (!command.key || typeof command.dispatch !== "function") {
-        throw new Error("Editor Bevy runtime command selection is invalid.");
+        throw new Error("Editor browser runtime command selection is invalid.");
       }
       if (
         activeController.displayKey === command.key
@@ -3120,7 +3120,7 @@ function queueEditorRuntimeDisplay({
       }
       const commandId = command.dispatch(activeController.frame);
       if (!commandId) {
-        throw new Error("Editor Bevy runtime command transport is unavailable.");
+        throw new Error("Editor browser runtime command transport is unavailable.");
       }
       activeController.pending = { commandId, key: command.key };
       editorRuntimeCommands.set(commandId, {
@@ -6472,7 +6472,7 @@ function syncLevelBoardScale() {
 }
 
 function syncSolverBoardScale() {
-  // The Bevy iframe renders at the final solver viewport size.
+  // The browser runtime iframe renders at the final solver viewport size.
 }
 
 function syncBoardViewportScale(wrap, viewport, board, frame, chrome = {}) {
